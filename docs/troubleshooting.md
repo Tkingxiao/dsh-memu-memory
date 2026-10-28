@@ -29,6 +29,7 @@
 待发区冒出整理提示 → §3.11         新对话读不到文件夹记忆 → §3.12
 注入整段没了 → §3.13               日期语义错 / 看不见日期 → §3.14
 保存成功但没变 / 字段改不回来 → §3.15
+同文件夹里某条记忆凭空消失 / 新会话侧边栏空 → §3.17
 ```
 
 ## 3. 出过的问题：症状 → 落点 → 守卫
@@ -51,7 +52,7 @@ S7 宿主流    pre-step 钩子、compaction 重注入、会话 v4 校验、整�
 S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tools.js schema
 ```
 
-文件清单见 §2.1。总览：记忆不出现 / 只剩锚点 / 注入整段没了 → §3.1、§3.13；会话或设置页打不开、报格式错 → §3.2、§3.7；记忆变少或整库变空 → §3.3、§3.4；面板不刷新、UI 错位 → §3.5、§3.6；引擎、检索质量、复核泄漏 → §3.8、§3.9；改了没反应、新对话读不到记忆 → §3.10、§3.12；输入框上方冒出整理提示 → §3.11；日期语义错、改了保存不上 → §3.14、§3.15。
+文件清单见 §2.1。总览：记忆不出现 / 只剩锚点 / 注入整段没了 → §3.1、§3.13；会话或设置页打不开、报格式错 → §3.2、§3.7；记忆变少或整库变空 → §3.3、§3.4；面板不刷新、UI 错位 → §3.5、§3.6；引擎、检索质量、复核泄漏 → §3.8、§3.9；改了没反应、新对话读不到记忆 → §3.10、§3.12；输入框上方冒出整理提示 → §3.11；日期语义错、改了保存不上 → §3.14、§3.15；弹窗答了侧边栏却两边都勾上 → §3.16。
 
 ### 3.1 记忆不出现，只剩锚点（S4 → S6）
 
@@ -173,6 +174,24 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **守卫**：`tests/update-fields.test.mjs`、`tests/browser.test.mjs`；确认顺序：`unknown memory field` → `allowed` 与 `privateUpdate` 签名 → `memu_private_update` schema → `accuracyOf` 是否重算。
 
+### 3.16 弹窗选了「只私有」，侧边栏两个开关还是都勾上（S1 绑定 → S8 展示）
+
+**症状**：新会话弹窗选了「只用私有记忆」（或「只用全局」），确认后侧边栏「使用私有记忆 / 使用全局记忆」两个 switch 仍然都勾着；勾了「记住我的选择」也一样，下次进新会话还是两个都勾。
+
+**落点，可能的原因**：弹窗写了「库」，没写「两个开关」。`initSession` → `state.js` 的 `ensureSession` 在一个还没有 binding 的会话上按**文件夹策略**填两个开关（`policy.useLibrary !== false`），所以任何没被显式写入的开关都会回到文件夹默认值（默认两个都开）。旧 `confirm` 里「只私有」（`auto`）与「选已有库/新建库」三条分支只调了 `initSession`、没调 `setSessionScope`，两个开关就由策略落成 `true`——这就是「选了只私有，侧边栏却两个都勾上」。另一半：高级区块的库单选和卡片共用同一个 `choice`，点一下「选已有记忆库」把整卡答案改写成 `existing`，`confirm` 更没有可写的层。修法：卡片与库选择拆成两个状态（`choice` / `pick`），`LAYERS_OF` 一处定义「卡片 → 两个开关」，`confirm` 的每条分支（含已记住的选择）都以 `setSessionScope(..., ...layers)` 收尾，`createLibrary` 只跟私有层走；`rememberChoice` 的偏好表补 `global`，`rpc.js` 的 `allowed` 与 `state.js` 的 enums 同步接受它——否则「记住」被静默丢弃，`ensureSession` 又会按策略填回两个 `true`。
+
+**守卫**：`tests/new-session-gate.test.mjs`——四张卡各点一遍，断言 `setSessionScope` 收到的 `useLibrary/useGlobal` 与卡片一致；四种「记住的选择」各跑一遍；高级区块换库后卡片答案不变、`initSession` 只带 `libraryId`。手工核对：看 `state.json` 里该 binding 的两个布尔值是否等于你点的那张卡。
+
+### 3.17 同文件夹里某条记忆凭空消失 / 新会话侧边栏空白（S2 可见范围）
+
+**症状**：同一个文件夹（同一个库）里，老会话看得见的某条记忆，在新会话的侧边栏里没有、注入里也没有，工具也读不到；而文件夹里其它记忆一切正常。`index/<libraryId>.json` 里条目还在。
+
+**落点，可能的原因**：这版之前的条目可能被写成了 `visibility: 'session'`（会话级，模型自己填的），而 `sessionId` 指向的会话已被删除——那种条目谁也不是，读不到也改不了，正是「记忆凭空消失」的成因。**该级别已经从代码里删掉**：读到就按 `shared` 处理，`context`（channel/character/world/branch）原样保留，落盘时补 `migratedFromVisibility: 'session'` + `visibilityMigratedAt` 并删掉 `sessionId`。读路径在 `loadPrivateIndex`（`lib/state.js`）+ 迁移规则在 `lib/visibility.js`；没人再写的库由 `lib/migrate.js` 的周期巡检与侧边栏轮询（60 秒节流）重写。
+
+**还有一种「消失」，不是 bug**：条目带着 `context`（例如 `characterId=hero`、`branchId=主线`），而当前会话的 `memoryContext` 是空白或另一套值。宽会话看不到窄条目，这是设计。核对方法：看条目 JSON 的 `context` 与侧边栏「记忆上下文」表单是否一致；只有记忆墙（`browseLibrary`，不带会话）能改别处上下文的条目。
+
+**守卫**：`tests/visibility-migration.test.mjs`（迁移保留 context、读时归一、落盘可证、二次运行幂等、工具面拒绝 `session`、空白作用域跨会话可读 secret、secret 不进自动通道、`context` 仍隔离）+ `tests/context-scope.test.mjs`；手工核对：`node scripts/migrate-visibility.mjs`（默认只报告，退出码 3 = 有老数据待转换，`--apply` 才写且先备份），条目上出现 `migratedFromVisibility: 'session'` 就是升级过。
+
 ---
 
 
@@ -198,6 +217,8 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.13 | 注入整段没了 | 看 binding 的 `libraryId` 是否 `null`（刚解绑/删库时常见）；用例见 `tests/injection-chain.test.mjs`。 |
 | §3.14 | 日期语义错 / 日期看不见 | `tests/injection-chain.test.mjs`、`tests/tools.test.mjs`（列表行必须与召回同标签）；看条目 `salientDate` 是 `MM-DD` 还是 `YYYY-MM-DD`、锚点行与列表行里有没有 `date=`/`anniversary=`。 |
 | §3.15 | 保存成功但没变 / 字段改不回来 | `tests/update-fields.test.mjs`、`tests/browser.test.mjs`；确认顺序：`unknown memory field` → `allowed` 与 `privateUpdate` 签名 → `memu_private_update` schema → `accuracyOf` 是否重算。 |
+| §3.16 | 弹窗选了却两边都勾上 | `tests/new-session-gate.test.mjs`（四张卡 + 四种「记住的选择」都断言 `useLibrary`/`useGlobal`，且换库不改层）；看 `state.json` 里该 binding 的两个布尔值是否等于卡片。 |
+| §3.17 | 同文件夹里某条记忆凭空消失 | `tests/visibility-migration.test.mjs`（迁移保留 context / 读时归一 / 落盘可证 / 幂等 / 拒绝 session / 空白作用域互读 / secret 不自动注入 / context 隔离）+ `tests/context-scope.test.mjs`；手工跑 `node scripts/migrate-visibility.mjs`，看条目上有没有 `migratedFromVisibility: 'session'`，以及 `context` 与当前会话是否一致。 |
 
 ## 附录 A · 模块地图（原 §2.1）
 

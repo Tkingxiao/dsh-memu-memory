@@ -30,7 +30,7 @@ It is **local-first by default**. The default `agent` backend stores full text i
 > [!WARNING]
 > **Early-stage software.** This plugin is still early and may contain unforeseen errors, bugs or breaking changes. Back up your data, and please [report an issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) or send a pull request — feedback helps the project improve.
 
-> **Status:** 1.1.0. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
+> **Status:** 1.1.1. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
 
 ## Screenshots
 
@@ -62,7 +62,7 @@ All screenshots are the real WebUI on isolated example data, not anyone's memori
 - **Memory fades unevenly.** Recency, access count, arousal, mood congruence, peak and end effects, primacy, habituation and flashbulb accuracy all feed one strength score. A vivid memory can be more confident than it is accurate, and the UI says so.
 - **Provenance is a fact, not a style.** Every entry carries `source` (`user_said` / `inferred` / `imagined` / `told`), `confidence`, `accuracy`, and disclosure rules. A vague recollection cannot impersonate a quote.
 - **Contradictions wait.** A write that rewrites or contradicts an existing entry lands as `pending_review`: it is not injected, not recalled, and appears in a review queue until someone accepts or rejects it.
-- **Secrets stay excluded.** `session`-scoped memories, `secret` visibility, group-chat channels, characters, worlds, branches and `knownBy` all constrain reads and edits. Automatic recall never injects a `secret` memory.
+- **Secrets stay excluded.** `secret` visibility, group-chat channels, characters, worlds, branches and `knownBy` all constrain reads and edits. Automatic recall never injects a `secret` memory, and a `secret` is still readable by an explicit recall from the same folder — it hides a memory from the prompt, it is not a lock. What actually separates two conversations in one folder is the `context` scope (`channelId` / `characterId` / `worldId` / `branchId`); a blank scope on both sides means one shared scope, which is the point of a folder. The old `visibility: 'session'` level is gone — reading turns it into `shared` with its `context` untouched, and `node scripts/migrate-visibility.mjs` rewrites libraries that still store it (`--apply`, backs up first).
 - **People and stories are structured.** Group chat uses stable `speakerId` / `channelId`, not display names. RP uses `characterId` / `worldId` / `branchId`. Relationships are edges with a note and confidence, entities can be renamed without rewriting memory bodies, and the current relationship state (familiarity, trust, warmth, boundaries, promises) is a snapshot that keeps its history and evidence.
 - **Images are pointers and captions, not pretend vision.** Attachments are deduplicated by SHA-256, quota-limited and tiered; an image without a description is remembered as "received an image", never as a scene the model did not see.
 - **Housekeeping happens in the background.** Consolidation runs in a seeded fork sub-session, never as an editable turn in your chat. Failed runs back off instead of reporting success.
@@ -182,7 +182,7 @@ To use the `api` backend, point it at an OpenAI-compatible **embedding** endpoin
 
 1. Install, then restart DSH.
 2. Open **MemU WebUI** from the sidebar (or Settings → MemU).
-3. New conversations ask once whether this chat should use memory: private only, global only, both, or none. **Remember my choice** skips the question later.
+3. New conversations ask once whether this chat should use memory: private only, global only, both, or none. **Remember my choice** skips the question later. The card you pick **sets both switches at once**, so the sidebar shows the card you chose; the advanced "existing / new library" pick only changes which library the private layer reads, never the two switches.
 4. If you want a folder-wide ceiling, set it under **文件夹** — a folder can forbid private or global memory, and the chat switches will respect that ceiling.
 5. Talk. The agent writes private memories itself. The **MemU 记忆** wall is where you review, edit, archive, link and export them.
 
@@ -299,6 +299,7 @@ npm test                                  # full suite; the isolated real-engine
 npm run check                             # syntax + i18n key alignment + package.json
 npm run build:graph                       # rebuild shipped offline assets after graph source changes
 node scripts/acceptance-local.mjs         # 50 automated acceptance checks
+node scripts/migrate-visibility.mjs       # report (add --apply to rewrite) libraries that still store the removed session level
 node --import ./tests/loader-register.mjs scripts/preview.mjs --port 7789
 ```
 

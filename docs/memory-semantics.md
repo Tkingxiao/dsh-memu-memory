@@ -48,4 +48,40 @@
 - RP 与 coding 是**内容**差异：coding 记事实（决定、约束、踩过的坑、工程偏好），召回当「可能过期的事实」，与代码冲突时以代码为准；rp 记经验（具体瞬间、半句原话、身体感觉、没说出口的话），允许模糊记错，不确定就标低 `confidence`。
 - **KV cache**：section 文本随 domain 变，但同一会话内恒定，缓存不受影响；中途改 domain 会让该会话失效一次缓存。别在文档里写「文本恒定」。
 
+### 8.6 可见范围只剩两档，它决定「自动浮现」而不是「谁能读」
+
+- `shared`（默认）：库级，整个文件夹共用。`secret`：只是「不自动推给你」的开关，**不是保险箱**。
+- 按通道分开看：
+
+| 通道 | `shared` | `secret` |
+|---|---|---|
+| 每回合锚点 / pin / 纪念日 | ✅ | ❌ |
+| 自动召回注入 | ✅ | ❌ |
+| 随机回响 cue / 短期到期提示 | ✅ | ❌ |
+| 模型主动 `memu_private_recall` | ✅ | ✅ |
+| `memu_private_list` / 侧边栏 / 记忆墙 | ✅ | ✅ |
+| 附件像素 | ✅ | ❌（`hidden: true`；`never_say` 的 caption 也不回显） |
+
+- 所以 `secret` 的实际边界是「**不被自动注入、不当回响源、附件不出像素**」；同一文件夹里另一个会话**主动检索时照样能拿到**。它挡的是「自己冒出来」，不是「别人查到」。要「跨会话绝不外泄」，靠 §8.7 的上下文边界，不是 `secret`。
+- 「只有我知道」= `disclosure: never_say`（不许说出口）+ `secret`（不许自动浮现）两个字段的组合，不是加密。侧边栏和记忆墙始终能看到正文——这是**事后监督**的设计，不是疏漏。
+- 全局 curator 读的是会话日志与全局库，不读私有库条目（`compactGlobalIndex`），所以 `secret` 不会被复制进「每会话都注入」的全局记忆；跨文件夹（不同库）之间也读不到。
+
+### 8.7 上下文作用域：`channelId / characterId / worldId / branchId` + `knownBy`
+
+- 边界是这四个字段（`lib/context.js` 的 `BOUNDARIES`）；`speakerId` 只是身份标签，**不参与可见性**；`knownBy` 是「谁知道」的白名单，按当前 `characterId` 判。
+- 会话侧是 `binding.memoryContext`（+ `sceneTime`），入口 RPC `setMemoryContext`（侧边栏「记忆上下文」表单，`lib/client.js` 的 `contextScope`）。**它不由宿主自动提供**：没填就是 `{}`，等于整个文件夹共享——两个会话都没填，它们在记忆层就是同一个上下文。
+- 写端只能收紧：`{...binding.memoryContext, ...传入 context}`；改边界或放宽一律 `memory context cannot widen or change the bound conversation`（传空字符串也算放宽）。
+- 读端严格相等：条目有某边界字段 → 必须等于当前会话同名字段；条目没有 → 不限制；`knownBy` 有值且不含当前角色 → 不可见。**宽会话看不到窄条目**（条目 `characterId=hero`、会话没设角色 → 不等 → 看不到）。
+- **存储不按上下文分库**：一个文件夹 = 一个库 = `index/<libraryId>.json` 一个文件，所有上下文条目同库共存，靠每条 entry 的 `context` 字段区分、读取时过滤。于是「同群组不同角色」是同一个文件里 `characterId` 不同的两条，「不同群组同角色」是 `channelId` 不同的两条，互相都看不到。
+- 去重与矛盾检测也按上下文分组（`sameFactContext` = 五个 IDENTITY 全等）：只有 context 完全一致才算「同一件事」；不同 `speakerId` 的同标题不算矛盾，不同世界/分支的两种说法可以并存。
+- 记忆墙 `browseLibrary` 不带 session，显示整库——这是唯一能编辑「别处上下文」条目的通路，也是修可见范围的兜底入口。
+
+### 8.8 `session` 级别已删除，老数据升级为 `shared`
+- 曾经有第三档 `visibility: 'session'`：条目绑定写下它的那段对话，只有那段对话能召回。**它在三种状态下都错**：①会话还在——同文件夹的其它对话读不到，而「同文件夹共享」正是这个插件存在的理由；②会话被删——条目变成谁也读不到的孤儿（侧边栏空白、记忆凭空消失就是这么来的）；③想让人读到——模型只能改成 `shared`，于是「作用域」变成了一次性开关，而不是约束。真正需要「只给某个角色/某条世界线看」的场景由 §8.7 的 `context` 表达，那一维是可读、可审计、可放宽的。
+- 升级：读到 `visibility: 'session'` 一律当 `shared`（`lib/visibility.js` 的 `migrateEntryVisibility`），**`context` 原封不动**——原本限定在某个角色/分支的条目，升级后仍然只有那个上下文看得到，丢掉的只是「哪段对话写的」这一维（以及 `sessionId` 字段）。标记 `migratedFromVisibility: 'session'` + `visibilityMigratedAt`，便于事后审计。
+- 落在哪一层：`lib/state.js` 的 `loadPrivateIndex` 在读取时升级视图（所有读写都经过这里，消费者不必知道该级别存在），基线仍是磁盘原文，所以下一次普通写入就会把升级落盘；`lib/migrate.js` 的周期巡检与侧边栏轮询（60 秒节流）把没人再写的库也重写掉。
+- 手工/一次性：`node scripts/migrate-visibility.mjs`（默认只报告，`--apply` 先 `backupDatabases()` 再写，`--json` 机器可读）。退出码 3 = 有老数据待转换，1 = 转换失败。
+- 导入导出：老版本导出的 `session` 条目按 `shared` 导入（同 `migratedFromVisibility` 标记），报告里记在 `downgraded` 并写明「session -> shared，要收窄请补 context」——丢一条记忆比放宽一条更糟，但「读者从一段对话变成整个文件夹」必须让用户看得见。
+- 工具面：`visibility` 只接受 `shared` / `secret`，传 `session` 会得到解释性报错（而不是静默降级）；面板下拉与中英文标签同步删掉了这一档。
+
 ---

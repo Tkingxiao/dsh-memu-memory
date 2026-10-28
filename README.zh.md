@@ -62,7 +62,7 @@
 - **记忆会不均匀地淡。** 新近、访问次数、唤醒度、情绪同调、峰终、首因、习惯化、闪光灯记忆的准确度共同参与强度；一条生动但可能记错的记忆会显示「细节未必准」，而不是假装确定。
 - **来源是事实，不是文风。** 每条记忆带 `source`（`user_said` / `inferred` / `imagined` / `told`）、`confidence`、`accuracy` 与说出口径。模糊的推断不能冒充原话。
 - **矛盾先挂起。** 与已有记忆同题改写或说法相反的新条进入 `pending_review`：不注入、不召回，只出现在复核队列，等人或整理作业裁决。
-- **秘密不进自动召回。** `session` 可见性、`secret`、群聊频道、角色、世界线、剧情分支与 `knownBy` 共同约束读写；`secret` 永远不会被自动注入。
+- **秘密不进自动召回。** `secret`、群聊频道、角色、世界线、剧情分支与 `knownBy` 共同约束读写；`secret` 永远不会被自动注入，但同文件夹里**主动检索仍然读得到**——它挡的是「自己冒出来」，不是保险箱。真正把同一文件夹里的两段对话隔开的是 `context` 作用域（`channelId` / `characterId` / `worldId` / `branchId`）；两边都没填就是同一个作用域，这正是「文件夹」的含义。旧的 `visibility: 'session'` 级别已删除：读到就按 `shared` 处理、`context` 原样保留，仍存着该级别的库用 `node scripts/migrate-visibility.mjs` 重写（`--apply` 才写，先备份）。
 - **人与故事是有结构的。** 群聊用稳定的 `speakerId` / `channelId`，不拿显示名当身份；RP 用 `characterId` / `worldId` / `branchId` 隔离知识。关系边有理由和置信度，实体改名不动记忆正文，关系当前状态（熟悉、信任、温度、边界、承诺）是带证据和历史快照。
 - **图片是指针加描述，不是假装能看图。** 附件按 SHA-256 去重、有配额、分三级留存；没有描述时只记「收到一张图片」，绝不编造画面。
 - **整理在后台。** 整理跑在种子 fork 子会话里，不会在你的待发区多出一轮；失败退避重试，不伪记成功。
@@ -182,7 +182,7 @@ npx --package dsh-memu-memory dsh-memu-memory-setup
 
 1. 安装后重启 DSH。
 2. 从右侧栏打开 **MemU WebUI**（或设置 → MemU）。
-3. 新会话会问一次：这个对话要不要记忆——只用私有 / 只用全局 / 私有 + 全局 / 不用。「记住我的选择」之后不再问。
+3. 新会话会问一次：这个对话要不要记忆——只用私有 / 只用全局 / 私有 + 全局 / 不用。「记住我的选择」之后不再问。选哪张卡就**同时定下两个开关**，侧边栏显示的就是你点的那张卡；高级区块里「选已有记忆库 / 新建记忆库」只改记忆落在哪个库，不改这两个开关。
 4. 如果想按文件夹设上限，去 **文件夹**：文件夹可以禁止私有或全局记忆，对话里的开关会受这个上限约束。
 5. 正常对话。私有记忆由 agent 自己写；**MemU 记忆** 墙用来审阅、编辑、归档、连边和导出。
 
@@ -291,6 +291,7 @@ npm test                                  # 全量测试；真实引擎用例在
 npm run check                             # 语法 + i18n 键对齐 + package.json
 npm run build:graph                       # 修改图谱源码后重建随包分发的离线资源
 node scripts/acceptance-local.mjs         # 50 条自动验收
+node scripts/migrate-visibility.mjs       # 报告（--apply 才重写）仍存着旧 session 级别的库
 node --import ./tests/loader-register.mjs scripts/preview.mjs --port 7789
 ```
 
