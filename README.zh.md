@@ -280,6 +280,7 @@ return { content: originalContent, meta: { ...originalMeta, memoryInbound: batch
 - **没有云同步、账号或跨设备同步。** 这是本地插件，没有服务端身份。
 - **没有视觉时：** 图片记忆只是「指针 + 人写的描述」。插件不会声称看过像素。
 - **v4 污染会话：** 历史 `format v4 message requires a producer-owned source kind` 行只能诊断，不能改写；插件不会编辑私有会话文件。
+- **人格预设（agent preset）：** 预设（`i-am-yuike`、`yuike-standard` 等）自带 `cordis.yml`，会话的模型可见插件集只由那份清单决定，它的 scope 也不会把 `agent/pre-step` 送到本插件。`lib/preset-scope.js` 会在运行时把「记忆锚点」挂到该 agent 自己的 ctx 上，所以**注入能用**；但那里**没有 `memu_*` 工具**——清单里没有这一行就没有工具行。要写记忆请在标准会话里写。插件不会改任何人的预设文件。
 - **相对日期在写入时结算：** 「今天 / 明天 / 后天 / today / tomorrow」加上一个月日落成带年份的日期；只说「下个月某天」的记忆不产生日期，也不替它编一个。已经按 `MM-DD` 写进去的旧条目不会被改写——这条只对新写入生效。
 - **不在范围：** 云端 MemU 联调、旧条目的 source 回填、已写坏 v4 消息的自动修复。
 

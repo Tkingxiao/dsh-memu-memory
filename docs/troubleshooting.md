@@ -31,6 +31,7 @@
 保存成功但没变 / 字段改不回来 → §3.15
 同文件夹里某条记忆凭空消失 / 新会话侧边栏空 → §3.17
 聊很久一条记忆都没写 → §3.18
+人格预设会话里完全没有记忆 → §3.19
 ```
 
 ## 3. 出过的问题：症状 → 落点 → 守卫
@@ -205,6 +206,20 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **守卫**：`tests/cycle.test.mjs`（空闲阈值、启动补偿、`sessionGone` 只标记一次、寒暄不 fork）+ `tests/consolidation-value.test.mjs`（评估边界：插件通知不算人类消息、纯应答跳过、「我不吃香菜」这种五个字的偏好必须留下、`lastSleepSeq` 之后的尾巴才算）。手工核对：`state.json` 里 `lastSleepAt` / `lastSleepSeq` / `sessionGone` / `sleepAttempts` 四个字段。
 
+### 3.19 人格预设（agent preset）的会话里完全没有记忆（S1 绑定 → S4 注入）
+
+**症状**：切到「完整人格」类预设（例如 `i-am-yuike`、`yuike-standard`、`yuike-ptc`）之后，那个会话里既没有 `<memory-anchor>`、也没有 `memu_*` 工具，`state.json` 的 `sessions` 里连这个会话的 binding 都没有（不是「写了没读到」，是「从来没接上」）。
+
+**落点**：预设会话的「模型可见插件集」是它自己那份 `cordis.yml` 清单，整棵子树是独立 scope——`agent/pre-step` 只会向自己的祖先冒泡，永远到不了部署级实例的监听器，于是 `ensureSession` 从不执行。`persona` 的 `complete: true` 只是把 system prompt 段剥掉，**不是原因**；所以「把 memu 加进预设」和「改预设的 cordis.patch.yml」都不是本插件该做的事（那是别人的人格插件）。
+
+**人格把提示词吃掉了**：`persona` 的 `complete: true` 会把本插件注入的 system prompt 段整段丢弃（实测 `E:p` 的会话 `system/message` 只有人格正文，但工具链里 `memu_private_*` 是在的）。仅靠 system prompt 段的话，模型有工具却不知道可以主动写。现在改为**首步用消息投放一次 `<memory-guide>`**（`binding.guideMessageAt` 去重），并在文末提示「没有 `memu_*` 工具就忽略本段」。
+
+**现在的做法**：`lib/preset-scope.js` 每 10 秒枚举 `ctx.get('agents').list()`，对**不在本插件 scope 树里**的会话（判据是沿 `agent.ctx.fiber` 往上找本插件的 fiber，找不到才算），在它**自己的 ctx** 上补挂 `registerInjection(ctx, { guide: false })`——只给记忆锚点，不承诺预设没有的工具。已挂过的按 agent ctx 记在进程级登记表里，会话消失就卸载；正常会话（同一棵树）跳过，避免注入两遍。
+
+**边界**：这样接上的会话**只有注入，没有 `memu_*` 工具**（工具面由预设的清单决定，宿主的 tool registry 全局层对这些会话是空的）。要写记忆得让它进一次标准会话，或等该预设的维护者自己列上这个插件。
+
+**守卫**：`tests/preset-scope.test.mjs`（同树跳过、兄弟树挂上、只挂一次、agent 消失就卸载、子 agent 与无 ctx 的条目跳过、无 `agents` 服务不算错）。手工核对：日志里有 `attached memory injection to preset conversation <id>`，且 `state.json` 的 `sessions` 出现该会话。
+
 ---
 
 
@@ -233,6 +248,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.16 | 弹窗选了却两边都勾上 | `tests/new-session-gate.test.mjs`（四张卡 + 四种「记住的选择」都断言 `useLibrary`/`useGlobal`，且换库不改层）；看 `state.json` 里该 binding 的两个布尔值是否等于卡片。 |
 | §3.17 | 同文件夹里某条记忆凭空消失 | `tests/visibility-migration.test.mjs`（迁移保留 context / 读时归一 / 落盘可证 / 幂等 / 拒绝 session / 空白作用域互读 / secret 不自动注入 / context 隔离）+ `tests/context-scope.test.mjs`；手工跑 `node scripts/migrate-visibility.mjs`，看条目上有没有 `migratedFromVisibility: 'session'`，以及 `context` 与当前会话是否一致。 |
 | §3.18 | 聊很久一条记忆都没写 | `tests/cycle.test.mjs`（阈值 / 启动补偿 / `sessionGone` 只标一次 / 寒暄不 fork）+ `tests/consolidation-value.test.mjs`（评估边界）；手工看 `state.json` 的 `lastSleepAt`/`lastSleepSeq`/`sessionGone`/`sleepAttempts`。 |
+| §3.19 | 人格预设会话里完全没有记忆 | `tests/preset-scope.test.mjs`（同树跳过 / 兄弟树挂上 / 只挂一次 / agent 消失就卸载 / 子 agent 跳过）；日志 `attached memory injection to preset conversation`；`state.json` 里该会话出现 binding。 |
 
 ## 附录 A · 模块地图（原 §2.1）
 

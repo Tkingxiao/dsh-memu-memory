@@ -93,3 +93,16 @@
 - 手动「整理这场对话」（RPC `generatePrivate`）带 `force: true`，跳过上面那道评估：用户已经决定了。
 
 ---
+
+### 8.10 人格预设（agent preset）会话：接得上注入，接不上工具
+
+预设会话的「模型可见插件集」不是 host composition，而是它自己那份 `cordis.yml`——整棵子树是独立 scope，`agent/pre-step` 只向自己的祖先冒泡，到不了部署级实例的监听器。所以预设会话最初的表现是「连 binding 都没有」，不是「写了没读到」。
+
+插件侧的处理（`lib/preset-scope.js`）：每 10 秒枚举 `ctx.get('agents').list()`，沿 `agent.ctx.fiber` 往上找本插件的 fiber——找不到（= 不在自己这棵树里）才在**该 agent 自己的 ctx** 上补挂 `registerInjection(ctx, { guide: false })`。同树的正常会话跳过，避免注入两遍；agent 消失就卸载。只挂锚点、不挂 guide，因为预设清单里没有 `memu_*` 工具，guide 会把不存在的工具说成可用。
+
+**提示词怎么办**：`persona` 常带 `complete: true`——装配完成后它会被恢复为唯一的 system prompt 段，本插件 `systemPrompt.section()` 注册的 guide 会被整段丢弃（实测 RP 会话的 `system/message` 只有人格正文）。所以预设会话改用**消息**投放规则：首步追加一次 `<memory-guide>` 插件消息（`withGuideMessage`，按 `binding.guideMessageAt` 会话内只发一次），并注明「工具列表里没有 `memu_*` 就忽略本段」。工具确实存在的预设会话（例如 RP 里的 `yuike`，工具链里有 `memu_private_*`）因此重新拿到主动性规则，而不是只有一个 anchor。
+
+**边界要讲清楚**：这样接上的会话只有**注入**（锚点、召回上下文），**没有工具**——工具面由预设的清单决定，宿主的 tool registry 全局层对这些会话是空的。要写记忆，得让这段对话进一次标准会话。反过来说，**不要为了这个去改别人的人格插件**：预设文件属于它的维护者，插件只能在自己的 scope 里做适配。
+
+---
+

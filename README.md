@@ -30,7 +30,7 @@ It is **local-first by default**. The default `agent` backend stores full text i
 > [!WARNING]
 > **Early-stage software.** This plugin is still early and may contain unforeseen errors, bugs or breaking changes. Back up your data, and please [report an issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) or send a pull request — feedback helps the project improve.
 
-> **Status:** 1.1.1. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
+> **Status:** 1.1.2. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
 
 ## Screenshots
 
@@ -288,6 +288,7 @@ the idle window starts from real message activity or the agent's return to idle.
 - **No cloud sync, no accounts, no cross-device sync.** This is a local plugin with no server-side identity.
 - **Images without vision:** without an optional caption/vision endpoint, an image memory is a pointer plus what a person wrote about it. The plugin does not claim to see pixels.
 - **Poisoned v4 sessions:** historical `format v4 message requires a producer-owned source kind` rows can be diagnosed but not rewritten; the plugin never edits private session files.
+- **Agent presets:** a conversation whose preset (`i-am-yuike`, `yuike-standard`, …) carries its own `cordis.yml` composes its model-facing plugins from that list alone, and its scope never delivers `agent/pre-step` to this plugin. `lib/preset-scope.js` attaches the memory anchor on such an agent's own context at runtime, so **recall works** — but the `memu_*` **tools do not exist there**, because a preset that does not list this plugin has no tool rows. Write memories from a standard conversation. The plugin never edits anyone's preset files.
 - **"Tomorrow" is resolved at write time.** A relative day (今天 / 明天 / 后天 / today / tomorrow) together with a month-day settles into one dated memory; a memory that only says "sometime next month" keeps no date rather than inventing one. A date that was already written as `MM-DD` is not rewritten — the fix applies to new writes.
 - **Not in scope:** cloud MemU integration, source backfill for old entries, automatic repair of already-written v4 corruption.
 
