@@ -2,7 +2,7 @@
   "name": "dsh-memu-memory",
   "icon": "./assets/icon.png",
   "version": "1.0.0",
-  "description": "为 DeepSeek Harness 提供本地优先的记忆：三层记忆、来源标注、关系图、图片附件与独立 WebUI，可选 MemU 引擎。",
+  "description": "面向长篇 RP 与陪伴对话的 DeepSeek Harness 记忆插件：三层记忆、逐轮召回、来源标注、关系图、图片附件与独立 WebUI。",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -16,6 +16,10 @@
     "local-first",
     "memory-plugin",
     "relationship-graph",
+    "roleplay",
+    "rp",
+    "character-ai",
+    "companion",
     "webui",
     "javascript"
   ],
