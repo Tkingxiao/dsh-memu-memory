@@ -84,4 +84,12 @@
 - 导入导出：老版本导出的 `session` 条目按 `shared` 导入（同 `migratedFromVisibility` 标记），报告里记在 `downgraded` 并写明「session -> shared，要收窄请补 context」——丢一条记忆比放宽一条更糟，但「读者从一段对话变成整个文件夹」必须让用户看得见。
 - 工具面：`visibility` 只接受 `shared` / `secret`，传 `session` 会得到解释性报错（而不是静默降级）；面板下拉与中英文标签同步删掉了这一档。
 
+### 8.9 空闲整理：什么时候跑，以及为什么可以什么都不写
+- 触发：`settings.sleepConsolidation` 开着时，每 5 分钟扫一遍（`lib/cycle.js` 的 `runSleepPass`），挑「`lastTurnAt` 早于 `lastSleepAt` 且已经安静 ≥ `sleepAfterIdleMinutes`」的会话，交给 `requestPrivateConsolidation` 起一个 fork 去读转录、写记忆。**默认 3 分钟**（`lib/state.js` 的 `DEFAULT_SETTINGS`）；旧值 8/20 的安装保留原选择，只是新装默认更短。
+- 应用启动后 8 秒补跑一次（`STARTUP_SWEEP_MS`），因为定时器只在应用开着时存在：一段对话如果是在应用关着的时候结束的，它永远等不到那个「空闲窗口」——用户一回来发消息，`lastTurnAt` 就被顶新了。补偿每次最多处理 **2 个**会话（`runSleepPass` 的 `limit`），按最近活动排序。
+- **有新回合 ≠ 该写记忆。** 进 fork 之前先做一次本地评估（`lib/private.js` 的 `assessConsolidationValue`，只看 `lastSleepSeq` 之后的转录）：①没有任何人类消息（只有插件通知、工具结果、心跳）→ 跳过；②只有一条**纯应答**（「谢谢」「好的」「ok」「收到」，且没有任何工具调用）→ 跳过。**这里刻意不按字数判断**：字数少的偏好句（「我不吃香菜」）比一千字的闲聊更该留，长度是坏代理。其余一律交给 fork——**跳过只是省一次 fork，「该不该留」仍由整理提示词判断**，它完全可以读完写 0 条。宁可多跑一次，也不要在本地猜「这条不重要」。
+- 评估通过但整理写了 0 条 = 正常成功（`lastSleepAt` 前移），不会每小时重来。
+- 会话被删：host 对 `readSession` 报 `session "…" not found`，这是**不变量**而不是瞬时故障。`runSleepPass` 一旦看到就把 binding 标 `sessionGone: true` 并清掉重试计数，此后直接跳过（以前会按 2 的幂退避、封顶 1 小时，永远重试）；同名会话后来真的收到新消息时（`lib/inbound.js`）会清掉这个标记。
+- 手动「整理这场对话」（RPC `generatePrivate`）带 `force: true`，跳过上面那道评估：用户已经决定了。
+
 ---

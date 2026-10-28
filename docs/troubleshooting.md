@@ -30,6 +30,7 @@
 注入整段没了 → §3.13               日期语义错 / 看不见日期 → §3.14
 保存成功但没变 / 字段改不回来 → §3.15
 同文件夹里某条记忆凭空消失 / 新会话侧边栏空 → §3.17
+聊很久一条记忆都没写 → §3.18
 ```
 
 ## 3. 出过的问题：症状 → 落点 → 守卫
@@ -192,6 +193,18 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **守卫**：`tests/visibility-migration.test.mjs`（迁移保留 context、读时归一、落盘可证、二次运行幂等、工具面拒绝 `session`、空白作用域跨会话可读 secret、secret 不进自动通道、`context` 仍隔离）+ `tests/context-scope.test.mjs`；手工核对：`node scripts/migrate-visibility.mjs`（默认只报告，退出码 3 = 有老数据待转换，`--apply` 才写且先备份），条目上出现 `migratedFromVisibility: 'session'` 就是升级过。
 
+### 3.18 聊了一整晚，一条记忆都没写（S7 空闲整理 → S2 写入）
+
+**症状**：会话里明明发生了很多事，`memu_status` 的 `inbound` 计数也涨了，但库里一条新条目都没有；`state.json` 里该 binding 的 `lastSleepAt` 停在前一天。
+
+**落点，按概率排**：
+- **回合内没有人调用 `memu_private_remember`。** 插件不会每轮自动写记忆——每回合的写入是模型的决定，空闲整理只是兜底。`memu_status` 的 `injectedIds`、`lastInjectedTurn` 正常、`inbound` 计数正常，就说明注入没坏，是「没写」而不是「没读到」。
+- **空闲窗口没落在应用开着的时候。** 巡检定时器只在应用运行时存在；应用关掉时结束的对话等不到那次 `runSleepPass`，而用户一回来发消息，`lastTurnAt` 就被顶新了。现在启动后 8 秒会补跑一次（最多 2 个会话），默认空闲阈值也从 8 分钟降到 3 分钟。
+- **新回合被评估为「不值得整理」。** `assessConsolidationValue` 只拒绝两种：`lastSleepSeq` 之后没有任何人类消息；或只有一条纯应答（「谢谢」「好的」「ok」，无工具调用）。其余都会进 fork，由整理提示词决定写不写——**写 0 条是合法结果**，不是故障。
+- **整理失败一直退避。** 看 binding 的 `lastSleepError` / `sleepRetryAt` / `sleepAttempts`。会话被删会得到 `session "…" not found`，现在会标 `sessionGone: true` 并停止重试（以前会每小时重来）。
+
+**守卫**：`tests/cycle.test.mjs`（空闲阈值、启动补偿、`sessionGone` 只标记一次、寒暄不 fork）+ `tests/consolidation-value.test.mjs`（评估边界：插件通知不算人类消息、纯应答跳过、「我不吃香菜」这种五个字的偏好必须留下、`lastSleepSeq` 之后的尾巴才算）。手工核对：`state.json` 里 `lastSleepAt` / `lastSleepSeq` / `sessionGone` / `sleepAttempts` 四个字段。
+
 ---
 
 
@@ -219,6 +232,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.15 | 保存成功但没变 / 字段改不回来 | `tests/update-fields.test.mjs`、`tests/browser.test.mjs`；确认顺序：`unknown memory field` → `allowed` 与 `privateUpdate` 签名 → `memu_private_update` schema → `accuracyOf` 是否重算。 |
 | §3.16 | 弹窗选了却两边都勾上 | `tests/new-session-gate.test.mjs`（四张卡 + 四种「记住的选择」都断言 `useLibrary`/`useGlobal`，且换库不改层）；看 `state.json` 里该 binding 的两个布尔值是否等于卡片。 |
 | §3.17 | 同文件夹里某条记忆凭空消失 | `tests/visibility-migration.test.mjs`（迁移保留 context / 读时归一 / 落盘可证 / 幂等 / 拒绝 session / 空白作用域互读 / secret 不自动注入 / context 隔离）+ `tests/context-scope.test.mjs`；手工跑 `node scripts/migrate-visibility.mjs`，看条目上有没有 `migratedFromVisibility: 'session'`，以及 `context` 与当前会话是否一致。 |
+| §3.18 | 聊很久一条记忆都没写 | `tests/cycle.test.mjs`（阈值 / 启动补偿 / `sessionGone` 只标一次 / 寒暄不 fork）+ `tests/consolidation-value.test.mjs`（评估边界）；手工看 `state.json` 的 `lastSleepAt`/`lastSleepSeq`/`sessionGone`/`sleepAttempts`。 |
 
 ## 附录 A · 模块地图（原 §2.1）
 
