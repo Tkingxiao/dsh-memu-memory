@@ -27,7 +27,10 @@
 
 It is **local-first by default**. The default `agent` backend stores full text in JSON indexes and recalls lexically — no Python, no embedding service, no API key. The `api` backend switches recall to the optional, pinned MemU engine (vector search). MemU is a plugin for people who want it, not a requirement for the plugin to start.
 
-> **Status:** 1.0.1. The first public release was 1.0.0. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
+> [!WARNING]
+> **Early-stage software.** This plugin is still early and may contain unforeseen errors, bugs or breaking changes. Back up your data, and please [report an issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) or send a pull request — feedback helps the project improve.
+
+> **Status:** 1.1.0. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
 
 ## Screenshots
 
@@ -55,6 +58,7 @@ All screenshots are the real WebUI on isolated example data, not anyone's memori
 
 - **Three layers, one timeline.** `short_term` drafts expire after 72 hours by default; `long_term` is the body of ordinary memory; `must_remember` needs a reason and a source, decays over 365 days with a 0.35 strength floor, and can be *marginalized* but never auto-deleted to make room.
 - **Recall is a moment, not a dump.** The first turn after a session starts (or after compaction) gets an anchor block with budgets for pinned, core and global memory. After that, each user turn gets at most one recall. Deduplication and a token budget are enforced in code, not left to the prompt.
+- **A date is either an anniversary or one day.** `MM-DD` recurs every year (a birthday); `YYYY-MM-DD` fires the day before and the day itself, then is spent. A memory that says "tomorrow" is stored as the dated form, so an appointment does not come back every year.
 - **Memory fades unevenly.** Recency, access count, arousal, mood congruence, peak and end effects, primacy, habituation and flashbulb accuracy all feed one strength score. A vivid memory can be more confident than it is accurate, and the UI says so.
 - **Provenance is a fact, not a style.** Every entry carries `source` (`user_said` / `inferred` / `imagined` / `told`), `confidence`, `accuracy`, and disclosure rules. A vague recollection cannot impersonate a quote.
 - **Contradictions wait.** A write that rewrites or contradicts an existing entry lands as `pending_review`: it is not injected, not recalled, and appears in a review queue until someone accepts or rejects it.
@@ -82,14 +86,14 @@ The locally bundled D3 force layout preserves positions and the camera across ba
 | Libraries | Create, rename, archive, restore, explicitly delete libraries |
 | Memory browser | Full-text editing, attachments, review queue, graph and bounded canvas, JSON/ZIP import/export |
 | Global memory | Domain-scoped global memories, evidence, review queue and the separate curator |
-| Prompts | General / RP / Coding / Mixed variants, overrides and per-key reset |
+| Prompts | General / RP / Coding / Mixed variants, overrides and per-key reset; new conversations start on RP |
 | Stats | Daily activity, hit distribution, health, never-recalled shortlist, 7-day write/read ratio |
 
 Settings save as you change them (250 ms debounce), with about 2.5 s cross-window sync and a heartbeat for writes made by tools or another window. The WebUI opens in a new tab; when a popup is blocked it falls back to an in-app overlay without unloading the host SPA. Light, dark, reduced-motion and narrow layouts are supported.
 
 ### Domain Prompts
 
-Resident guidance, writing policies and consolidation prompts follow the current session domain. Local tools and remote JSON consolidation share the domain body, with separate supported output contracts.
+Resident guidance, writing policies and consolidation prompts follow the current session domain. Local tools and remote JSON consolidation share the domain body, with separate supported output contracts. New conversations default to RP; Coding, Mixed and custom pages stay enabled and can be selected per conversation.
 
 | Domain | Memory focus |
 |---|---|
@@ -221,8 +225,8 @@ The main agent has **no global write tool**. Global memories are produced only b
 ```
 
 - **Text and images are not encrypted at rest.** The directory is inside your home directory. If that is not acceptable, do not store secrets in memories and protect the disk with OS-level encryption.
-- **Images are opt-in privacy data.** Only host-approved attachments are captured. `secret` entries never serve their attachments over the HTTP route; `never_say` captions are not echoed. The optional vision service sends an image to the endpoint you configure, only after you enable it, and may cost money. It never uses host credentials automatically.
-- **Network.** No telemetry. Outbound traffic happens only for (a) the optional engine installer downloading Python packages/uv from the configured mirrors, (b) the embedding endpoint you configure, (c) the optional remote summary model, and (d) the vision endpoint you enable. The default backend makes no external calls for memory operations.
+- **Images are opt-in privacy data.** Only host-approved attachments are captured. `secret` entries never serve their attachments over the HTTP route; `never_say` captions are not echoed. The vision description service is enabled by default, but it only sends an image after you configure an endpoint, and it may cost money. It never uses host credentials automatically.
+- **Network.** No telemetry. Outbound traffic happens only for (a) the optional engine installer downloading Python packages/uv from the configured mirrors, (b) the embedding endpoint you configure, (c) the optional remote summary model, and (d) the vision endpoint you configure (enabled by default; no call is made until an endpoint is configured). The default backend makes no external calls for memory operations.
 - **Shell and filesystem.** The optional engine installer uses Python/pip in a private venv (and a pinned uv fallback inside the plugin directory). It does not modify system Python, install global packages or change `PATH`. All memory writes are confined to the data directory; config writes use temp-file + rename.
 - **Deletion.** Archiving moves a memory out of retrieval; permanent deletion is a separate, guarded action for already-archived entries. Deleting a conversation only unbinds it; it never deletes the library. Library deletion asks for confirmation and is backed up first.
 
@@ -284,6 +288,7 @@ the idle window starts from real message activity or the agent's return to idle.
 - **No cloud sync, no accounts, no cross-device sync.** This is a local plugin with no server-side identity.
 - **Images without vision:** without an optional caption/vision endpoint, an image memory is a pointer plus what a person wrote about it. The plugin does not claim to see pixels.
 - **Poisoned v4 sessions:** historical `format v4 message requires a producer-owned source kind` rows can be diagnosed but not rewritten; the plugin never edits private session files.
+- **"Tomorrow" is resolved at write time.** A relative day (今天 / 明天 / 后天 / today / tomorrow) together with a month-day settles into one dated memory; a memory that only says "sometime next month" keeps no date rather than inventing one. A date that was already written as `MM-DD` is not rewritten — the fix applies to new writes.
 - **Not in scope:** cloud MemU integration, source backfill for old entries, automatic repair of already-written v4 corruption.
 
 ## Development & verification
@@ -305,8 +310,9 @@ The suite includes one real-engine integration case that is skipped unless `DSH_
 
 ## Documentation
 
-[`AGENTS.md`](AGENTS.md) is the operating manual for anyone changing this repo:
-failure modes, change paths and the host facts behind them.
+[`AGENTS.md`](AGENTS.md) is the index for anyone changing this repo — which file answers
+which question. The detail lives in [`docs/`](docs/): failure modes, the change process,
+the host facts, and the UI, memory and environment rules.
 
 ## License
 

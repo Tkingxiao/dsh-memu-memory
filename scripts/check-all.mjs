@@ -23,6 +23,15 @@ for (const dir of ['lib', 'scripts', 'tests']) {
   }
 }
 
+// AGENTS.md 吃的是宿主预算：@deepseek-ai/dsh-agent-instructions 的 maxBytes 是 65536，
+// 超了会静默截断尾部（尾部内容模型永远看不到，只发一条通知、不报错）。留 6000 余量。
+const budget = (rel, limit) => {
+  const bytes = fs.statSync(path.join(root, rel)).size
+  if (bytes > limit) failures.push(rel + ' budget')
+  console.log(`${bytes > limit ? 'FAIL' : 'ok  '} ${rel} budget (${bytes} / ${limit} bytes)`)
+}
+budget('AGENTS.md', 60000)
+
 check('i18n', process.execPath, ['scripts/check-i18n.mjs'])
 check('package.json', process.execPath, ['-e', 'JSON.parse(require("fs").readFileSync("package.json","utf8"))'])
 

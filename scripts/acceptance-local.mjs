@@ -276,6 +276,17 @@ await auto('B-4', 'a Chinese anchor lands inside its token budget', async () => 
   for (let i = 0; i < 20; i += 1) {
     seed(library.id, 'mem-b4-' + i, { layer: 'must_remember', pinReason: 'because', pinSource: 'user_explicit', content: body })
   }
+  // Keep this case independent of whatever earlier cases left in the global
+  // index, and fill the remaining anchor segments with RP-domain evidence.
+  state.saveGlobalIndex({ entries: {} })
+  const globalIndex = state.loadGlobalIndex()
+  for (let i = 0; i < 10; i += 1) {
+    globalIndex.entries['mem-b4-global-' + i] = {
+      title: 'global ' + i, content: body, status: 'active', domain: 'rp',
+      confidence: 0.8, createdAt: new Date().toISOString(),
+    }
+  }
+  state.saveGlobalIndex(globalIndex)
   const cwd = path.join(home, 'ws', 'b4-session')
   const binding = bindSession('sess-b4', { cwd, libraryId: library.id, patch: { domain: 'coding' } })
   const settings = state.getSettings()
@@ -688,12 +699,29 @@ await auto('G-1', 'the kept docs exist and nothing points at a retired one', asy
     assert.ok(fs.existsSync(path.join(ROOT, rel)), rel + ' exists')
   }
   assert.ok(!fs.existsSync(path.join(ROOT, 'CHANGELOG' + '.md')), 'the retired changelog is gone')
-  assert.ok(!fs.existsSync(path.join(ROOT, 'docs')), 'the docs directory is gone')
+  // 细节从 AGENTS.md 搬进了 docs/：索引必须短，指针必须都能落地
   const agents = fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8')
   assert.ok(agents.includes('plugin:dsh-memu-memory'), 'the notes carry the real source kind, not the old one')
+  const docs = ['troubleshooting', 'contributing', 'host-api', 'client-conventions', 'memory-semantics', 'env-and-commands']
+  for (const name of docs) {
+    assert.ok(fs.existsSync(path.join(ROOT, 'docs', name + '.md')), 'docs/' + name + '.md exists')
+    assert.ok(agents.includes('docs/' + name + '.md'), 'the index points at docs/' + name + '.md')
+  }
+  // 硬规则在 AGENTS.md §1 与附录 E 各有一份：改一处忘另一处，这里会红
+  const appendix = fs.readFileSync(path.join(ROOT, 'docs', 'troubleshooting.md'), 'utf8')
+  const ruleLead = (text) => text.split(String.fromCharCode(10)).filter((l) => /^[0-9]+[.] [*][*]/.test(l)).map((l) => { const end = l.indexOf('**', 5); return end < 0 ? l.slice(0, 40) : l.slice(0, end + 2) })
+  const inIndex = ruleLead(agents)
+  const inAppendix = ruleLead(appendix)
+  assert.equal(inIndex.length, 10, 'the index carries all ten hard rules')
+  assert.equal(inAppendix.length, inIndex.length, 'the appendix carries the same ten hard rules')
+  for (const lead of inIndex) assert.ok(inAppendix.includes(lead), 'rule drifted between AGENTS.md and appendix E: ' + lead)
+  const pointers = agents.match(new RegExp('docs/[A-Za-z0-9._-]+[.]md', 'g')) || []
+  for (const rel of new Set(pointers)) {
+    assert.ok(fs.existsSync(path.join(ROOT, rel)), 'AGENTS.md points at a missing file: ' + rel)
+  }
   const retired = ['DESIGN', 'CONSTRUCTION', 'ACCEPTANCE', 'TASKS'].map((name) => name + '.md')
   const offenders = []
-  for (const dir of ['', 'lib', 'scripts', 'tests']) {
+  for (const dir of ['', 'lib', 'scripts', 'tests', 'docs']) {
     for (const name of fs.readdirSync(path.join(ROOT, dir))) {
       if (!/\.(md|js|mjs)$/.test(name)) continue
       const text = fs.readFileSync(path.join(ROOT, dir, name), 'utf8')
@@ -908,5 +936,5 @@ if (counts.FAIL > 0) {
   console.log('FAILURES >>> rerun with --verbose to see the assertions')
   process.exitCode = 1
 } else {
-console.log('visual evidence reflects the recorded review; UI changes require a fresh browser review, see AGENTS.md for the client conventions')
+console.log('visual evidence reflects the recorded review; UI changes require a fresh browser review, see docs/client-conventions.md for the client conventions')
 }
