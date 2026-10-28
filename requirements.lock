@@ -1,0 +1,34 @@
+# Pinned MemU engine dependencies for dsh-memu.
+# Measured with Python 3.12.14 on Windows x64 (memu-cli 0.11.0b3).
+# The plugin installs this lock into a lean venv:
+#   python -m venv --without-pip engine/<version>/venv
+#   python -m pip --python <venv python> install -r requirements.lock
+# Do not loosen these pins without running the engine smoke test.
+memu-cli==0.11.0b3
+alembic==1.20.1
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.10.23
+h11==0.16.0
+httpcore==1.0.9
+httpcore2==2.16.0
+httpx==0.28.1
+httpx2==2.16.0
+idna==3.20
+jiter==0.18.0
+Mako==1.4.3
+MarkupSafe==3.0.4
+numpy==2.5.4
+openai==3.39.0
+pendulum==3.3.0
+pydantic==2.14.1
+pydantic-core==2.50.1
+python-dateutil==3.0.0
+six==1.17.0
+sniffio==1.3.1
+SQLAlchemy==2.1.6
+sqlmodel==0.0.48
+truststore==0.10.5
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+tzdata==2026.5

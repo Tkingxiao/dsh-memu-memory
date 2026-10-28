@@ -1,0 +1,8 @@
+# dsh-memu-memory bundle layer.
+# The plugin registers its host tools + pre-step injection, and its client
+# settings/sidebar surfaces. Keep this row minimal; user settings live in
+# ~/.dsh/dsh-memu-memory/state.json, not in the profile patch.
+- insert:
+    - id: dsh-memu-memory
+      name: dsh-memu-memory
+      config: {}

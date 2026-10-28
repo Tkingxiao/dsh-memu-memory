@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="icon-title icon-description">
+  <title id="icon-title">dsh-memu-memory</title>
+  <desc id="icon-description">An M-shaped indigo ribbon with a coral return fold, representing memory and recall.</desc>
+  <path fill="#3B5BDB" d="M80 352V212C80 144 124 100 184 100C244 100 288 144 288 208V288C288 305.673 273.673 320 256 320C238.327 320 224 305.673 224 288V208C224 180 208 164 184 164C160 164 144 184 144 212V352C144 369.673 129.673 384 112 384C94.327 384 80 369.673 80 352Z"/>
+  <path fill="#7048E8" d="M224 208C224 144 268 100 328 100C388 100 432 144 432 212V280H368V212C368 184 352 164 328 164C304 164 288 184 288 208H224Z"/>
+  <path fill="#F27066" d="M368 264H432V304C432 366 382 416 320 416H288C270.327 416 256 401.673 256 384C256 366.327 270.327 352 288 352H320C346.51 352 368 330.51 368 304V264Z"/>
+</svg>

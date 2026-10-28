@@ -1,0 +1,1148 @@
+/* ============================================================================
+   dsh-memu-memory — standalone memory studio
+   ----------------------------------------------------------------------------
+   This stylesheet only ever loads inside the standalone document
+   (html[data-standalone]). The host settings pane keeps its own compact look,
+   so every rule here is additive and scoped. Colours ride the DSH alias tokens
+   with local fallbacks: the page defines them once, the client reads them.
+   ========================================================================== */
+
+/* ── tokens ────────────────────────────────────────────────────────────── */
+:root {
+  --dshm-rail: 210px;
+  --dshm-gap: 34px;
+  --dshm-radius: 20px;
+  --dshm-topbar-h: 66px;
+  --dshm-ok: #3b5bdb;
+  --dshm-brand-2: #7048e8;
+  --dshm-coral: #f27066;
+  --dshm-shadow-soft: 0 24px 60px -42px rgba(16, 22, 48, .55);
+  --dshm-shadow-card: 0 24px 50px -38px rgba(16, 22, 48, .5);
+  --dshm-shadow-lift: 0 30px 60px -32px rgba(16, 22, 48, .5);
+
+  --dshm-panel: rgba(255, 255, 255, .66);
+  --dshm-panel-strong: rgba(255, 255, 255, .87);
+  --dshm-panel-2: rgba(255, 255, 255, .5);
+  --dshm-field: rgba(255, 255, 255, .74);
+  --dshm-line: rgba(26, 30, 43, .10);
+  --dshm-line-strong: rgba(26, 30, 43, .18);
+  --dshm-ink: #1a1e2b;
+  --dshm-muted: #5f6577;
+  --dshm-brand: #3b5bdb;
+  --dshm-accent: #c2757f;
+  --dshm-page-bg:
+    radial-gradient(1100px 720px at 8% -12%, rgba(80, 110, 240, .17), transparent 62%),
+    radial-gradient(900px 640px at 102% -4%, rgba(199, 120, 140, .12), transparent 58%),
+    radial-gradient(900px 700px at 50% 120%, rgba(112, 72, 232, .10), transparent 60%),
+    linear-gradient(180deg, #f6f6fa 0%, #f0f1f8 52%, #e9ebf3 100%);
+  --dshm-grain: .022;
+  --dshm-grid: rgba(26, 30, 43, .045);
+}
+
+:root[data-theme="dark"] {
+  --dshm-ok: #8ea2ff;
+  --dshm-brand-2: #b197fc;
+  --dshm-coral: #ff8f85;
+  --dshm-shadow-soft: 0 30px 70px -46px rgba(0, 0, 0, .85);
+  --dshm-shadow-card: 0 26px 54px -40px rgba(0, 0, 0, .9);
+  --dshm-shadow-lift: 0 34px 70px -34px rgba(0, 0, 0, .8);
+
+  --dshm-panel: rgba(23, 26, 35, .64);
+  --dshm-panel-strong: rgba(29, 33, 44, .84);
+  --dshm-panel-2: rgba(255, 255, 255, .045);
+  --dshm-field: rgba(255, 255, 255, .05);
+  --dshm-line: rgba(233, 235, 244, .10);
+  --dshm-line-strong: rgba(233, 235, 244, .18);
+  --dshm-ink: #e9ebf4;
+  --dshm-muted: #9ba2b5;
+  --dshm-brand: #8ea2ff;
+  --dshm-accent: #d69aa4;
+  --dshm-page-bg:
+    radial-gradient(1100px 760px at 6% -14%, rgba(94, 120, 255, .20), transparent 60%),
+    radial-gradient(900px 680px at 104% 0%, rgba(198, 120, 140, .10), transparent 58%),
+    radial-gradient(900px 700px at 50% 130%, rgba(120, 90, 230, .14), transparent 62%),
+    linear-gradient(180deg, #0c0e15 0%, #0f121a 55%, #0b0d12 100%);
+  --dshm-grain: .05;
+  --dshm-grid: rgba(233, 235, 244, .05);
+}
+
+/* ── base ──────────────────────────────────────────────────────────────── */
+html {
+  background: #f4f5f9;
+  scroll-behavior: smooth;
+}
+html[data-theme="dark"] {
+  background: #0d0f15;
+}
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--dshm-ink);
+  background: var(--dshm-page-bg);
+  background-attachment: fixed;
+  color-scheme: light;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  letter-spacing: 0;
+  overflow-x: hidden;
+}
+html[data-theme="dark"] body {
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+}
+::selection {
+  background: color-mix(in srgb, var(--dshm-brand) 32%, transparent);
+  color: var(--dshm-ink);
+}
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--dshm-brand) 70%, transparent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--dshm-muted) 34%, transparent) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--dshm-muted) 32%, transparent);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--dshm-muted) 52%, transparent);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── ambient stage ─────────────────────────────────────────────────────── */
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ambient i {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(74px);
+  opacity: .62;
+  will-change: transform;
+  animation: ambient-drift 52s ease-in-out infinite alternate;
+}
+.ambient i:nth-child(1) {
+  width: 54vw;
+  height: 54vw;
+  left: -14vw;
+  top: -20vw;
+  background: radial-gradient(circle at 36% 36%,
+    color-mix(in srgb, var(--dshm-brand) 42%, transparent), transparent 66%);
+}
+.ambient i:nth-child(2) {
+  width: 46vw;
+  height: 46vw;
+  right: -16vw;
+  top: -8vw;
+  background: radial-gradient(circle at 60% 40%,
+    color-mix(in srgb, var(--dshm-accent) 30%, transparent), transparent 64%);
+  animation-duration: 64s;
+  animation-delay: -18s;
+}
+.ambient i:nth-child(3) {
+  width: 50vw;
+  height: 50vw;
+  left: 28vw;
+  bottom: -34vw;
+  background: radial-gradient(circle at 50% 50%,
+    color-mix(in srgb, var(--dshm-brand-2) 24%, transparent), transparent 68%);
+  animation-duration: 74s;
+  animation-delay: -30s;
+}
+.ambient-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--dshm-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--dshm-grid) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(120% 90% at 50% 0%, #000 0%, transparent 72%);
+  opacity: .7;
+}
+.ambient-grain {
+  position: absolute;
+  inset: -20%;
+  opacity: var(--dshm-grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+  mix-blend-mode: overlay;
+}
+.ambient-spot {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(560px circle at var(--spot-x, 50%) var(--spot-y, 26%),
+    color-mix(in srgb, var(--dshm-brand) 9%, transparent), transparent 62%);
+  opacity: 0;
+  transition: opacity .6s ease;
+}
+body[data-pointer="fine"] .ambient-spot {
+  opacity: 1;
+}
+
+@keyframes ambient-drift {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(3vw, 2vh, 0) scale(1.06); }
+  100% { transform: translate3d(-2vw, 4vh, 0) scale(.98); }
+}
+
+/* ── app frame ─────────────────────────────────────────────────────────── */
+.app {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.skip {
+  position: absolute;
+  left: 16px;
+  top: -60px;
+  z-index: 80;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--dshm-panel-strong);
+  border: 1px solid var(--dshm-line-strong);
+  color: var(--dshm-ink);
+  text-decoration: none;
+  font-size: 12.5px;
+  transition: top .2s ease;
+}
+.skip:focus {
+  top: 14px;
+}
+
+/* ── topbar ────────────────────────────────────────────────────────────── */
+.topbar {
+  position: sticky;
+  top: 14px;
+  z-index: 30;
+  width: min(1400px, calc(100% - 32px));
+  margin: 14px auto 0;
+  min-height: var(--dshm-topbar-h);
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 16px 12px 14px;
+  border-radius: 18px;
+  border: 1px solid var(--dshm-line);
+  background: color-mix(in srgb, var(--dshm-panel) 78%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  backdrop-filter: blur(20px) saturate(1.5);
+  box-shadow: var(--dshm-shadow-soft);
+  transition: box-shadow .3s ease, border-color .3s ease, background .3s ease, transform .3s ease;
+}
+body[data-scrolled="true"] .topbar {
+  box-shadow: 0 30px 70px -40px rgba(10, 28, 23, .55);
+  border-color: var(--dshm-line-strong);
+  background: color-mix(in srgb, var(--dshm-panel-strong) 82%, transparent);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  text-decoration: none;
+  color: inherit;
+}
+.brand-icon {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  border: 1px solid var(--dshm-line);
+  box-shadow:
+    0 12px 24px -16px rgba(16, 22, 48, .5),
+    inset 0 1px 0 rgba(255, 255, 255, .9);
+  animation: brand-float 7s ease-in-out infinite;
+}
+:root[data-theme="dark"] .brand-icon {
+  background: #fff;
+  box-shadow:
+    0 14px 26px -18px rgba(0, 0, 0, .9),
+    inset 0 1px 0 rgba(255, 255, 255, .9);
+}
+.brand-icon svg {
+  width: 30px;
+  height: 30px;
+  display: block;
+}
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+.brand-name {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.brand-sub {
+  margin-top: 3px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--dshm-muted);
+}
+.crumb {
+  margin: 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--dshm-line);
+  background: color-mix(in srgb, var(--dshm-panel-2) 70%, transparent);
+  color: var(--dshm-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.crumb::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--dshm-brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dshm-brand) 16%, transparent);
+  flex: none;
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--dshm-line);
+  background: color-mix(in srgb, var(--dshm-panel-2) 60%, transparent);
+  color: var(--dshm-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.sync-pill i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dshm-ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dshm-ok) 18%, transparent);
+  animation: dot-pulse 2.8s ease-in-out infinite;
+}
+.icon-btn {
+  height: 38px;
+  min-width: 38px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 12px;
+  border: 1px solid var(--dshm-line);
+  background: color-mix(in srgb, var(--dshm-panel-2) 70%, transparent);
+  color: var(--dshm-ink);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: transform .22s cubic-bezier(.22, 1, .36, 1), box-shadow .22s ease,
+    border-color .22s ease, background .22s ease, color .22s ease;
+}
+.icon-btn:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--dshm-brand) 34%, var(--dshm-line));
+  box-shadow: 0 12px 24px -16px color-mix(in srgb, var(--dshm-brand) 60%, transparent);
+  background: var(--dshm-panel-strong);
+}
+.icon-btn:active {
+  transform: translateY(0) scale(.96);
+}
+.icon-btn.primary {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--dshm-brand), var(--dshm-brand-2));
+  color: #fff;
+  box-shadow: 0 14px 26px -14px color-mix(in srgb, var(--dshm-brand) 70%, transparent);
+}
+:root[data-theme="dark"] .icon-btn.primary {
+  color: #062a23;
+}
+.icon-btn .swap {
+  display: grid;
+  place-items: center;
+  transition: transform .45s cubic-bezier(.34, 1.56, .64, 1);
+}
+.icon-btn:hover .swap {
+  transform: rotate(18deg) scale(1.05);
+}
+.icon-btn .i-sun,
+.icon-btn .i-moon {
+  grid-area: 1 / 1;
+  transition: opacity .25s ease, transform .45s cubic-bezier(.34, 1.56, .64, 1);
+}
+:root[data-theme="dark"] .icon-btn .i-sun {
+  opacity: 0;
+  transform: rotate(-70deg) scale(.6);
+}
+:root[data-theme="dark"] .icon-btn .i-moon {
+  opacity: 1;
+  transform: none;
+}
+.icon-btn .i-moon {
+  opacity: 0;
+  transform: rotate(70deg) scale(.6);
+}
+.back-label {
+  padding-right: 2px;
+}
+
+@keyframes brand-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
+
+/* ── stage ─────────────────────────────────────────────────────────────── */
+.stage {
+  flex: 1;
+  width: 100%;
+  max-width: none;
+  margin: 0 auto;
+  padding: 26px 32px 56px calc(var(--dshm-rail) + 38px);
+}
+/* Visible from the first frame: the boot overlay owns the reveal. A transition
+   from opacity 0 here can freeze in a hidden tab, which reads as a blank page
+   that never comes back. */
+#root {
+  min-height: 50vh;
+}
+.boot-failed #root::before {
+  content: "";
+}
+
+/* ── footer ────────────────────────────────────────────────────────────── */
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 22px 32px 26px calc(var(--dshm-rail) + 38px);
+  color: var(--dshm-muted);
+  font-size: 11.5px;
+  opacity: 0;
+  transition: opacity .7s ease .2s;
+}
+body[data-ready="true"] .foot {
+  opacity: .85;
+}
+.foot .dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .5;
+}
+.foot-right {
+  margin-left: 8px;
+  font-variant-numeric: tabular-nums;
+  opacity: .7;
+}
+
+/* ── boot splash ───────────────────────────────────────────────────────── */
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(700px 460px at 50% 42%,
+      color-mix(in srgb, var(--dshm-brand) 12%, transparent), transparent 70%),
+    var(--dshm-page-bg);
+  transition: opacity .6s ease, visibility .6s ease;
+}
+body[data-ready="true"] .boot {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.boot-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 30px 34px 26px;
+  border-radius: 24px;
+  border: 1px solid var(--dshm-line);
+  background: color-mix(in srgb, var(--dshm-panel) 72%, transparent);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--dshm-shadow-soft);
+  animation: boot-in .7s cubic-bezier(.22, 1, .36, 1) both;
+}
+.boot-icon {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border-radius: 20px;
+  background: #fff;
+  border: 1px solid var(--dshm-line);
+  box-shadow: 0 24px 50px -26px rgba(16, 22, 48, .55);
+}
+:root[data-theme="dark"] .boot-icon {
+  background: #fff;
+  box-shadow: 0 26px 54px -28px rgba(0, 0, 0, .95);
+}
+.boot-icon svg {
+  width: 48px;
+  height: 48px;
+  display: block;
+}
+.boot-icon::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 26px;
+  border: 1px solid color-mix(in srgb, var(--dshm-brand) 34%, transparent);
+  animation: boot-ring 2.4s ease-out infinite;
+}
+.boot-title {
+  margin-top: 6px;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+}
+.boot-sub {
+  font-size: 12px;
+  color: var(--dshm-muted);
+}
+.boot-bar {
+  margin-top: 6px;
+  width: 190px;
+  height: 3px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--dshm-muted) 18%, transparent);
+}
+.boot-bar i {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent,
+    color-mix(in srgb, var(--dshm-brand) 90%, transparent), transparent);
+  animation: boot-shimmer 1.5s ease-in-out infinite;
+}
+@keyframes boot-in {
+  from { opacity: 0; transform: translateY(12px) scale(.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes boot-ring {
+  0% { opacity: .7; transform: scale(.96); }
+  70% { opacity: 0; transform: scale(1.18); }
+  100% { opacity: 0; transform: scale(1.18); }
+}
+@keyframes boot-shimmer {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(340%); }
+}
+
+/* ── theme cross-fade (View Transitions) ───────────────────────────────── */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: .42s;
+  animation-timing-function: cubic-bezier(.22, 1, .36, 1);
+}
+::view-transition-old(root) {
+  animation-name: theme-out;
+}
+::view-transition-new(root) {
+  animation-name: theme-in;
+}
+@keyframes theme-out {
+  to { opacity: .2; }
+}
+@keyframes theme-in {
+  from { opacity: .2; transform: scale(.997); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ============================================================================
+   Standalone skin for the shared SettingsPage (.dshm-*)
+   --------------------------------------------------------------------------
+   The component keeps its compact host values; here it gets room, depth and
+   glass. !important is used only where the component still carries inline
+   padding/radius/background, which CSS cannot otherwise outrank.
+   ========================================================================== */
+html[data-standalone] .dshm-root {
+  padding: 0;
+  min-height: 0;
+  animation: none;
+  /* The component uses container queries inside the host pane. On a full page
+     `contain: layout` would also make it the containing block for the detail
+     drawer's fixed overlay, pinning it under the topbar; the media queries above
+     already cover the narrow layout. */
+  container-type: normal;
+  --dshm-mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+}
+html[data-standalone] .dshm-shell {
+  display: block;
+  max-width: none;
+}
+/* The rail is pinned to the window's left edge, below the floating topbar. The
+   content column stays centred in the remaining width. */
+html[data-standalone] .dshm-nav {
+  position: fixed;
+  left: 0;
+  top: 96px;
+  bottom: 0;
+  width: var(--dshm-rail);
+  gap: 0;
+  padding: 14px 14px 22px;
+  border-radius: 0 var(--dshm-radius) var(--dshm-radius) 0;
+  border: 1px solid var(--dshm-line);
+  border-left: 0;
+  background: color-mix(in srgb, var(--dshm-panel) 74%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: var(--dshm-shadow-soft);
+  overflow-y: auto;
+  z-index: 20;
+}
+html[data-standalone] .dshm-nav::before {
+  content: "MEMORY STUDIO";
+  display: block;
+  padding: 4px 12px 10px;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .2em;
+  color: var(--dshm-muted);
+  opacity: .8;
+}
+/* The topbar already carries the brand; repeating it inside the rail reads as
+   two apps glued together. */
+html[data-standalone] .dshm-brand {
+  display: none;
+}
+html[data-standalone] .dshm-nav-list {
+  gap: var(--dshm-nav-gap, 4px);
+}
+html[data-standalone] .dshm-nav-item {
+  border-radius: 12px;
+  font-size: 13.5px;
+  color: var(--dshm-muted);
+  font-weight: 500;
+  transition: color .2s ease, transform .2s ease;
+}
+html[data-standalone] .dshm-nav-item:hover {
+  color: var(--dshm-ink);
+  transform: translateX(2px);
+}
+html[data-standalone] .dshm-nav-item.on {
+  color: var(--dshm-brand);
+  font-weight: 620;
+}
+html[data-standalone] .dshm-nav-item svg {
+  opacity: .78;
+  transition: transform .3s cubic-bezier(.34, 1.56, .64, 1), opacity .2s ease;
+}
+html[data-standalone] .dshm-nav-item:hover svg,
+html[data-standalone] .dshm-nav-item.on svg {
+  opacity: 1;
+}
+html[data-standalone] .dshm-nav-ind {
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--dshm-brand) 28%, transparent);
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--dshm-brand) 16%, transparent),
+      color-mix(in srgb, var(--dshm-brand) 7%, transparent));
+  box-shadow:
+    0 10px 24px -18px color-mix(in srgb, var(--dshm-brand) 60%, transparent),
+    inset 0 0 0 1px rgba(255, 255, 255, .04);
+}
+
+/* page header + body */
+html[data-standalone] .dshm-page {
+  max-width: 1180px;
+  margin: 0 auto;
+  gap: 18px;
+  /* No page-level transform: an animated transform on this ancestor would make
+     it the containing block for the detail drawer's fixed overlay, clipping the
+     backdrop to the content column. Cards still animate individually. */
+  animation: none;
+}
+html[data-standalone] .dshm-head {
+  margin: 2px 0 8px;
+}
+html[data-standalone] .dshm-overline {
+  font-size: 10.5px;
+  letter-spacing: .24em;
+  color: var(--dshm-brand);
+  opacity: 1;
+}
+html[data-standalone] .dshm-h1 {
+  margin-top: 7px;
+  font-size: clamp(24px, 2.4vw, 32px);
+  font-weight: 680;
+  letter-spacing: -.035em;
+  line-height: 1.15;
+}
+html[data-standalone] .dshm-desc {
+  margin-top: 8px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  max-width: 66ch;
+  color: var(--dshm-muted);
+}
+html[data-standalone] .dshm-status {
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+/* cards */
+html[data-standalone] .dshm-card {
+  position: relative;
+  overflow: hidden;
+  padding: 20px 20px 18px !important;
+  border-radius: var(--dshm-radius) !important;
+  border: 1px solid var(--dshm-line) !important;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--dshm-panel-strong) 94%, transparent),
+      color-mix(in srgb, var(--dshm-panel) 88%, transparent)) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  backdrop-filter: blur(16px) saturate(1.25);
+  box-shadow: var(--dshm-shadow-card);
+  transition: transform .28s cubic-bezier(.22, 1, .36, 1), box-shadow .28s ease,
+    border-color .28s ease;
+}
+html[data-standalone] .dshm-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent,
+    color-mix(in srgb, #fff 55%, transparent), transparent);
+  opacity: .7;
+  pointer-events: none;
+}
+html[data-standalone] .dshm-card:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--dshm-brand) 26%, var(--dshm-line)) !important;
+  box-shadow: var(--dshm-shadow-lift);
+}
+html[data-standalone] .dshm-card h2,
+html[data-standalone] .dshm-card-title {
+  font-size: 15px !important;
+  letter-spacing: -.01em;
+}
+html[data-standalone] .dshm-card-sub {
+  margin-top: 4px !important;
+  font-size: 12.5px !important;
+  line-height: 1.55 !important;
+}
+html[data-standalone] .dshm-card-ico {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background:
+    radial-gradient(120% 120% at 30% 20%, rgba(255, 255, 255, .35), transparent 60%),
+    color-mix(in srgb, var(--dshm-brand) 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dshm-brand) 16%, transparent);
+}
+html[data-standalone] .dshm-rise {
+  animation: card-rise .46s cubic-bezier(.22, 1, .36, 1) both;
+  animation-delay: calc(var(--d, 0) * 42ms + 40ms);
+}
+@keyframes card-rise {
+  from { opacity: 0; transform: translateY(14px) scale(.995); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* fields and actions */
+html[data-standalone] .dshm-root input:not([type="checkbox"]):not([type="radio"]),
+html[data-standalone] .dshm-root select {
+  height: 38px !important;
+  padding: 0 12px !important;
+  border-radius: 11px !important;
+  font-size: 13px !important;
+  background: var(--dshm-field) !important;
+  border-color: var(--dshm-line-strong) !important;
+  transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
+}
+html[data-standalone] .dshm-root textarea {
+  border-radius: 12px !important;
+  padding: 10px 12px !important;
+  font-size: 13px !important;
+  background: var(--dshm-field) !important;
+  border-color: var(--dshm-line-strong) !important;
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+html[data-standalone] .dshm-root input:not([type="checkbox"]):not([type="radio"]):focus,
+html[data-standalone] .dshm-root select:focus,
+html[data-standalone] .dshm-root textarea:focus {
+  border-color: var(--dshm-brand) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dshm-brand) 16%, transparent) !important;
+  background: var(--dshm-panel-strong) !important;
+}
+html[data-standalone] .dshm-btn {
+  height: 36px !important;
+  padding: 0 15px !important;
+  border-radius: 11px !important;
+  font-size: 13px !important;
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1), box-shadow .2s ease,
+    border-color .2s ease, opacity .2s ease;
+}
+html[data-standalone] .dshm-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px -18px color-mix(in srgb, var(--dshm-brand) 70%, transparent);
+}
+html[data-standalone] .dshm-root input[type="checkbox"],
+html[data-standalone] .dshm-root input[type="radio"] {
+  accent-color: var(--dshm-brand);
+}
+
+/* The tuning form is a long single column in the host. On a desktop page it reads
+   as a sparse list with half a card empty; two columns put the knobs side by side
+   without splitting each row's label from its control. */
+html[data-standalone] .dshm-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 34px;
+  align-items: start;
+}
+html[data-standalone] .dshm-settings-grid > label {
+  margin: 5px 0;
+  min-width: 0;
+}
+html[data-standalone] .dshm-settings-grid input:not([type="checkbox"]):not([type="radio"]),
+html[data-standalone] .dshm-settings-grid select {
+  width: 100%;
+  max-width: 280px;
+}
+html[data-standalone] .dshm-settings-note {
+  grid-column: 1 / -1;
+  margin-top: 8px !important;
+}
+@media (max-width: 1250px) {
+  html[data-standalone] .dshm-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* charts, stats, tags */
+html[data-standalone] .dshm-chart {
+  margin-top: 6px;
+  filter: drop-shadow(0 10px 18px color-mix(in srgb, var(--dshm-brand) 14%, transparent));
+}
+html[data-standalone] .dshm-stat {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border-color: var(--dshm-line) !important;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--dshm-panel-2) 70%, transparent),
+      transparent) !important;
+}
+html[data-standalone] .dshm-stat-v {
+  font-size: 23px;
+  letter-spacing: -.02em;
+}
+html[data-standalone] .dshm-stats-row {
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 10px;
+}
+html[data-standalone] .dshm-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0;
+  padding: 8px 12px;
+  border-radius: 11px;
+  border: 1px solid color-mix(in srgb, var(--dshm-error, #b43e45) 30%, transparent);
+  background: color-mix(in srgb, var(--dshm-error, #b43e45) 10%, transparent);
+  font-size: 12.5px;
+}
+
+/* graph + media blocks */
+html[data-standalone] .dshm-graph-tools input,
+html[data-standalone] .dshm-graph-tools select {
+  height: 38px;
+  border-radius: 11px;
+  border-color: var(--dshm-line-strong);
+  background: var(--dshm-field);
+}
+html[data-standalone] .dshm-graph-canvas {
+  border-radius: 0;
+  background: var(--dsw-alias-bg-layer-1);
+}
+html[data-standalone] .dshm-graph-edge {
+  border-color: var(--dshm-line);
+}
+html[data-standalone] .dshm-media-grid img {
+  border-radius: 14px;
+  box-shadow: 0 14px 30px -22px rgba(0, 0, 0, .5);
+}
+
+/* memory wall */
+html[data-standalone] .dshm-wall {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+html[data-standalone] .dshm-wall-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+html[data-standalone] .dshm-wall-item {
+  min-height: 236px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid var(--dshm-line);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--dshm-panel-strong) 92%, transparent),
+      color-mix(in srgb, var(--dshm-panel) 82%, transparent));
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 36px -32px rgba(10, 28, 23, .5);
+  transition: transform .28s cubic-bezier(.22, 1, .36, 1), box-shadow .28s ease,
+    border-color .28s ease;
+}
+html[data-standalone] .dshm-wall-item:hover {
+  transform: translateY(-4px);
+  border-color: color-mix(in srgb, var(--dshm-brand) 34%, var(--dshm-line));
+  box-shadow: var(--dshm-shadow-lift);
+}
+html[data-standalone] .dshm-wall-item > strong {
+  font-size: 16px;
+  letter-spacing: -.015em;
+}
+html[data-standalone] .dshm-wall-item > p {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--dshm-muted);
+}
+html[data-standalone] .dshm-wall-cover {
+  margin: -18px -18px 0;
+  border-radius: 17px 17px 0 0;
+  aspect-ratio: 16 / 10;
+  background: var(--dshm-field);
+}
+html[data-standalone] .dshm-wall-cover-count {
+  right: 10px;
+  bottom: 10px;
+  font-size: 10.5px;
+  letter-spacing: .01em;
+  background: rgba(10, 16, 32, .62);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+html[data-standalone] .dshm-wall-meta {
+  font-size: 11px;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+html[data-standalone] .dshm-nav-list.is-row .dshm-nav-item.on {
+  background: color-mix(in srgb, var(--dshm-brand) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dshm-brand) 20%, transparent);
+}
+html[data-standalone] .dshm-wall-item > meter {
+  height: 4px;
+  border-radius: 999px;
+}
+html[data-standalone] .dshm-wall-item > meter::-webkit-meter-bar {
+  background: color-mix(in srgb, var(--dshm-muted) 16%, transparent);
+  border: 0;
+  border-radius: 999px;
+}
+html[data-standalone] .dshm-wall-item > meter::-webkit-meter-optimum-value {
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--dshm-brand), var(--dshm-brand-2));
+}
+
+/* the wall's in-place detail drawer */
+html[data-standalone] .dshm-drawer {
+  width: min(560px, 100%);
+  padding: 26px;
+  gap: 12px;
+  background: var(--dshm-panel-strong);
+  -webkit-backdrop-filter: blur(22px) saturate(1.3);
+  backdrop-filter: blur(22px) saturate(1.3);
+  border-left-color: var(--dshm-line);
+  box-shadow: -30px 0 80px -40px rgba(0, 0, 0, .55);
+}
+html[data-standalone] .dshm-drawer .dshm-input,
+html[data-standalone] .dshm-drawer input,
+html[data-standalone] .dshm-drawer textarea,
+html[data-standalone] .dshm-drawer select {
+  width: 100%;
+}
+html[data-standalone] .dshm-drawer .dshm-drawer-inline select,
+html[data-standalone] .dshm-drawer .dshm-drawer-inline input {
+  width: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+html[data-standalone] .dshm-drawer-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1 1 180px;
+  min-width: 0;
+}
+html[data-standalone] .dshm-drawer-field.is-narrow {
+  flex: 0 1 150px;
+}
+html[data-standalone] .dshm-drawer-label {
+  flex: none;
+  font-size: 11px;
+  color: var(--dshm-muted);
+  white-space: nowrap;
+}
+html[data-standalone] .dshm-drawer-actions {
+  border-top-color: var(--dshm-line);
+}
+html[data-standalone] .dshm-drawer-copy {
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+html[data-standalone] .dshm-drawer .dshm-media {
+  margin: 2px 0;
+}
+html[data-standalone] .dshm-drawer .dshm-media summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--dshm-muted);
+}
+html[data-standalone] .dshm-drawer .dshm-media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  padding: 10px 0 2px;
+}
+html[data-standalone] .dshm-drawer .dshm-media-grid figure {
+  max-width: none;
+}
+html[data-standalone] .dshm-drawer .dshm-media-grid img {
+  width: 100%;
+  max-height: 170px;
+  object-fit: cover;
+  border-radius: 12px;
+  box-shadow: 0 14px 30px -24px rgba(0, 0, 0, .55);
+}
+html[data-standalone] .dshm-drawer .dshm-media-grid figcaption {
+  color: var(--dshm-muted);
+}
+html[data-standalone] .dshm-wall-graph {
+  margin-top: 2px;
+}
+
+/* ── responsive ────────────────────────────────────────────────────────── */
+@media (max-width: 760px) {
+  html[data-standalone] .dshm-shell { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  html[data-standalone] .dshm-nav { position: static; }
+  html[data-standalone] .dshm-nav-list { flex-direction: row; flex-wrap: wrap; }
+  html[data-standalone] .dshm-nav-ind { display: none; }
+  html[data-standalone] .dshm-nav-item { flex: none; height: 32px; padding: 0 10px; font-size: 12px; }
+}
+@media (max-width: 1120px) {
+  :root { --dshm-rail: 186px; --dshm-gap: 24px; }
+  .stage { padding: 22px 22px 48px; }
+}
+@media (max-width: 900px) {
+  .topbar { top: 8px; width: calc(100% - 16px); margin-top: 8px; padding: 10px 12px; }
+  .crumb, .sync-pill { display: none; }
+  .stage { padding: 18px 16px 40px; }
+  .back-label { display: none; }
+  .foot { padding: 18px 16px 22px; }
+  .foot-right { display: none; }
+  html[data-standalone] .dshm-nav {
+    position: static;
+    width: auto;
+    padding: 10px;
+    border: 1px solid var(--dshm-line);
+    border-radius: 16px;
+    box-shadow: none;
+  }
+  html[data-standalone] .dshm-nav::before { display: none; }
+  html[data-standalone] .dshm-nav-list { flex-direction: row; flex-wrap: wrap; }
+  html[data-standalone] .dshm-nav-ind { display: none; }
+  html[data-standalone] .dshm-nav-item { flex: none; height: 32px; padding: 0 10px; font-size: 12px; }
+  html[data-standalone] .dshm-page { max-width: none; }
+}
+@media (max-width: 620px) {
+  html[data-standalone] .dshm-nav {
+    position: static;
+    padding: 8px;
+    border-radius: 16px;
+  }
+  html[data-standalone] .dshm-h1 { font-size: 24px; }
+  html[data-standalone] .dshm-card { padding: 16px !important; border-radius: 16px !important; }
+  .boot-card { padding: 24px 26px 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .ambient i,
+  .brand-icon,
+  .sync-pill i,
+  .boot-icon::after,
+  .boot-bar i,
+  .boot-card {
+    animation: none !important;
+  }
+  .foot,
+  .topbar {
+    transition: none !important;
+  }
+}
+
+html[data-standalone] .dshm-relation-field textarea{border-radius:12px;border-color:var(--dshm-line-strong);background:var(--dshm-field);padding:9px 11px;font-size:13px;color:inherit}
