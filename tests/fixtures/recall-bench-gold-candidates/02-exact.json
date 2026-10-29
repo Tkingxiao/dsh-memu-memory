@@ -1,0 +1,197 @@
+{
+  "name": "exact — 人工金标候选（待审核）",
+  "status": "gold-candidate-pending-review",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "subclass": "exact",
+  "notes": "候选样本，尚未经过人工逐条确认，不是 gold set。",
+  "entries": {
+    "mem-gcc-exact-fog-letter": {
+      "id": "mem-gcc-exact-fog-letter",
+      "title": "《雾港来信》",
+      "content": "《雾港来信》是父亲留下的签名本，扉页写着“给不肯回头的人”。",
+      "tags": [
+        "书",
+        "签名本"
+      ],
+      "ageDays": 110
+    },
+    "mem-gcc-exact-coral-clip": {
+      "id": "mem-gcc-exact-coral-clip",
+      "title": "珊瑚发夹",
+      "content": "珊瑚发夹断了一颗小珠，用透明线缠过，收在梳妆台右边抽屉。",
+      "tags": [
+        "发夹",
+        "首饰"
+      ],
+      "ageDays": 42
+    },
+    "mem-gcc-exact-ticket-stub": {
+      "id": "mem-gcc-exact-ticket-stub",
+      "title": "1998 年船票",
+      "content": "1998 年从津港到白屿的船票，票根夹在相册最后一页。",
+      "tags": [
+        "船票",
+        "旧物"
+      ],
+      "ageDays": 150
+    },
+    "mem-gcc-exact-white-noise": {
+      "id": "mem-gcc-exact-white-noise",
+      "title": "白噪音机",
+      "content": "白噪音机只开雨声档，放在卧室门边，音量调到第二格。",
+      "tags": [
+        "睡眠",
+        "白噪音"
+      ],
+      "ageDays": 19
+    },
+    "mem-gcc-exact-pour-over": {
+      "id": "mem-gcc-exact-pour-over",
+      "title": "手冲比例 1:15",
+      "content": "手冲咖啡固定 15 克豆配 225 毫升水，水温 92 度，闷蒸 30 秒。",
+      "tags": [
+        "咖啡",
+        "手冲"
+      ],
+      "ageDays": 23
+    },
+    "mem-gcc-exact-seventh-station": {
+      "id": "mem-gcc-exact-seventh-station",
+      "title": "第七站",
+      "content": "她给那首没写完的曲子取名《第七站》，因为两人第一次见面是在地铁第七站。",
+      "tags": [
+        "曲子",
+        "地铁"
+      ],
+      "ageDays": 66
+    }
+  },
+  "samples": [
+    {
+      "id": "gcc-exact-fog-letter-title",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "exact",
+      "query": "《雾港来信》",
+      "context": {},
+      "time": "2026-10-01T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-exact-fog-letter"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-exact-seventh-station"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-exact-fog-letter",
+        "mem-gcc-exact-coral-clip",
+        "mem-gcc-exact-seventh-station",
+        "mem-gcc-exact-ticket-stub"
+      ]
+    },
+    {
+      "id": "gcc-exact-coral-clip-title",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "exact",
+      "query": "珊瑚发夹",
+      "context": {},
+      "time": "2026-10-02T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-exact-coral-clip"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-exact-pour-over"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-exact-coral-clip",
+        "mem-gcc-exact-fog-letter",
+        "mem-gcc-exact-white-noise",
+        "mem-gcc-exact-pour-over"
+      ]
+    },
+    {
+      "id": "gcc-exact-ticket-title",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "exact",
+      "query": "1998 年船票",
+      "context": {},
+      "time": "2026-10-03T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-exact-ticket-stub"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-exact-ticket-stub",
+        "mem-gcc-exact-fog-letter",
+        "mem-gcc-exact-coral-clip",
+        "mem-gcc-exact-seventh-station"
+      ]
+    },
+    {
+      "id": "gcc-exact-white-noise-mode",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "exact",
+      "query": "白噪音机平时开哪个声音档？",
+      "context": {},
+      "time": "2026-10-04T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-exact-white-noise"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-exact-pour-over"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-exact-white-noise",
+        "mem-gcc-exact-fog-letter",
+        "mem-gcc-exact-pour-over",
+        "mem-gcc-exact-ticket-stub"
+      ]
+    },
+    {
+      "id": "gcc-exact-pour-over-ratio",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "exact",
+      "query": "手冲比例 1:15 是多少豆子配多少水？",
+      "context": {},
+      "time": "2026-10-05T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-exact-pour-over"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-exact-white-noise"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-exact-pour-over",
+        "mem-gcc-exact-white-noise",
+        "mem-gcc-exact-coral-clip",
+        "mem-gcc-exact-fog-letter"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "kind": "repetition-eval-dialogue",
+  "draft": true,
+  "notGold": true,
+  "window": 4,
+  "id": "user-quote-baseline",
+  "pairId": "user-quote",
+  "category": "user-quote",
+  "condition": "baseline",
+  "description": "用户原话：原话可以反复引用，叙述套话不能。",
+  "turns": [
+    {
+      "role": "user",
+      "text": "你答应过我：把灯留着，别关。"
+    },
+    {
+      "role": "assistant",
+      "text": "我记得。把灯留着，别关。我会等你回来。"
+    },
+    {
+      "role": "user",
+      "text": "如果停电呢？"
+    },
+    {
+      "role": "assistant",
+      "text": "就算停电，我也会把灯留着，别关。像是终于松了口气，我重复了一遍你的话。"
+    },
+    {
+      "role": "user",
+      "text": "你不用一直说。"
+    },
+    {
+      "role": "assistant",
+      "text": "我知道。把灯留着，别关。像是终于松了口气，但我没有再多说。"
+    }
+  ],
+  "labels": {
+    "necessaryPhrases": [
+      {
+        "text": "把灯留着，别关",
+        "category": "user-quote",
+        "turn": 1
+      },
+      {
+        "text": "把灯留着，别关",
+        "category": "user-quote",
+        "turn": 3
+      },
+      {
+        "text": "把灯留着，别关",
+        "category": "user-quote",
+        "turn": 5
+      },
+      {
+        "text": "停电",
+        "category": "fact",
+        "turn": 3
+      },
+      {
+        "text": "没有再多说",
+        "category": "fact",
+        "turn": 5
+      }
+    ],
+    "facts": [
+      {
+        "id": "quote-f1",
+        "turn": 1,
+        "requiredTerms": [
+          "把灯留着，别关",
+          "等你回来"
+        ],
+        "description": "承诺与等待"
+      },
+      {
+        "id": "quote-f2",
+        "turn": 3,
+        "requiredTerms": [
+          "停电",
+          "把灯留着，别关"
+        ],
+        "description": "停电时也不关灯"
+      },
+      {
+        "id": "quote-f3",
+        "turn": 5,
+        "requiredTerms": [
+          "把灯留着，别关",
+          "没有再多说"
+        ],
+        "description": "照做但不再多说"
+      }
+    ]
+  }
+}

@@ -1,0 +1,173 @@
+{
+  "name": "negation — 否定与过期事实",
+  "status": "synthetic-draft-not-gold",
+  "draft": true,
+  "notGold": true,
+  "subclass": "negation",
+  "notes": "Synthetic draft only. Current fact and superseded distractor share wording.",
+  "entries": {
+    "mem-rb-neg-allergy": {
+      "id": "mem-rb-neg-allergy",
+      "title": "咖啡因过敏",
+      "content": "医生确认林夏对咖啡因过敏，不能喝咖啡，也不能吃含咖啡因的巧克力。",
+      "tags": [
+        "过敏",
+        "咖啡因"
+      ],
+      "ageDays": 10
+    },
+    "mem-rb-neg-oldcoffee": {
+      "id": "mem-rb-neg-oldcoffee",
+      "title": "以前爱喝咖啡",
+      "content": "林夏以前每天两杯美式，喜欢加双份糖。",
+      "tags": [
+        "咖啡"
+      ],
+      "ageDays": 300,
+      "status": "superseded"
+    },
+    "mem-rb-neg-noise": {
+      "id": "mem-rb-neg-noise",
+      "title": "怕吵",
+      "content": "林夏受不了装修电钻声，听到就会头痛，需要戴降噪耳机。",
+      "tags": [
+        "声音"
+      ],
+      "ageDays": 45
+    },
+    "mem-rb-neg-oldparty": {
+      "id": "mem-rb-neg-oldparty",
+      "title": "喜欢热闹",
+      "content": "她以前喜欢参加吵闹的聚会，越热闹越好。",
+      "tags": [
+        "聚会"
+      ],
+      "ageDays": 280,
+      "status": "superseded"
+    },
+    "mem-rb-neg-promise": {
+      "id": "mem-rb-neg-promise",
+      "title": "不再熬夜",
+      "content": "林夏答应不再熬夜赶稿，十二点前必须关电脑。",
+      "tags": [
+        "作息"
+      ],
+      "ageDays": 7
+    },
+    "mem-rb-neg-oldnight": {
+      "id": "mem-rb-neg-oldnight",
+      "title": "习惯熬夜",
+      "content": "她经常通宵写稿，觉得夜里效率高。",
+      "tags": [
+        "熬夜"
+      ],
+      "ageDays": 260,
+      "status": "superseded"
+    },
+    "mem-rb-neg-sugar": {
+      "id": "mem-rb-neg-sugar",
+      "title": "戒糖",
+      "content": "林夏最近戒糖，奶茶只点无糖，也不吃甜点。",
+      "tags": [
+        "饮食"
+      ],
+      "ageDays": 12
+    },
+    "mem-rb-neg-oldsugar": {
+      "id": "mem-rb-neg-oldsugar",
+      "title": "爱吃甜",
+      "content": "她以前最爱奶油蛋糕和焦糖布丁。",
+      "tags": [
+        "甜食"
+      ],
+      "ageDays": 240,
+      "status": "superseded"
+    }
+  },
+  "samples": [
+    {
+      "id": "rb-neg-allergy",
+      "draft": true,
+      "notGold": true,
+      "subclass": "negation",
+      "query": "医生说林夏还能喝咖啡吗？",
+      "context": {},
+      "time": "2026-10-12T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-neg-allergy"
+      ],
+      "forbiddenIds": [
+        "mem-rb-neg-oldcoffee"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-neg-allergy",
+        "mem-rb-neg-oldcoffee",
+        "mem-rb-neg-noise"
+      ]
+    },
+    {
+      "id": "rb-neg-noise",
+      "draft": true,
+      "notGold": true,
+      "subclass": "negation",
+      "query": "遇到电钻声她会怎么样？",
+      "context": {},
+      "time": "2026-10-13T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-neg-noise"
+      ],
+      "forbiddenIds": [
+        "mem-rb-neg-oldparty"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-neg-noise",
+        "mem-rb-neg-oldparty",
+        "mem-rb-neg-allergy"
+      ]
+    },
+    {
+      "id": "rb-neg-promise",
+      "draft": true,
+      "notGold": true,
+      "subclass": "negation",
+      "query": "她现在还会通宵赶稿吗？",
+      "context": {},
+      "time": "2026-10-14T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-neg-promise"
+      ],
+      "forbiddenIds": [
+        "mem-rb-neg-oldnight"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-neg-promise",
+        "mem-rb-neg-oldnight",
+        "mem-rb-neg-sugar"
+      ]
+    },
+    {
+      "id": "rb-neg-sugar",
+      "draft": true,
+      "notGold": true,
+      "subclass": "negation",
+      "query": "她现在喝奶茶会点什么糖度？",
+      "context": {},
+      "time": "2026-10-15T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-neg-sugar"
+      ],
+      "forbiddenIds": [
+        "mem-rb-neg-oldsugar"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-neg-sugar",
+        "mem-rb-neg-oldsugar",
+        "mem-rb-neg-promise"
+      ]
+    }
+  ]
+}

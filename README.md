@@ -59,7 +59,7 @@ All screenshots are the real WebUI on isolated example data, not anyone's memori
 - **Three layers, one timeline.** `short_term` drafts expire after 72 hours by default; `long_term` is the body of ordinary memory; `must_remember` needs a reason and a source, decays over 365 days with a 0.35 strength floor, and can be *marginalized* but never auto-deleted to make room.
 - **Recall is a moment, not a dump.** The first turn after a session starts (or after compaction) gets an anchor block with budgets for pinned, core and global memory. After that, each user turn gets at most one recall. Deduplication and a token budget are enforced in code, not left to the prompt.
 - **A date is either an anniversary or one day.** `MM-DD` recurs every year (a birthday); `YYYY-MM-DD` fires the day before and the day itself, then is spent. A memory that says "tomorrow" is stored as the dated form, so an appointment does not come back every year.
-- **Memory fades unevenly.** Recency, access count, arousal, mood congruence, peak and end effects, primacy, habituation and flashbulb accuracy all feed one strength score. A vivid memory can be more confident than it is accurate, and the UI says so.
+- **Memory fades unevenly.** Recency, access count, peak and end effects, primacy, habituation and flashbulb accuracy feed one strength score. Arousal and mood congruence are conditional rather than always-on: both are off by default and only engage when the mood is far enough from flat (|valence| >= 0.15, or |arousal - 0.35| >= 0.1), so in a calm conversation both multipliers are exactly 1. A vivid memory can be more confident than it is accurate, and the UI says so.
 - **Provenance is a fact, not a style.** Every entry carries `source` (`user_said` / `inferred` / `imagined` / `told`), `confidence`, `accuracy`, and disclosure rules. A vague recollection cannot impersonate a quote.
 - **Contradictions wait.** A write that rewrites or contradicts an existing entry lands as `pending_review`: it is not injected, not recalled, and appears in a review queue until someone accepts or rejects it.
 - **Secrets stay excluded.** `secret` visibility, group-chat channels, characters, worlds, branches and `knownBy` all constrain reads and edits. Automatic recall never injects a `secret` memory, and a `secret` is still readable by an explicit recall from the same folder — it hides a memory from the prompt, it is not a lock. What actually separates two conversations in one folder is the `context` scope (`channelId` / `characterId` / `worldId` / `branchId`); a blank scope on both sides means one shared scope, which is the point of a folder. The old `visibility: 'session'` level is gone — reading turns it into `shared` with its `context` untouched, and `node scripts/migrate-visibility.mjs` rewrites libraries that still store it (`--apply`, backs up first).
@@ -86,14 +86,18 @@ The locally bundled D3 force layout preserves positions and the camera across ba
 | Libraries | Create, rename, archive, restore, explicitly delete libraries |
 | Memory browser | Full-text editing, attachments, review queue, graph and bounded canvas, JSON/ZIP import/export |
 | Global memory | Domain-scoped global memories, evidence, review queue and the separate curator |
-| Prompts | General / RP / Coding / Mixed variants, overrides and per-key reset; new conversations start on RP |
+| Prompts | General / RP / Coding / Mixed variants, overrides and per-key reset; new conversations start on RP and can pick a domain in the first-run prompt |
 | Stats | Daily activity, hit distribution, health, never-recalled shortlist, 7-day write/read ratio |
 
 Settings save as you change them (250 ms debounce), with about 2.5 s cross-window sync and a heartbeat for writes made by tools or another window. The WebUI opens in a new tab; when a popup is blocked it falls back to an in-app overlay without unloading the host SPA. Light, dark, reduced-motion and narrow layouts are supported.
 
+### Injection token budgets
+
+`anchorTokens` and `turnTokens` bound anchor and recall content independently (default 800 each). `injectionTotalTokens` caps the whole plugin message (default 2000); it does not replace the recall budget.
+
 ### Domain Prompts
 
-Resident guidance, writing policies and consolidation prompts follow the current session domain. Local tools and remote JSON consolidation share the domain body, with separate supported output contracts. New conversations default to RP; Coding, Mixed and custom pages stay enabled and can be selected per conversation.
+Resident guidance, writing policies and consolidation prompts follow the current session domain. Local tools and remote JSON consolidation share the domain body, with separate supported output contracts. New conversations default to RP; Coding, Mixed and custom pages stay enabled and can be selected per conversation. The new-conversation memory prompt also offers the four memory domains, so a coding session can be started in an RP workspace without remembering to change the sidebar afterwards.
 
 | Domain | Memory focus |
 |---|---|
@@ -176,7 +180,11 @@ What it does:
 - if no usable Python/pip exists, uses a **pinned uv** runtime inside the plugin directory and leaves the system `PATH` untouched;
 - downloads roughly 150 MB, runs a real smoke test, and keeps the previous version for rollback.
 
-To use the `api` backend, point it at an OpenAI-compatible **embedding** endpoint (for example a local Ollama at `http://localhost:11434`). DSH itself has no embedding API, so "local embeddings" means a local service you run; a key is not required for a local server. Cloud MemU is not part of the supported scope.
+The default `memoryBackend="agent"` uses lexical recall and does not call an embedding service. To enable the vector library, choose `memoryBackend="api"`, then select `vectorSource="local"` for managed local embeddings or `vectorSource="api"` for a configured compatible embedding endpoint (which may itself run on localhost). Both sources feed MemU storage and retrieval; installing the MemU engine alone does not enable vectors.
+
+`memoryMode` (`local` / `cloud`) is a MemU storage-compatibility setting, not the embedding switch or source selector; its cloud option is not a claim that managed local inference is offline cloud storage. Summary generation is configured independently of the vector route: ordinary private consolidation uses an Agent fork; an explicit remote-summary action uses its chat endpoint and commits through the same memory write path. Recall uses neither LLM reranking nor an LLM fallback. Exact memory ids still use the direct path; the plugin does not maintain a parallel vector database.
+
+Managed model download, progress reporting and profile-switch/migration flows are implemented, but real model/runtime downloads and end-to-end native inference/switching have not been verified in this work. A candidate or `pending` artifact is not available for use; it must not be advertised as downloadable or ready until its artifact and validation gates pass.
 
 ## First run
 
@@ -288,7 +296,7 @@ the idle window starts from real message activity or the agent's return to idle.
 - **No cloud sync, no accounts, no cross-device sync.** This is a local plugin with no server-side identity.
 - **Images without vision:** without an optional caption/vision endpoint, an image memory is a pointer plus what a person wrote about it. The plugin does not claim to see pixels.
 - **Poisoned v4 sessions:** historical `format v4 message requires a producer-owned source kind` rows can be diagnosed but not rewritten; the plugin never edits private session files.
-- **Agent presets:** a conversation whose preset (`i-am-yuike`, `yuike-standard`, …) carries its own `cordis.yml` composes its model-facing plugins from that list alone, and its scope never delivers `agent/pre-step` to this plugin. `lib/preset-scope.js` attaches the memory anchor on such an agent's own context at runtime, so **recall works** — but the `memu_*` **tools do not exist there**, because a preset that does not list this plugin has no tool rows. Write memories from a standard conversation. The plugin never edits anyone's preset files.
+- **Agent presets:** a conversation whose preset (`i-am-yuike`, `yuike-standard`, …) carries its own `cordis.yml` composes its model-facing plugins from that list alone, and its scope never delivers `agent/pre-step` to this plugin. At runtime `lib/preset-scope.js` attaches a second injection listener to that agent's own context, so **anchor and recall delivery works**; because a preset persona usually sets `complete: true`, system-prompt sections are dropped and the memory rules are delivered once as a `<memory-guide>` plugin message on the first step instead. The **final tool list** is a third, separate question: it follows the preset's own plugin list and the host scope, and it cannot be inferred from whether this plugin is listed — observations in this repo record both "no `memu_*` tools" and `memu_private_*` present in some presets' tool chains. **Per-preset tool availability still needs a real-host check (W3)**; until then do not read this as "presets have no tools", nor as "listing the plugin is enough". The plugin never edits anyone's preset files.
 - **"Tomorrow" is resolved at write time.** A relative day (今天 / 明天 / 后天 / today / tomorrow) together with a month-day settles into one dated memory; a memory that only says "sometime next month" keeps no date rather than inventing one. A date that was already written as `MM-DD` is not rewritten — the fix applies to new writes.
 - **Not in scope:** cloud MemU integration, source backfill for old entries, automatic repair of already-written v4 corruption.
 
@@ -309,6 +317,14 @@ The preview serves the real WebUI against isolated example data at `http://127.0
 With the preview running, use `npm run test:graph-browser -- http://127.0.0.1:7789/dsh-memu-memory/ui#/settings/memories` in another terminal to check 200 nodes, desktop/narrow layouts, dragging, refresh stability, themes and load retries. Run `npx playwright install chromium` once, or set `GRAPH_BROWSER_CHANNEL=msedge` on Windows to use installed Edge. Stress data is intercepted only in the test browser and never written to memory. No CDN is needed at runtime; bundled D3 licenses are in `lib/webui/graph-LICENSE.txt`.
 
 The suite includes one real-engine integration case that is skipped unless `DSH_MEMU_TEST_ENGINE_PYTHON` is set; the 50 automated acceptance checks pass. The optional engine was installed and smoke-tested in an isolated directory with the pinned wheel; embedding tests use a local deterministic server, which proves the protocol, not semantic quality.
+
+## Changelog
+
+**1.1.3 (2026-10-30)**: managed local vectors are usable end to end (runtime/model download, switch-and-rebuild, progress with per-item failures); activity log with a Logs page; consolidation results move under the sidebar button; archive/restore and list refresh drop from seconds to milliseconds; a date written in the text is picked up when the field is empty; default topK 5/5; fixes the blank settings/WebUI panel (React #310).
+
+**1.1.2 (2026-10-29)**: anchor and recall delivery in agent-preset conversations; startup catch-up consolidation; panel TDZ crash fix.
+
+Full notes: [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Documentation
 

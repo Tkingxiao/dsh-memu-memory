@@ -1,7 +1,7 @@
 {
   "name": "dsh-memu-memory",
   "icon": "./assets/icon.png",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "面向长篇 RP 与陪伴对话的 DeepSeek Harness 记忆插件：三层记忆、逐轮召回、来源标注、关系图、图片附件与独立 WebUI。",
   "keywords": [
     "deepseek-harness",
@@ -59,7 +59,8 @@
     "test:graph-browser": "node scripts/check-graph-browser.mjs",
     "check": "node scripts/check-all.mjs",
     "setup": "node scripts/setup.mjs",
-    "test": "node --import ./tests/loader-register.mjs --test tests/*.test.mjs"
+    "test": "node --import ./tests/loader-register.mjs --test tests/*.test.mjs",
+    "test:chain": "node scripts/chain-matrix.mjs"
   },
   "engines": {
     "node": ">=20.9.0",

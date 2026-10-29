@@ -1,0 +1,184 @@
+{
+  "name": "paraphrase — 同义改写",
+  "status": "synthetic-draft-not-gold",
+  "draft": true,
+  "notGold": true,
+  "subclass": "paraphrase",
+  "notes": "Synthetic draft only. Not human-confirmed, not a gold set.",
+  "entries": {
+    "mem-rb-para-umbrella": {
+      "id": "mem-rb-para-umbrella",
+      "title": "雨伞",
+      "content": "林夏总把一把折叠伞放在玄关的蓝色鞋柜上，出门前会顺手确认。",
+      "tags": [
+        "习惯",
+        "雨伞"
+      ],
+      "ageDays": 20
+    },
+    "mem-rb-para-thunder": {
+      "id": "mem-rb-para-thunder",
+      "title": "怕打雷",
+      "content": "林夏害怕打雷，雷雨夜会躲进衣帽间，把门留一条缝。",
+      "tags": [
+        "恐惧",
+        "雷雨"
+      ],
+      "ageDays": 40
+    },
+    "mem-rb-para-coffee": {
+      "id": "mem-rb-para-coffee",
+      "title": "咖啡口味",
+      "content": "她喝咖啡只加燕麦奶，不加糖，下午三点以后不喝。",
+      "tags": [
+        "咖啡"
+      ],
+      "ageDays": 15
+    },
+    "mem-rb-para-cat": {
+      "id": "mem-rb-para-cat",
+      "title": "橘猫",
+      "content": "家里那只橘猫叫团子，怕生，只肯让林夏摸肚子。",
+      "tags": [
+        "猫"
+      ],
+      "ageDays": 30
+    },
+    "mem-rb-para-promise": {
+      "id": "mem-rb-para-promise",
+      "title": "周末约定",
+      "content": "约好周六上午去旧书市，林夏想找一本绝版的《海风集》。",
+      "tags": [
+        "约定"
+      ],
+      "ageDays": 3
+    },
+    "mem-rb-para-lamp": {
+      "id": "mem-rb-para-lamp",
+      "title": "床头灯",
+      "content": "她睡前要留一盏暖黄色的小灯，全黑会睡不着。",
+      "tags": [
+        "睡眠"
+      ],
+      "ageDays": 60
+    }
+  },
+  "samples": [
+    {
+      "id": "rb-para-umbrella",
+      "draft": true,
+      "notGold": true,
+      "subclass": "paraphrase",
+      "query": "每次出门前她习惯检查什么？",
+      "context": {},
+      "time": "2026-10-11T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-para-umbrella"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-para-umbrella",
+        "mem-rb-para-thunder",
+        "mem-rb-para-coffee",
+        "mem-rb-para-lamp"
+      ]
+    },
+    {
+      "id": "rb-para-thunder",
+      "draft": true,
+      "notGold": true,
+      "subclass": "paraphrase",
+      "query": "打雷的晚上她会躲去哪里？",
+      "context": {},
+      "time": "2026-10-12T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-para-thunder"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-para-thunder",
+        "mem-rb-para-umbrella",
+        "mem-rb-para-cat",
+        "mem-rb-para-promise"
+      ]
+    },
+    {
+      "id": "rb-para-coffee",
+      "draft": true,
+      "notGold": true,
+      "subclass": "paraphrase",
+      "query": "她下午喝咖啡会加什么？",
+      "context": {},
+      "time": "2026-10-13T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-para-coffee"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-para-coffee",
+        "mem-rb-para-lamp",
+        "mem-rb-para-umbrella"
+      ]
+    },
+    {
+      "id": "rb-para-cat",
+      "draft": true,
+      "notGold": true,
+      "subclass": "paraphrase",
+      "query": "团子肯让谁摸肚子？",
+      "context": {},
+      "time": "2026-10-14T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-para-cat"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-para-cat",
+        "mem-rb-para-thunder",
+        "mem-rb-para-promise"
+      ]
+    },
+    {
+      "id": "rb-para-promise",
+      "draft": true,
+      "notGold": true,
+      "subclass": "paraphrase",
+      "query": "周六上午约好去旧书市找哪本书？",
+      "context": {},
+      "time": "2026-10-15T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-para-promise"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-para-promise",
+        "mem-rb-para-umbrella",
+        "mem-rb-para-cat"
+      ]
+    },
+    {
+      "id": "rb-para-lamp",
+      "draft": true,
+      "notGold": true,
+      "subclass": "paraphrase",
+      "query": "睡觉时她需要留什么灯？",
+      "context": {},
+      "time": "2026-10-16T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-para-lamp"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-para-lamp",
+        "mem-rb-para-thunder",
+        "mem-rb-para-coffee"
+      ]
+    }
+  ]
+}

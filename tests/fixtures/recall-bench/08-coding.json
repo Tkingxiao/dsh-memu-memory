@@ -1,0 +1,164 @@
+{
+  "name": "coding — 跨域约束",
+  "status": "synthetic-draft-not-gold",
+  "draft": true,
+  "notGold": true,
+  "subclass": "coding",
+  "notes": "Synthetic draft only. Small coding slice to catch cross-domain regressions.",
+  "entries": {
+    "mem-rb-code-tsconfig": {
+      "id": "mem-rb-code-tsconfig",
+      "title": "tsconfig strict",
+      "content": "项目 tsconfig 开启 strict: true 和 noUncheckedIndexedAccess，CI 用 Node 22。",
+      "tags": [
+        "typescript",
+        "config"
+      ],
+      "ageDays": 14
+    },
+    "mem-rb-code-pnpm": {
+      "id": "mem-rb-code-pnpm",
+      "title": "包管理器",
+      "content": "仓库统一用 pnpm 9，锁文件是 pnpm-lock.yaml，不要用 npm install。",
+      "tags": [
+        "pnpm"
+      ],
+      "ageDays": 14
+    },
+    "mem-rb-code-test": {
+      "id": "mem-rb-code-test",
+      "title": "测试命令",
+      "content": "单测用 node --test tests/*.test.mjs，禁止只跑一个文件就宣称全绿。",
+      "tags": [
+        "test"
+      ],
+      "ageDays": 14
+    },
+    "mem-rb-code-crlf": {
+      "id": "mem-rb-code-crlf",
+      "title": "换行符",
+      "content": "源码和测试保持 CRLF，编辑器不要自动转 LF。",
+      "tags": [
+        "crlf",
+        "style"
+      ],
+      "ageDays": 14
+    },
+    "mem-rb-code-api": {
+      "id": "mem-rb-code-api",
+      "title": "接口前缀",
+      "content": "RPC 只注册在 /dsh-memu-memory 前缀，不碰共享 /api。",
+      "tags": [
+        "rpc"
+      ],
+      "ageDays": 14
+    },
+    "mem-rb-code-budget": {
+      "id": "mem-rb-code-budget",
+      "title": "token 预算",
+      "content": "budget.js 只提供估算，报告字段必须写 estimate，不能称实耗。",
+      "tags": [
+        "budget",
+        "estimate"
+      ],
+      "ageDays": 14
+    }
+  },
+  "samples": [
+    {
+      "id": "rb-code-pnpm",
+      "draft": true,
+      "notGold": true,
+      "subclass": "coding",
+      "query": "这个仓库用哪个包管理器？",
+      "context": {},
+      "time": "2026-10-18T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-code-pnpm"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-code-pnpm",
+        "mem-rb-code-tsconfig",
+        "mem-rb-code-test"
+      ]
+    },
+    {
+      "id": "rb-code-tsconfig",
+      "draft": true,
+      "notGold": true,
+      "subclass": "coding",
+      "query": "TypeScript 的 strict 配置开了哪些？",
+      "context": {},
+      "time": "2026-10-19T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-code-tsconfig"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-code-tsconfig",
+        "mem-rb-code-pnpm",
+        "mem-rb-code-api"
+      ]
+    },
+    {
+      "id": "rb-code-test",
+      "draft": true,
+      "notGold": true,
+      "subclass": "coding",
+      "query": "跑单测的命令是什么？",
+      "context": {},
+      "time": "2026-10-10T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-code-test"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-code-test",
+        "mem-rb-code-crlf",
+        "mem-rb-code-api"
+      ]
+    },
+    {
+      "id": "rb-code-crlf",
+      "draft": true,
+      "notGold": true,
+      "subclass": "coding",
+      "query": "源码换行符要求是什么？",
+      "context": {},
+      "time": "2026-10-11T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-code-crlf"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-code-crlf",
+        "mem-rb-code-test",
+        "mem-rb-code-tsconfig"
+      ]
+    },
+    {
+      "id": "rb-code-api",
+      "draft": true,
+      "notGold": true,
+      "subclass": "coding",
+      "query": "RPC 接口应该注册在哪个前缀？",
+      "context": {},
+      "time": "2026-10-12T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-code-api"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-code-api",
+        "mem-rb-code-budget",
+        "mem-rb-code-tsconfig"
+      ]
+    }
+  ]
+}

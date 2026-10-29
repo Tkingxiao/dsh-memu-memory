@@ -1,0 +1,193 @@
+{
+  "name": "paraphrase — 人工金标候选（待审核）",
+  "status": "gold-candidate-pending-review",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "subclass": "paraphrase",
+  "notes": "候选样本，尚未经过人工逐条确认，不是 gold set。",
+  "entries": {
+    "mem-gcc-para-orange-peel": {
+      "id": "mem-gcc-para-orange-peel",
+      "title": "陈皮布袋",
+      "content": "陆晚晴一坐长途车就犯晕，帆布包内袋里总放着一只晒干的橘子皮布袋，闻一闻会好受些。",
+      "tags": [
+        "晕车",
+        "橘子皮"
+      ],
+      "ageDays": 28
+    },
+    "mem-gcc-para-blue-scarf": {
+      "id": "mem-gcc-para-blue-scarf",
+      "title": "旧蓝围巾",
+      "content": "周叙白每逢降温就把那条起球的蓝围巾塞进她包里，自己冻着也不肯拿回去。",
+      "tags": [
+        "围巾",
+        "降温"
+      ],
+      "ageDays": 50
+    },
+    "mem-gcc-para-noodle": {
+      "id": "mem-gcc-para-noodle",
+      "title": "码头葱油面",
+      "content": "两人常去码头边那家没有招牌的老面馆，她只点葱油拌面，再加一颗溏心蛋。",
+      "tags": [
+        "面馆",
+        "约定"
+      ],
+      "ageDays": 16
+    },
+    "mem-gcc-para-rooftop": {
+      "id": "mem-gcc-para-rooftop",
+      "title": "天台钥匙",
+      "content": "程雾把旧楼天台的钥匙藏在消防栓后面，心烦时就上去看云，一待就是半小时。",
+      "tags": [
+        "天台",
+        "解压"
+      ],
+      "ageDays": 35
+    },
+    "mem-gcc-para-shell": {
+      "id": "mem-gcc-para-shell",
+      "title": "缺角白贝",
+      "content": "许知遥在海边捡到一枚缺角的白色贝壳，回家后放进床头的玻璃罐，说这是她的幸运物。",
+      "tags": [
+        "贝壳",
+        "幸运物"
+      ],
+      "ageDays": 90
+    },
+    "mem-gcc-para-mint-tea": {
+      "id": "mem-gcc-para-mint-tea",
+      "title": "薄荷茶",
+      "content": "顾青禾紧张时会泡一杯薄荷茶，只放两片叶子，不加蜂蜜。",
+      "tags": [
+        "薄荷茶",
+        "习惯"
+      ],
+      "ageDays": 12
+    }
+  },
+  "samples": [
+    {
+      "id": "gcc-para-vehicle-scent",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "paraphrase",
+      "query": "陆晚晴坐长途车难受时，包里那个布袋装的是什么？",
+      "context": {},
+      "time": "2026-09-26T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-para-orange-peel"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-para-orange-peel",
+        "mem-gcc-para-blue-scarf",
+        "mem-gcc-para-mint-tea",
+        "mem-gcc-para-noodle"
+      ]
+    },
+    {
+      "id": "gcc-para-scarf-gift",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "paraphrase",
+      "query": "天一冷，周叙白会把自己的哪样旧东西留给她？",
+      "context": {},
+      "time": "2026-09-27T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-para-blue-scarf"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-para-orange-peel"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-para-blue-scarf",
+        "mem-gcc-para-orange-peel",
+        "mem-gcc-para-noodle",
+        "mem-gcc-para-rooftop"
+      ]
+    },
+    {
+      "id": "gcc-para-noodle-order",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "paraphrase",
+      "query": "码头边那家没招牌的小店，她每次必点什么？",
+      "context": {},
+      "time": "2026-09-28T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-para-noodle"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-para-mint-tea"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-para-noodle",
+        "mem-gcc-para-mint-tea",
+        "mem-gcc-para-orange-peel",
+        "mem-gcc-para-shell"
+      ]
+    },
+    {
+      "id": "gcc-para-rooftop-clouds",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "paraphrase",
+      "query": "程雾心里烦的时候会去哪里独处？",
+      "context": {},
+      "time": "2026-09-29T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-para-rooftop"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-para-rooftop",
+        "mem-gcc-para-noodle",
+        "mem-gcc-para-blue-scarf",
+        "mem-gcc-para-shell"
+      ]
+    },
+    {
+      "id": "gcc-para-shell-luck",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "paraphrase",
+      "query": "许知遥为什么把一枚缺角的贝壳放在床头？",
+      "context": {},
+      "time": "2026-09-30T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-para-shell"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-para-shell",
+        "mem-gcc-para-rooftop",
+        "mem-gcc-para-mint-tea",
+        "mem-gcc-para-orange-peel"
+      ]
+    }
+  ]
+}

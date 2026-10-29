@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "kind": "repetition-eval-dialogue",
+  "draft": true,
+  "notGold": true,
+  "window": 4,
+  "id": "names-baseline",
+  "pairId": "names",
+  "category": "names",
+  "condition": "baseline",
+  "description": "中文姓名：姓名必须反复出现，叙述套话才算复读。",
+  "turns": [
+    {
+      "role": "user",
+      "text": "沈砚和周晚第一次见面是在医院走廊。"
+    },
+    {
+      "role": "assistant",
+      "text": "沈砚没有看周晚，只把病历合上。他沉默了片刻，才说周晚不该来这里。"
+    },
+    {
+      "role": "user",
+      "text": "他们以前认识吗？"
+    },
+    {
+      "role": "assistant",
+      "text": "沈砚记得，周晚以前来过这家医院。他沉默了片刻，把病历推到周晚面前。"
+    },
+    {
+      "role": "user",
+      "text": "病历上写了什么？"
+    },
+    {
+      "role": "assistant",
+      "text": "沈砚没有回答。他沉默了片刻，看向周晚，说病历上只有日期。"
+    }
+  ],
+  "labels": {
+    "necessaryPhrases": [
+      {
+        "text": "沈砚",
+        "category": "name",
+        "turn": 1
+      },
+      {
+        "text": "周晚",
+        "category": "name",
+        "turn": 1
+      },
+      {
+        "text": "病历",
+        "category": "fact",
+        "turn": 1
+      },
+      {
+        "text": "沈砚",
+        "category": "name",
+        "turn": 3
+      },
+      {
+        "text": "周晚",
+        "category": "name",
+        "turn": 3
+      },
+      {
+        "text": "病历",
+        "category": "fact",
+        "turn": 3
+      },
+      {
+        "text": "沈砚",
+        "category": "name",
+        "turn": 5
+      },
+      {
+        "text": "周晚",
+        "category": "name",
+        "turn": 5
+      },
+      {
+        "text": "病历",
+        "category": "fact",
+        "turn": 5
+      }
+    ],
+    "facts": [
+      {
+        "id": "names-f1",
+        "turn": 1,
+        "requiredTerms": [
+          "病历",
+          "合上"
+        ],
+        "description": "病历被合上"
+      },
+      {
+        "id": "names-f2",
+        "turn": 3,
+        "requiredTerms": [
+          "医院",
+          "病历"
+        ],
+        "description": "医院与病历"
+      },
+      {
+        "id": "names-f3",
+        "turn": 5,
+        "requiredTerms": [
+          "病历",
+          "日期"
+        ],
+        "description": "病历上只有日期"
+      }
+    ]
+  }
+}

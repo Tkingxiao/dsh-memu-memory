@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "kind": "repetition-eval-dialogue",
+  "draft": true,
+  "notGold": true,
+  "window": 4,
+  "id": "agreement-baseline",
+  "pairId": "agreement",
+  "category": "agreement",
+  "condition": "baseline",
+  "description": "应当重复的约定：约定本身重复是必要的，口头禅式重复才算复读。",
+  "turns": [
+    {
+      "role": "user",
+      "text": "我们说好，每周三晚上一起复盘，不改时间。"
+    },
+    {
+      "role": "assistant",
+      "text": "好，每周三晚上一起复盘，不改时间。我会把议程提前发你。"
+    },
+    {
+      "role": "user",
+      "text": "如果周三你有事呢？"
+    },
+    {
+      "role": "assistant",
+      "text": "那就周四补，但每周三晚上一起复盘，不改时间。这一点很重要，我不会再改。"
+    },
+    {
+      "role": "user",
+      "text": "上次你也这么说。"
+    },
+    {
+      "role": "assistant",
+      "text": "每周三晚上一起复盘，不改时间。这一点很重要，上次是我没做到。"
+    }
+  ],
+  "labels": {
+    "necessaryPhrases": [
+      {
+        "text": "每周三晚上一起复盘，不改时间",
+        "category": "agreement",
+        "turn": 1
+      },
+      {
+        "text": "每周三晚上一起复盘，不改时间",
+        "category": "agreement",
+        "turn": 3
+      },
+      {
+        "text": "每周三晚上一起复盘，不改时间",
+        "category": "agreement",
+        "turn": 5
+      }
+    ],
+    "facts": [
+      {
+        "id": "agreement-f1",
+        "turn": 1,
+        "requiredTerms": [
+          "议程",
+          "提前"
+        ],
+        "description": "议程提前发"
+      },
+      {
+        "id": "agreement-f2",
+        "turn": 3,
+        "requiredTerms": [
+          "周四",
+          "补"
+        ],
+        "description": "周三有事则周四补"
+      },
+      {
+        "id": "agreement-f3",
+        "turn": 5,
+        "requiredTerms": [
+          "上次",
+          "没做到"
+        ],
+        "description": "承认上次没做到"
+      }
+    ]
+  }
+}

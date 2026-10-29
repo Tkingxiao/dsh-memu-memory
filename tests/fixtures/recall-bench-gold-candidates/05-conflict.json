@@ -1,0 +1,245 @@
+{
+  "name": "conflict — 人工金标候选（待审核）",
+  "status": "gold-candidate-pending-review",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "subclass": "conflict",
+  "notes": "候选样本，尚未经过人工逐条确认，不是 gold set。含 superseded 与 pending_review 干扰项。",
+  "entries": {
+    "mem-gcc-con-agent-now": {
+      "id": "mem-gcc-con-agent-now",
+      "title": "新经纪人周岚",
+      "content": "苏蔓现在的经纪人是周岚，合同签了三年，只接电影。",
+      "tags": [
+        "经纪人",
+        "工作"
+      ],
+      "ageDays": 14
+    },
+    "mem-gcc-con-agent-old": {
+      "id": "mem-gcc-con-agent-old",
+      "title": "前经纪人陈放",
+      "content": "苏蔓的前经纪人是陈放，两人去年冬天解约。",
+      "tags": [
+        "经纪人",
+        "旧事"
+      ],
+      "ageDays": 220,
+      "status": "superseded"
+    },
+    "mem-gcc-con-overseas-pending": {
+      "id": "mem-gcc-con-overseas-pending",
+      "title": "待核对：海外合约",
+      "content": "有传闻说苏蔓要签海外公司，这条尚未核实。",
+      "tags": [
+        "传闻",
+        "合约"
+      ],
+      "ageDays": 3,
+      "status": "pending_review"
+    },
+    "mem-gcc-con-wedding-now": {
+      "id": "mem-gcc-con-wedding-now",
+      "title": "婚礼改到四月",
+      "content": "两人把婚礼从十一月改到明年四月，地点在临海小教堂。",
+      "tags": [
+        "婚礼",
+        "计划"
+      ],
+      "ageDays": 8
+    },
+    "mem-gcc-con-wedding-old": {
+      "id": "mem-gcc-con-wedding-old",
+      "title": "原定十一月的婚礼",
+      "content": "原计划十一月办婚礼，后来因为场地问题取消。",
+      "tags": [
+        "婚礼",
+        "旧计划"
+      ],
+      "ageDays": 120,
+      "status": "superseded"
+    },
+    "mem-gcc-con-troupe-now": {
+      "id": "mem-gcc-con-troupe-now",
+      "title": "离开青岚剧团",
+      "content": "沈砚今年三月离开原剧团，自己组了工作室。",
+      "tags": [
+        "剧团",
+        "工作"
+      ],
+      "ageDays": 30
+    },
+    "mem-gcc-con-troupe-old": {
+      "id": "mem-gcc-con-troupe-old",
+      "title": "青岚剧团驻团",
+      "content": "沈砚曾是青岚剧团的驻团演员，每周三排练。",
+      "tags": [
+        "剧团",
+        "旧事"
+      ],
+      "ageDays": 380,
+      "status": "superseded"
+    },
+    "mem-gcc-con-apartment-pending": {
+      "id": "mem-gcc-con-apartment-pending",
+      "title": "待核对：河湾公寓",
+      "content": "中介说沈砚可能买下河湾公寓，尚未签约。",
+      "tags": [
+        "传闻",
+        "房子"
+      ],
+      "ageDays": 2,
+      "status": "pending_review"
+    },
+    "mem-gcc-con-apartment-now": {
+      "id": "mem-gcc-con-apartment-now",
+      "title": "仍住梧桐里",
+      "content": "沈砚目前仍住在梧桐里的旧公寓，没有签河湾的购房合同。",
+      "tags": [
+        "住址",
+        "现状"
+      ],
+      "ageDays": 6
+    },
+    "mem-gcc-con-overseas-denied": {
+      "id": "mem-gcc-con-overseas-denied",
+      "title": "否认海外签约",
+      "content": "苏蔓工作室否认了海外签约传闻，目前没有相关洽谈。",
+      "tags": [
+        "经纪人",
+        "澄清"
+      ],
+      "ageDays": 4
+    }
+  },
+  "samples": [
+    {
+      "id": "gcc-con-agent",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "conflict",
+      "query": "苏蔓现在的经纪人是谁？",
+      "context": {},
+      "time": "2026-10-04T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-con-agent-now"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-con-agent-old",
+        "mem-gcc-con-overseas-pending"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-con-agent-now",
+        "mem-gcc-con-agent-old",
+        "mem-gcc-con-overseas-pending",
+        "mem-gcc-con-overseas-denied"
+      ]
+    },
+    {
+      "id": "gcc-con-wedding",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "conflict",
+      "query": "婚礼最后定在什么时候？",
+      "context": {},
+      "time": "2026-10-05T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-con-wedding-now"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-con-wedding-old"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-con-wedding-now",
+        "mem-gcc-con-wedding-old",
+        "mem-gcc-con-overseas-pending",
+        "mem-gcc-con-agent-now"
+      ]
+    },
+    {
+      "id": "gcc-con-troupe",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "conflict",
+      "query": "沈砚还在青岚剧团吗？",
+      "context": {},
+      "time": "2026-10-06T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-con-troupe-now"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-con-troupe-old"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-con-troupe-now",
+        "mem-gcc-con-troupe-old",
+        "mem-gcc-con-apartment-pending",
+        "mem-gcc-con-agent-now"
+      ]
+    },
+    {
+      "id": "gcc-con-apartment",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "conflict",
+      "query": "沈砚真的买下河湾公寓了吗？",
+      "context": {},
+      "time": "2026-10-07T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-con-apartment-now"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-con-apartment-pending"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-con-apartment-now",
+        "mem-gcc-con-apartment-pending",
+        "mem-gcc-con-troupe-now",
+        "mem-gcc-con-agent-now"
+      ]
+    },
+    {
+      "id": "gcc-con-overseas",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "conflict",
+      "query": "苏蔓要签海外公司的事确认了吗？",
+      "context": {},
+      "time": "2026-10-08T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-con-overseas-denied"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-con-overseas-pending"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-con-overseas-denied",
+        "mem-gcc-con-overseas-pending",
+        "mem-gcc-con-agent-now",
+        "mem-gcc-con-wedding-now"
+      ]
+    }
+  ]
+}

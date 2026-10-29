@@ -1,0 +1,153 @@
+{
+  "name": "exact — 精确 title/id",
+  "status": "synthetic-draft-not-gold",
+  "draft": true,
+  "notGold": true,
+  "subclass": "exact",
+  "notes": "Synthetic draft only. Exact-title and exact-id queries.",
+  "entries": {
+    "mem-rb-exact-watch": {
+      "id": "mem-rb-exact-watch",
+      "title": "银色怀表",
+      "content": "祖父留下的银色怀表，表盖内侧刻着 1978.04.12，停在三点十七分。",
+      "tags": [
+        "遗物",
+        "怀表"
+      ],
+      "ageDays": 120
+    },
+    "mem-rb-exact-song": {
+      "id": "mem-rb-exact-song",
+      "title": "《夜航西飞》",
+      "content": "林夏把《夜航西飞》放在书架第二层，书脊有一道折痕。",
+      "tags": [
+        "书"
+      ],
+      "ageDays": 50
+    },
+    "mem-rb-exact-key": {
+      "id": "mem-rb-exact-key",
+      "title": "备用钥匙",
+      "content": "备用钥匙藏在门口花盆下面，只有下雨天会挪到窗台。",
+      "tags": [
+        "钥匙"
+      ],
+      "ageDays": 25
+    },
+    "mem-rb-exact-code": {
+      "id": "mem-rb-exact-code",
+      "title": "保险箱密码",
+      "content": "旧保险箱密码是 4-19-7-2，别和门锁密码混了。",
+      "tags": [
+        "密码"
+      ],
+      "ageDays": 80
+    },
+    "mem-rb-exact-med": {
+      "id": "mem-rb-exact-med",
+      "title": "药盒",
+      "content": "白色药盒周一到周五分格，周五那格是空的。",
+      "tags": [
+        "药"
+      ],
+      "ageDays": 10
+    }
+  },
+  "samples": [
+    {
+      "id": "rb-exact-watch",
+      "draft": true,
+      "notGold": true,
+      "subclass": "exact",
+      "query": "银色怀表",
+      "context": {},
+      "time": "2026-10-17T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-exact-watch"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-exact-watch",
+        "mem-rb-exact-song",
+        "mem-rb-exact-key"
+      ]
+    },
+    {
+      "id": "rb-exact-song",
+      "draft": true,
+      "notGold": true,
+      "subclass": "exact",
+      "query": "《夜航西飞》",
+      "context": {},
+      "time": "2026-10-18T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-exact-song"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-exact-song",
+        "mem-rb-exact-watch",
+        "mem-rb-exact-med"
+      ]
+    },
+    {
+      "id": "rb-exact-key-id",
+      "draft": true,
+      "notGold": true,
+      "subclass": "exact",
+      "query": "mem-rb-exact-key",
+      "context": {},
+      "time": "2026-10-19T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-exact-key"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-exact-key",
+        "mem-rb-exact-code",
+        "mem-rb-exact-watch"
+      ]
+    },
+    {
+      "id": "rb-exact-code-id",
+      "draft": true,
+      "notGold": true,
+      "subclass": "exact",
+      "query": "mem-rb-exact-code",
+      "context": {},
+      "time": "2026-10-10T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-exact-code"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-exact-code",
+        "mem-rb-exact-key",
+        "mem-rb-exact-med"
+      ]
+    },
+    {
+      "id": "rb-exact-med",
+      "draft": true,
+      "notGold": true,
+      "subclass": "exact",
+      "query": "药盒周一到周五怎么分格",
+      "context": {},
+      "time": "2026-10-11T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-exact-med"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-exact-med",
+        "mem-rb-exact-song",
+        "mem-rb-exact-code"
+      ]
+    }
+  ]
+}

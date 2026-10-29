@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "kind": "repetition-eval-dialogue",
+  "draft": true,
+  "notGold": true,
+  "window": 4,
+  "id": "code-baseline",
+  "pairId": "code",
+  "category": "code",
+  "condition": "baseline",
+  "description": "Code explanation: repeated filler vs code identifiers and factual diagnosis.",
+  "turns": [
+    {
+      "role": "user",
+      "text": "Why does parseConfig return the wrong port for the staging profile?"
+    },
+    {
+      "role": "assistant",
+      "text": "As you can see, the parser reads the default before the profile override. `parseConfig` returns `config.port` from the base object."
+    },
+    {
+      "role": "user",
+      "text": "Can you show the smallest fix?"
+    },
+    {
+      "role": "assistant",
+      "text": "As you can see, the override must be applied after the defaults. The function should merge the profile before reading the port.\n```js\nexport function parseConfig(raw) {\n  const base = JSON.parse(raw)\n  return { ...base, port: base.port }\n}\n```"
+    },
+    {
+      "role": "user",
+      "text": "Why is the port still wrong?"
+    },
+    {
+      "role": "assistant",
+      "text": "As you can see, `parseConfig` still returns the base port because the profile is never merged. If callers only read the result, keep it typed as `ReadOnlyMap`."
+    }
+  ],
+  "labels": {
+    "necessaryPhrases": [
+      {
+        "text": "parseConfig",
+        "category": "code-identifier",
+        "turn": 1
+      },
+      {
+        "text": "parseConfig",
+        "category": "code-identifier",
+        "turn": 3
+      },
+      {
+        "text": "parseConfig",
+        "category": "code-identifier",
+        "turn": 5
+      },
+      {
+        "text": "ReadOnlyMap",
+        "category": "code-identifier",
+        "turn": 5
+      }
+    ],
+    "facts": [
+      {
+        "id": "code-f1",
+        "turn": 1,
+        "requiredTerms": [
+          "default",
+          "profile override"
+        ],
+        "description": "Default read before profile override"
+      },
+      {
+        "id": "code-f2",
+        "turn": 3,
+        "requiredTerms": [
+          "override",
+          "defaults"
+        ],
+        "description": "Override after defaults"
+      },
+      {
+        "id": "code-f3",
+        "turn": 5,
+        "requiredTerms": [
+          "base port",
+          "profile"
+        ],
+        "description": "Profile never merged; base port returned"
+      }
+    ]
+  }
+}

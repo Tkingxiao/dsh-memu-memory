@@ -1,0 +1,244 @@
+{
+  "name": "negation — 人工金标候选（待审核）",
+  "status": "gold-candidate-pending-review",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "subclass": "negation",
+  "notes": "候选样本，尚未经过人工逐条确认，不是 gold set。含 superseded 旧事实作为 forbidden 干扰项。",
+  "entries": {
+    "mem-gcc-neg-spicy-now": {
+      "id": "mem-gcc-neg-spicy-now",
+      "title": "清淡饮食",
+      "content": "胃病出院后，宋栀改吃清蒸和炖煮，连胡椒粉都很少碰。",
+      "tags": [
+        "饮食",
+        "胃病"
+      ],
+      "ageDays": 9
+    },
+    "mem-gcc-neg-spicy-old": {
+      "id": "mem-gcc-neg-spicy-old",
+      "title": "无辣不欢",
+      "content": "宋栀以前每顿都要加小米辣，火锅只点特辣。",
+      "tags": [
+        "饮食",
+        "辣"
+      ],
+      "ageDays": 260,
+      "status": "superseded"
+    },
+    "mem-gcc-neg-swim-now": {
+      "id": "mem-gcc-neg-swim-now",
+      "title": "改去游泳",
+      "content": "膝盖受伤后，顾言把每周攀岩改成了周三晚上的蛙泳。",
+      "tags": [
+        "运动",
+        "游泳"
+      ],
+      "ageDays": 21
+    },
+    "mem-gcc-neg-climb-old": {
+      "id": "mem-gcc-neg-climb-old",
+      "title": "每周攀岩",
+      "content": "顾言以前每周去岩馆三次，能爬 5.11a。",
+      "tags": [
+        "运动",
+        "攀岩"
+      ],
+      "ageDays": 330,
+      "status": "superseded"
+    },
+    "mem-gcc-neg-cat-parents": {
+      "id": "mem-gcc-neg-cat-parents",
+      "title": "煤球搬去父母家",
+      "content": "因为新住处不能养宠物，那只叫煤球的橘猫现在跟着程父程母住。",
+      "tags": [
+        "猫",
+        "搬家"
+      ],
+      "ageDays": 40
+    },
+    "mem-gcc-neg-cat-old": {
+      "id": "mem-gcc-neg-cat-old",
+      "title": "煤球同住",
+      "content": "煤球和程雾住在城南公寓，晚上睡在枕边。",
+      "tags": [
+        "猫",
+        "旧居"
+      ],
+      "ageDays": 400,
+      "status": "superseded"
+    },
+    "mem-gcc-neg-film-old": {
+      "id": "mem-gcc-neg-film-old",
+      "title": "还在拍胶片",
+      "content": "她以前出门总背一台胶片相机，一卷要拍很久。",
+      "tags": [
+        "摄影",
+        "胶片"
+      ],
+      "ageDays": 310,
+      "status": "superseded"
+    },
+    "mem-gcc-neg-digital-now": {
+      "id": "mem-gcc-neg-digital-now",
+      "title": "改用数码相机",
+      "content": "去年起她改用一台轻便的数码相机，胶片机收进了书柜。",
+      "tags": [
+        "摄影",
+        "数码"
+      ],
+      "ageDays": 18
+    },
+    "mem-gcc-neg-teach-old": {
+      "id": "mem-gcc-neg-teach-old",
+      "title": "在城南教琴",
+      "content": "她曾在城南琴行教了四年钢琴，周末排满课。",
+      "tags": [
+        "钢琴",
+        "工作"
+      ],
+      "ageDays": 380,
+      "status": "superseded"
+    },
+    "mem-gcc-neg-studio-now": {
+      "id": "mem-gcc-neg-studio-now",
+      "title": "开了自己的琴行",
+      "content": "今年春天她离开原琴行，在河边开了自己的钢琴工作室。",
+      "tags": [
+        "钢琴",
+        "工作"
+      ],
+      "ageDays": 15
+    }
+  },
+  "samples": [
+    {
+      "id": "gcc-neg-spicy-current",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "negation",
+      "query": "宋栀出院以后还能吃辣吗？",
+      "context": {},
+      "time": "2026-10-02T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-neg-spicy-now"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-neg-spicy-old"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-neg-spicy-now",
+        "mem-gcc-neg-spicy-old",
+        "mem-gcc-neg-digital-now",
+        "mem-gcc-neg-studio-now"
+      ]
+    },
+    {
+      "id": "gcc-neg-climb-current",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "negation",
+      "query": "顾言现在还每周去攀岩吗？",
+      "context": {},
+      "time": "2026-10-03T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-neg-swim-now"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-neg-climb-old"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-neg-swim-now",
+        "mem-gcc-neg-climb-old",
+        "mem-gcc-neg-cat-parents",
+        "mem-gcc-neg-spicy-now"
+      ]
+    },
+    {
+      "id": "gcc-neg-cat-current",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "negation",
+      "query": "煤球现在跟着谁住？",
+      "context": {},
+      "time": "2026-10-04T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-neg-cat-parents"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-neg-cat-old"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-neg-cat-parents",
+        "mem-gcc-neg-cat-old",
+        "mem-gcc-neg-film-old",
+        "mem-gcc-neg-digital-now"
+      ]
+    },
+    {
+      "id": "gcc-neg-film-current",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "negation",
+      "query": "她现在拍照还用胶片机吗？",
+      "context": {},
+      "time": "2026-10-05T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-neg-digital-now"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-neg-film-old"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-neg-digital-now",
+        "mem-gcc-neg-film-old",
+        "mem-gcc-neg-swim-now",
+        "mem-gcc-neg-climb-old"
+      ]
+    },
+    {
+      "id": "gcc-neg-piano-current",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "negation",
+      "query": "她还在城南教钢琴吗？",
+      "context": {},
+      "time": "2026-10-06T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-neg-studio-now"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-neg-teach-old"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-neg-studio-now",
+        "mem-gcc-neg-teach-old",
+        "mem-gcc-neg-spicy-now",
+        "mem-gcc-neg-cat-parents"
+      ]
+    }
+  ]
+}

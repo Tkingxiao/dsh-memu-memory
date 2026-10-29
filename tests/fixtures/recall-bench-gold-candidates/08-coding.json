@@ -1,0 +1,218 @@
+{
+  "name": "coding — 人工金标候选（待审核）",
+  "status": "gold-candidate-pending-review",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "subclass": "coding",
+  "notes": "候选样本，尚未经过人工逐条确认，不是 gold set。少量工程约束，用于防止跨域召回退化。",
+  "entries": {
+    "mem-gcc-code-date": {
+      "id": "mem-gcc-code-date",
+      "title": "日期格式",
+      "content": "新接口的日期统一用 ISO 8601 UTC 字符串，例如 2026-10-29T00:00:00Z，不要传本地时间。",
+      "tags": [
+        "api",
+        "date"
+      ],
+      "ageDays": 9
+    },
+    "mem-gcc-code-migrate": {
+      "id": "mem-gcc-code-migrate",
+      "title": "迁移目录",
+      "content": "数据库迁移脚本放在 db/migrations，文件名用时间戳加描述。",
+      "tags": [
+        "database",
+        "migration"
+      ],
+      "ageDays": 12
+    },
+    "mem-gcc-code-log": {
+      "id": "mem-gcc-code-log",
+      "title": "日志脱敏",
+      "content": "日志里不能打印 access token、refresh token 和用户手机号，只保留请求 id。",
+      "tags": [
+        "logging",
+        "security"
+      ],
+      "ageDays": 18
+    },
+    "mem-gcc-code-retry": {
+      "id": "mem-gcc-code-retry",
+      "title": "请求重试",
+      "content": "前端请求失败最多重试两次，间隔 300ms 和 900ms，不做无限重试。",
+      "tags": [
+        "frontend",
+        "retry"
+      ],
+      "ageDays": 20
+    },
+    "mem-gcc-code-verify": {
+      "id": "mem-gcc-code-verify",
+      "title": "提交前命令",
+      "content": "提交前必须跑 npm run verify，它会执行 lint、类型检查和单测。",
+      "tags": [
+        "workflow",
+        "test"
+      ],
+      "ageDays": 7
+    },
+    "mem-gcc-code-feature": {
+      "id": "mem-gcc-code-feature",
+      "title": "功能开关",
+      "content": "新功能默认关，通过 featureFlags.newRecall 控制，灰度到 10% 再全量。",
+      "tags": [
+        "feature-flag"
+      ],
+      "ageDays": 25
+    },
+    "mem-gcc-code-error": {
+      "id": "mem-gcc-code-error",
+      "title": "错误码",
+      "content": "业务错误码固定五位，前两位是模块编号，后三位是错误序号。",
+      "tags": [
+        "api",
+        "error"
+      ],
+      "ageDays": 30
+    },
+    "mem-gcc-code-commit": {
+      "id": "mem-gcc-code-commit",
+      "title": "提交信息",
+      "content": "提交信息用 conventional commits，scope 写模块名，不写句号。",
+      "tags": [
+        "git",
+        "commit"
+      ],
+      "ageDays": 5
+    }
+  },
+  "samples": [
+    {
+      "id": "gcc-code-date",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "coding",
+      "query": "新接口的日期字段该传什么格式？",
+      "context": {},
+      "time": "2026-10-07T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-code-date"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-code-migrate"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-code-date",
+        "mem-gcc-code-migrate",
+        "mem-gcc-code-error",
+        "mem-gcc-code-commit"
+      ]
+    },
+    {
+      "id": "gcc-code-migrate",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "coding",
+      "query": "数据库迁移脚本放在哪个目录？",
+      "context": {},
+      "time": "2026-10-08T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-code-migrate"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-code-feature"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-code-migrate",
+        "mem-gcc-code-log",
+        "mem-gcc-code-verify",
+        "mem-gcc-code-feature"
+      ]
+    },
+    {
+      "id": "gcc-code-retry",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "coding",
+      "query": "请求失败最多重试几次，间隔多久？",
+      "context": {},
+      "time": "2026-10-09T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-code-retry"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-code-commit"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-code-retry",
+        "mem-gcc-code-date",
+        "mem-gcc-code-feature",
+        "mem-gcc-code-commit"
+      ]
+    },
+    {
+      "id": "gcc-code-verify",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "coding",
+      "query": "提交前必须跑哪个命令？",
+      "context": {},
+      "time": "2026-10-10T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-code-verify"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-code-log"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-code-verify",
+        "mem-gcc-code-log",
+        "mem-gcc-code-retry",
+        "mem-gcc-code-error"
+      ]
+    },
+    {
+      "id": "gcc-code-log",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "coding",
+      "query": "日志里哪些字段必须脱敏？",
+      "context": {},
+      "time": "2026-10-11T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-code-log"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-code-error"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-code-log",
+        "mem-gcc-code-error",
+        "mem-gcc-code-verify",
+        "mem-gcc-code-migrate"
+      ]
+    }
+  ]
+}

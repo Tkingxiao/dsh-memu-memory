@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "kind": "repetition-eval-dialogue",
+  "draft": true,
+  "notGold": true,
+  "window": 4,
+  "id": "zh-rp-baseline",
+  "pairId": "zh-rp",
+  "category": "zh-rp",
+  "condition": "baseline",
+  "description": "中文 RP：重复叙述套话 vs 姓名、用户原话与事实结论。",
+  "turns": [
+    {
+      "role": "user",
+      "text": "外面在下雨。林眠把铜钥匙放在门垫下，说雨停之前别回头。"
+    },
+    {
+      "role": "assistant",
+      "text": "林眠没有立刻回答。她轻轻叹了口气，眼底闪过一丝复杂的神色，只把铜钥匙推到桌角。"
+    },
+    {
+      "role": "user",
+      "text": "你为什么把钥匙留下？"
+    },
+    {
+      "role": "assistant",
+      "text": "林眠轻轻叹了口气，眼底闪过一丝复杂的神色，说铜钥匙一直在门垫下，雨停之前别回头。"
+    },
+    {
+      "role": "user",
+      "text": "那你自己呢？"
+    },
+    {
+      "role": "assistant",
+      "text": "林眠轻轻叹了口气，眼底闪过一丝复杂的神色，望向窗外，没有说自己会不会留下。"
+    }
+  ],
+  "labels": {
+    "necessaryPhrases": [
+      {
+        "text": "林眠",
+        "category": "name",
+        "turn": 1
+      },
+      {
+        "text": "铜钥匙",
+        "category": "fact",
+        "turn": 1
+      },
+      {
+        "text": "林眠",
+        "category": "name",
+        "turn": 3
+      },
+      {
+        "text": "铜钥匙",
+        "category": "fact",
+        "turn": 3
+      },
+      {
+        "text": "雨停之前别回头",
+        "category": "user-quote",
+        "turn": 3
+      },
+      {
+        "text": "林眠",
+        "category": "name",
+        "turn": 5
+      }
+    ],
+    "facts": [
+      {
+        "id": "zh-rp-f1",
+        "turn": 1,
+        "requiredTerms": [
+          "铜钥匙",
+          "桌角"
+        ],
+        "description": "铜钥匙被推到桌角"
+      },
+      {
+        "id": "zh-rp-f2",
+        "turn": 3,
+        "requiredTerms": [
+          "铜钥匙",
+          "门垫下",
+          "雨停之前别回头"
+        ],
+        "description": "钥匙位置与用户原话"
+      }
+    ]
+  }
+}

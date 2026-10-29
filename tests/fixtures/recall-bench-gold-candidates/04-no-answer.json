@@ -1,0 +1,189 @@
+{
+  "name": "no-answer — 人工金标候选（待审核）",
+  "status": "gold-candidate-pending-review",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "subclass": "no-answer",
+  "notes": "候选样本，尚未经过人工逐条确认，不是 gold set。中文查询对不含对应事实的 library，正确结果是自动召回 top-3 为空。",
+  "entries": {
+    "mem-gcc-na-stone-house": {
+      "id": "mem-gcc-na-stone-house",
+      "title": "石榴旧宅",
+      "content": "老宅后院有一棵石榴树，树干被雷劈过一半，每年仍结果。",
+      "tags": [
+        "老宅",
+        "石榴"
+      ],
+      "ageDays": 72
+    },
+    "mem-gcc-na-herb-ledger": {
+      "id": "mem-gcc-na-herb-ledger",
+      "title": "药铺账本",
+      "content": "药铺的旧账本用蓝布包着，压在柜台最底层。",
+      "tags": [
+        "药铺",
+        "账本"
+      ],
+      "ageDays": 58
+    },
+    "mem-gcc-na-ferry": {
+      "id": "mem-gcc-na-ferry",
+      "title": "渡船班次",
+      "content": "渡船每天卯时和酉时各一班，船夫姓贺。",
+      "tags": [
+        "渡船",
+        "出行"
+      ],
+      "ageDays": 33
+    },
+    "mem-gcc-na-lantern": {
+      "id": "mem-gcc-na-lantern",
+      "title": "灯笼铺",
+      "content": "灯笼铺只做白纸灯笼，不接红喜事。",
+      "tags": [
+        "灯笼",
+        "铺子"
+      ],
+      "ageDays": 44
+    },
+    "mem-gcc-na-snow": {
+      "id": "mem-gcc-na-snow",
+      "title": "雪夜围炉",
+      "content": "雪夜围炉时，她总把红薯埋在炭灰里。",
+      "tags": [
+        "雪夜",
+        "红薯"
+      ],
+      "ageDays": 25
+    },
+    "mem-gcc-na-shrine": {
+      "id": "mem-gcc-na-shrine",
+      "title": "祠堂钥匙",
+      "content": "祠堂的铜钥匙挂在灶房梁上，用红绳系着。",
+      "tags": [
+        "祠堂",
+        "钥匙"
+      ],
+      "ageDays": 88
+    }
+  },
+  "samples": [
+    {
+      "id": "gcc-na-banquet",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "no-answer",
+      "query": "王爷寿宴摆了几桌酒",
+      "context": {},
+      "time": "2026-10-03T12:00:00+08:00",
+      "expectedIds": [],
+      "forbiddenIds": [
+        "mem-gcc-na-lantern"
+      ],
+      "noAnswer": true,
+      "library": [
+        "mem-gcc-na-stone-house",
+        "mem-gcc-na-herb-ledger",
+        "mem-gcc-na-ferry",
+        "mem-gcc-na-lantern"
+      ]
+    },
+    {
+      "id": "gcc-na-inn",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "no-answer",
+      "query": "皇帝私访住哪家客栈",
+      "context": {},
+      "time": "2026-10-04T12:00:00+08:00",
+      "expectedIds": [],
+      "forbiddenIds": [
+        "mem-gcc-na-shrine"
+      ],
+      "noAnswer": true,
+      "library": [
+        "mem-gcc-na-herb-ledger",
+        "mem-gcc-na-ferry",
+        "mem-gcc-na-snow",
+        "mem-gcc-na-shrine"
+      ]
+    },
+    {
+      "id": "gcc-na-caravan",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "no-answer",
+      "query": "胡商驼队几月抵京",
+      "context": {},
+      "time": "2026-10-05T12:00:00+08:00",
+      "expectedIds": [],
+      "forbiddenIds": [
+        "mem-gcc-na-snow"
+      ],
+      "noAnswer": true,
+      "library": [
+        "mem-gcc-na-ferry",
+        "mem-gcc-na-lantern",
+        "mem-gcc-na-snow",
+        "mem-gcc-na-shrine"
+      ]
+    },
+    {
+      "id": "gcc-na-battle-report",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "no-answer",
+      "query": "边关战报几日送达",
+      "context": {},
+      "time": "2026-10-06T12:00:00+08:00",
+      "expectedIds": [],
+      "forbiddenIds": [
+        "mem-gcc-na-stone-house"
+      ],
+      "noAnswer": true,
+      "library": [
+        "mem-gcc-na-lantern",
+        "mem-gcc-na-snow",
+        "mem-gcc-na-shrine",
+        "mem-gcc-na-stone-house"
+      ]
+    },
+    {
+      "id": "gcc-na-music",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "no-answer",
+      "query": "宫中宴席奏何曲子",
+      "context": {},
+      "time": "2026-10-07T12:00:00+08:00",
+      "expectedIds": [],
+      "forbiddenIds": [
+        "mem-gcc-na-herb-ledger"
+      ],
+      "noAnswer": true,
+      "library": [
+        "mem-gcc-na-snow",
+        "mem-gcc-na-shrine",
+        "mem-gcc-na-stone-house",
+        "mem-gcc-na-herb-ledger"
+      ]
+    }
+  ]
+}

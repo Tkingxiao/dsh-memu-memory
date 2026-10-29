@@ -1,0 +1,162 @@
+{
+  "name": "no-answer — 无答案",
+  "status": "synthetic-draft-not-gold",
+  "draft": true,
+  "notGold": true,
+  "subclass": "no-answer",
+  "notes": "Synthetic draft only. English queries against Chinese-only libraries so lexical overlap is exactly zero; an empty top-3 is the correct outcome.",
+  "entries": {
+    "mem-rb-na-garden": {
+      "id": "mem-rb-na-garden",
+      "title": "阳台花园",
+      "content": "阳台上种了薄荷和迷迭香，夏天每天傍晚浇水。",
+      "tags": [
+        "植物"
+      ],
+      "ageDays": 30
+    },
+    "mem-rb-na-train": {
+      "id": "mem-rb-na-train",
+      "title": "回程车票",
+      "content": "回程的高铁票订在周日晚上七点，二等座。",
+      "tags": [
+        "出行"
+      ],
+      "ageDays": 5
+    },
+    "mem-rb-na-birthday": {
+      "id": "mem-rb-na-birthday",
+      "title": "生日",
+      "content": "林夏的生日是十一月三日，她不喜欢惊喜派对。",
+      "tags": [
+        "生日"
+      ],
+      "ageDays": 90
+    },
+    "mem-rb-na-diet": {
+      "id": "mem-rb-na-diet",
+      "title": "饮食",
+      "content": "她不吃香菜，汤里有一点也会挑出来。",
+      "tags": [
+        "饮食"
+      ],
+      "ageDays": 20
+    },
+    "mem-rb-na-dog": {
+      "id": "mem-rb-na-dog",
+      "title": "邻居的狗",
+      "content": "楼下邻居养了一只黑色拉布拉多，叫阿福。",
+      "tags": [
+        "狗"
+      ],
+      "ageDays": 60
+    },
+    "mem-rb-na-rent": {
+      "id": "mem-rb-na-rent",
+      "title": "房租",
+      "content": "房租每月五号交，房东只收转账。",
+      "tags": [
+        "房租"
+      ],
+      "ageDays": 15
+    }
+  },
+  "samples": [
+    {
+      "id": "rb-na-quantum",
+      "draft": true,
+      "notGold": true,
+      "subclass": "no-answer",
+      "query": "quantum chromodynamics lecture notes",
+      "context": {},
+      "time": "2026-10-16T12:00:00+08:00",
+      "expectedIds": [],
+      "forbiddenIds": [],
+      "noAnswer": true,
+      "library": [
+        "mem-rb-na-garden",
+        "mem-rb-na-train"
+      ]
+    },
+    {
+      "id": "rb-na-kubernetes",
+      "draft": true,
+      "notGold": true,
+      "subclass": "no-answer",
+      "query": "kubernetes cluster autoscaling policy",
+      "context": {},
+      "time": "2026-10-17T12:00:00+08:00",
+      "expectedIds": [],
+      "forbiddenIds": [],
+      "noAnswer": true,
+      "library": [
+        "mem-rb-na-train",
+        "mem-rb-na-birthday"
+      ]
+    },
+    {
+      "id": "rb-na-weather",
+      "draft": true,
+      "notGold": true,
+      "subclass": "no-answer",
+      "query": "weather forecast for Reykjavik tomorrow",
+      "context": {},
+      "time": "2026-10-18T12:00:00+08:00",
+      "expectedIds": [],
+      "forbiddenIds": [],
+      "noAnswer": true,
+      "library": [
+        "mem-rb-na-birthday",
+        "mem-rb-na-diet"
+      ]
+    },
+    {
+      "id": "rb-na-sourdough",
+      "draft": true,
+      "notGold": true,
+      "subclass": "no-answer",
+      "query": "sourdough starter hydration ratio",
+      "context": {},
+      "time": "2026-10-19T12:00:00+08:00",
+      "expectedIds": [],
+      "forbiddenIds": [],
+      "noAnswer": true,
+      "library": [
+        "mem-rb-na-diet",
+        "mem-rb-na-dog"
+      ]
+    },
+    {
+      "id": "rb-na-formula",
+      "draft": true,
+      "notGold": true,
+      "subclass": "no-answer",
+      "query": "Formula One qualifying results",
+      "context": {},
+      "time": "2026-10-10T12:00:00+08:00",
+      "expectedIds": [],
+      "forbiddenIds": [],
+      "noAnswer": true,
+      "library": [
+        "mem-rb-na-dog",
+        "mem-rb-na-rent"
+      ]
+    },
+    {
+      "id": "rb-na-invoice",
+      "draft": true,
+      "notGold": true,
+      "subclass": "no-answer",
+      "query": "invoice reconciliation spreadsheet macro",
+      "context": {},
+      "time": "2026-10-11T12:00:00+08:00",
+      "expectedIds": [],
+      "forbiddenIds": [],
+      "noAnswer": true,
+      "library": [
+        "mem-rb-na-rent",
+        "mem-rb-na-garden"
+      ]
+    }
+  ]
+}

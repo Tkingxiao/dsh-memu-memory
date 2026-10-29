@@ -20,7 +20,7 @@ node scripts/acceptance-local.mjs    # 50/50；视觉证据只证明本次已审
 npm run check                        # node --check + i18n 键对齐 + package.json 可解析
 ```
 
-**结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。
+**结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。文档里出现的测试数字一律当作**带日期的快照**：2026-10-29 实测 392 tests / 391 pass / 0 fail / 1 skipped（真实引擎用例按设计跳过）；更早的 321 / 327 / 333 等是历史转述，原报告已缺失、不可复核，不能当作当前保证。
 
 ### 4.3 每类改动的连带清单
 
@@ -57,7 +57,7 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 
 ### 5.1 新增一个模型工具
 
-1. `lib/tools.js`：`defineTool({ name, description, inputSchema, execute(args, exec) })`，会话 id 用 `exec.agent.session.header.id`（§6.3）。
+1. `lib/tools.js`：实际走 `toolBase(name, description, parameters, execute, options)`（`lib/tools.js:43`），它包一层 `defineTool({ name, description, parameters, output: { schema, render }, timeoutMs, isConcurrencySafe, execute(args, exec) })`。字段名是 **`parameters`**（不是 `inputSchema`）、输出契约在 **`output.schema`**、`timeoutMs` 是**正数**（默认 60000）；`execute` 拿 `(args, exec)`，会话 id 用 `exec.agent.session.header.id`（§6.3）。
 2. **描述是给模型看的契约**：写清默认值、拒绝条件、返回形状——模型读不到代码。
 3. 主 agent **不注册**全局写入类工具（§1.2）。
 4. `lib/index.js` 注册；`README.md` 工具表加一行。
@@ -75,7 +75,9 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 
 ### 5.3 新增一个 RPC 方法
 
-1. `lib/rpc.js` 的 `switch` 加 case（共 72 个方法，按功能分组，别乱插）。
+<!-- rpc-method-count: 83 -->
+
+1. `lib/rpc.js` 的 `switch` 加 case（共 83 个方法，按功能分组，别乱插）。
 2. 返回**形状稳定**：客户端 `call()` 直接解构，列表类给 `{items, total}` 而不是裸数组。
 3. `revisionOnly` 分支只回 `{revision, stamp}`、**不要求 sessionId**（三端轮询，设置页与独立页没会话）、**不塞业务数据**（每 2.5 秒一次）；顺带 `noteMemoryBeat()`，`memu_status` 靠它分「没写」与「没人轮询」。
 4. 写成功后 `bumpMemoryRevision()`/`notifyMemoryWrite()`（§7）；能让 `state.json` 或索引落盘的写，`state.js` 自动记写事件供 `memu_status` 展示。

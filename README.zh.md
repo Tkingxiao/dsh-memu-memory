@@ -59,7 +59,7 @@
 - **三层，一条时间线。** `short_term` 草稿默认 72 小时到期；`long_term` 是记忆主体；`must_remember` 需要理由与来源，按 365 天半衰并带 0.35 强度地板，可以**边缘化**，但不会为腾名额被自动删除。
 - **召回是一个瞬间，不是一次倾倒。** 新会话或压缩后的第一个回合得到锚点块（pin / core / global 分段预算）；之后每个用户回合最多一次召回。去重与 token 预算由代码执行，不交给提示词自觉。
 - **日期要么是纪念日，要么是一天。** `MM-DD` 每年复发（生日）；`YYYY-MM-DD` 在前一天和当天各响一次，之后就算用过了。说「明天」的记忆存成带年份的日期，不会变成每年都冒出来的周年。
-- **记忆会不均匀地淡。** 新近、访问次数、唤醒度、情绪同调、峰终、首因、习惯化、闪光灯记忆的准确度共同参与强度；一条生动但可能记错的记忆会显示「细节未必准」，而不是假装确定。
+- **记忆会不均匀地淡。** 新近、访问次数、峰终、首因、习惯化、闪光灯记忆的准确度共同参与强度；唤醒度与情绪同调是**条件项**而不是恒常生效——默认关闭，只有情绪离平缓够远时（|valence| >= 0.15，或 |arousal - 0.35| >= 0.1）才打开，平缓对话里两项乘数恒为 1。一条生动但可能记错的记忆会显示「细节未必准」，而不是假装确定。
 - **来源是事实，不是文风。** 每条记忆带 `source`（`user_said` / `inferred` / `imagined` / `told`）、`confidence`、`accuracy` 与说出口径。模糊的推断不能冒充原话。
 - **矛盾先挂起。** 与已有记忆同题改写或说法相反的新条进入 `pending_review`：不注入、不召回，只出现在复核队列，等人或整理作业裁决。
 - **秘密不进自动召回。** `secret`、群聊频道、角色、世界线、剧情分支与 `knownBy` 共同约束读写；`secret` 永远不会被自动注入，但同文件夹里**主动检索仍然读得到**——它挡的是「自己冒出来」，不是保险箱。真正把同一文件夹里的两段对话隔开的是 `context` 作用域（`channelId` / `characterId` / `worldId` / `branchId`）；两边都没填就是同一个作用域，这正是「文件夹」的含义。旧的 `visibility: 'session'` 级别已删除：读到就按 `shared` 处理、`context` 原样保留，仍存着该级别的库用 `node scripts/migrate-visibility.mjs` 重写（`--apply` 才写，先备份）。
@@ -86,14 +86,18 @@
 | 记忆库 | 新建、改名、归档、恢复、显式删除 |
 | 记忆浏览 | 全文编辑、附件、复核池、有界图谱、JSON/ZIP 导入导出 |
 | 全局记忆 | 分域全局记忆、证据、复核队列与独立 curator |
-| 提示词 | 通用 / RP / Coding / Mixed 变体，覆盖与单项恢复；新会话默认 RP |
+| 提示词 | 通用 / RP / Coding / Mixed 变体，覆盖与单项恢复；新会话默认 RP，并可在首次弹窗里直接选领域 |
 | 统计 | 每日活跃、命中分布、库健康度、最久没被想起的 5 条、7 天写读比 |
 
 设置项即时保存（250ms 防抖），跨窗口约 2.5 秒同步；工具调用或另一个窗口的写入也会被心跳发现。WebUI 优先在新标签页打开，被拦截时退回应用内 overlay，不卸载宿主 SPA。支持浅色、深色、减少动效与窄屏。
 
+### 注入 token 预算
+
+`anchorTokens` 与 `turnTokens` 分别约束锚点与召回内容（均默认 800）。`injectionTotalTokens` 限制整条 plugin 消息（默认 2000），不替代召回预算。
+
 ### 领域提示词
 
-常驻指南、写入策略和整理提示词按当前会话领域选择；本地工具整理和远程 JSON 整理共用领域正文，各自使用实际支持的输出协议。新会话默认 RP；Coding、Mixed 与自定义页保持启用，可按会话选择。
+常驻指南、写入策略和整理提示词按当前会话领域选择；本地工具整理和远程 JSON 整理共用领域正文，各自使用实际支持的输出协议。新会话默认 RP；Coding、Mixed 与自定义页保持启用，可按会话选择。新会话的记忆弹窗里也能直接选这四个记忆领域，在 RP 工作区里开写代码的对话不必事后再去侧边栏切换。
 
 | 领域 | 记忆重点 |
 |---|---|
@@ -176,7 +180,11 @@ npx --package dsh-memu-memory dsh-memu-memory-setup
 - 没有可用 Python/pip 时，使用放在插件目录里的**锁定版本 uv**，不改系统 `PATH`；
 - 下载约 150 MB，跑真实 smoke，并保留上一版本以便回滚。
 
-选择 `api` 后端时，把向量服务指向一个 OpenAI 兼容的 **embedding** 端点（例如本机 Ollama：`http://localhost:11434`）。DSH 自身没有 embedding 能力，所以「本地向量」指的是你自己跑在本机的服务；本机服务不需要 key。云端 MemU 不在支持范围内。
+默认 `memoryBackend="agent"` 使用词法召回，不调用 embedding 服务。启用向量库需选择 `memoryBackend="api"`，再以 `vectorSource="local"` 选择受管本地 embedding，或以 `vectorSource="api"` 选择已配置的兼容 embedding 端点（端点也可位于 localhost）。两种来源都接入 MemU 存储与检索；仅安装 MemU 引擎不会开启向量。
+
+`memoryMode`（`local` / `cloud`）是 MemU 存储兼容设置，不是 embedding 开关或来源选择；保留 cloud 选项不意味着受管本地推理可被称为离线云存储。总结生成与向量路由独立：常规私有整理使用 Agent fork，显式远程总结动作使用其聊天端点，再经统一记忆写入路径提交。召回不使用 LLM 重排，也不会以 LLM 作为失败回退。精确记忆 id 仍走直达路径，插件不维护平行的向量数据库。
+
+模型下载、进度展示与 profile 切换/迁移流程已有实现，但本轮未验证真实模型/runtime 下载及原生推理/切换全链路。candidate 或 `pending` artifact 不代表可用；在制品与校验门槛通过前，不应宣传为可下载或已就绪。
 
 ## 第一次使用
 
@@ -280,7 +288,7 @@ return { content: originalContent, meta: { ...originalMeta, memoryInbound: batch
 - **没有云同步、账号或跨设备同步。** 这是本地插件，没有服务端身份。
 - **没有视觉时：** 图片记忆只是「指针 + 人写的描述」。插件不会声称看过像素。
 - **v4 污染会话：** 历史 `format v4 message requires a producer-owned source kind` 行只能诊断，不能改写；插件不会编辑私有会话文件。
-- **人格预设（agent preset）：** 预设（`i-am-yuike`、`yuike-standard` 等）自带 `cordis.yml`，会话的模型可见插件集只由那份清单决定，它的 scope 也不会把 `agent/pre-step` 送到本插件。`lib/preset-scope.js` 会在运行时把「记忆锚点」挂到该 agent 自己的 ctx 上，所以**注入能用**；但那里**没有 `memu_*` 工具**——清单里没有这一行就没有工具行。要写记忆请在标准会话里写。插件不会改任何人的预设文件。
+- **人格预设（agent preset）：** 预设（`i-am-yuike`、`yuike-standard` 等）自带 `cordis.yml`，会话的模型可见插件集只由那份清单决定，它的 scope 也不会把 `agent/pre-step` 送到本插件。运行时 `lib/preset-scope.js` 会把第二个注入监听挂到该 agent 自己的 ctx 上，所以**锚点与召回的送达是能用的**；而 `persona` 通常带 `complete: true`、会把 system prompt 段整段丢弃，因此记忆规则改为首步一次性投放 `<memory-guide>` 插件消息。**最终工具面**是第三件事，由该预设自己的清单与宿主 scope 决定——不能从「有没有列上本插件」推断，仓库里的观察既有「没有 `memu_*` 工具」，也有某些预设的工具链里存在 `memu_private_*`。**逐预设的真实工具名单仍需真机核实（W3）**；在那之前，别读成「预设都没有工具」，也别读成「列上插件就一定可用」。插件不会改任何人的预设文件。
 - **相对日期在写入时结算：** 「今天 / 明天 / 后天 / today / tomorrow」加上一个月日落成带年份的日期；只说「下个月某天」的记忆不产生日期，也不替它编一个。已经按 `MM-DD` 写进去的旧条目不会被改写——这条只对新写入生效。
 - **不在范围：** 云端 MemU 联调、旧条目的 source 回填、已写坏 v4 消息的自动修复。
 
@@ -301,6 +309,14 @@ node --import ./tests/loader-register.mjs scripts/preview.mjs --port 7789
 预览运行后，可在另一终端执行 `npm run test:graph-browser -- http://127.0.0.1:7789/dsh-memu-memory/ui#/settings/memories`，验证 200 节点、桌面/窄屏、拖拽、刷新稳定性、主题与加载重试。首次使用需执行 `npx playwright install chromium`；Windows 也可设置 `GRAPH_BROWSER_CHANNEL=msedge` 使用已安装的 Edge。压力数据仅在测试浏览器内拦截，不写入记忆库。图谱运行时不依赖 CDN，D3 许可随资源保存在 `lib/webui/graph-LICENSE.txt`。
 
 测试包含一条真实引擎集成用例，未设置 `DSH_MEMU_TEST_ENGINE_PYTHON` 时按设计跳过；50 条自动验收全部通过。可选引擎已在隔离目录安装并跑通锁定 wheel 的 smoke；embedding 测试使用本机确定性服务，只证明协议可用，不证明语义质量。
+
+## 更新日志
+
+**1.1.3（2026-10-30）**：受管本地向量可用（运行时/模型下载、切换重建、进度与失败明细）；活动日志与「日志」页；整理结果落到侧边栏按钮下方；归档/还原与列表刷新提速到毫秒级；日期漏填时从正文兜底；默认 topK 5/5；修复设置/WebUI 白屏。
+
+**1.1.2（2026-10-29）**：人格预设会话的锚点与召回送达；启动补扫空闲整理；面板 TDZ 崩溃修复。
+
+完整记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 文档
 

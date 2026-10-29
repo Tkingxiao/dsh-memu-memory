@@ -14,7 +14,7 @@
 
 1. **不改 DSH 源码**，只用插件、公开 service、RPC、slot；只用公开扩展点。
 2. **不让主 agent 写全局记忆**：全局只由 curator 写，主 agent 只读。
-3. **动态记忆不进 system prompt**（静态 guide 可以）：走独立 plugin 消息，保护 KV cache 也让注入可折叠。
+3. **动态记忆不进 system prompt**（静态 guide 可以）：走独立 plugin 消息，保护 KV cache 也让注入可折叠。`persona` 带 `complete: true` 的预设会丢弃本插件的 system prompt 段，这类会话的 guide 改由首步一条 `<memory-guide>` 消息投放（`withGuideMessage`，按 `binding.guideMessageAt` 只发一次，`lib/inject.js`）——仍然是 plugin 消息，不是把动态记忆写进 system prompt。
 4. **不每步注入**：普通回合首步注入；长工具回合只在出现尚未处理的真实人类消息批次时追加一次。工具日志、心跳不算人类消息。
 5. **不自动删除记忆**：永久记忆移出 = 边缘化；删库必须显式确认；删会话默认只解绑。
 6. **Python 不装进系统解释器 / 用户 site-packages**，只装 `engine/<version>/venv`，且 venv 里不留 pip（`--without-pip` 建，再用基础 Python 的 `pip --python` 指进去装）。
@@ -47,7 +47,7 @@
 注入整段没了 → T3.13               日期语义错 / 看不见日期 → T3.14
 保存成功但没变 / 字段改不回来 → T3.15   记忆凭空消失 / 侧边栏空 → T3.17
 弹窗选了却两侧都勾上 → T3.16            聊很久一条记忆都没写 → T3.18
-人格预设会话里完全没有记忆 → T3.19
+人格预设会话里完全没有记忆 → T3.19   鉴权 401/403 说不清 → T3.20
 ```
 
 ---
@@ -61,7 +61,7 @@ node scripts/acceptance-local.mjs    # 50/50
 npm run check                        # node --check + i18n + package.json + 文档预算
 ```
 
-**结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。提交前逐条对 `docs/contributing.md` §10。
+**结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。测试数字只作**带日期快照**引用（2026-10-29 W7/W8 集成后实测 505 tests / 504 pass / 1 skipped；同日更早的 W7 为 493/492/1、W3–W9 为 463/462/1、W1/W2 为 409/408/1 与 392/391/1，321/327/333 原报告缺失、不可复核），不当成当前保证。提交前逐条对 `docs/contributing.md` §10。
 
 ---
 
@@ -71,10 +71,12 @@ npm run check                        # node --check + i18n + package.json + 文�
 |---|---|
 | `docs/troubleshooting.md` | §3 全部症状/落点/守卫 + 症状速查表 + 守卫索引表 + 附录（模块地图 §2.1、调用链 §2.2、数据铁律 §2.3、三种 exec 形状 §6.3、硬规则全文 §1） |
 | `docs/contributing.md` | §4 改动流程（四步 / 验证三件套 / 连带清单 / 文档同步）+ §5 六个扩展点 + §10 提交前清单 |
-| `docs/host-api.md` | §6.1 / 6.2 / 6.4–6.7：embedding、workspaceRegistry、历史会话与标题、fork/followup、定时器、RPC+slot+折叠 |
+| `docs/host-api.md` | §6.1 / 6.2 / 6.4–6.8：embedding、workspaceRegistry、历史会话与标题、fork/followup、定时器、RPC+slot+折叠、预设工具面真机证据边界 |
 | `docs/client-conventions.md` | §7：两个壳一份实现、颜色 token、控件纪律、数据与刷新、文案与结构 |
-| `docs/memory-semantics.md` | §8：三层、写入规则、全局记忆、注入、提示词管理 |
-| `docs/env-and-commands.md` | §9：Windows 跑命令的 env、CRLF 补丁法、本地 link、引擎安装与回滚、MemU CLI 事实 |
+| `docs/memory-semantics.md` | §8：三层、写入规则、全局记忆、注入（含预设会话首步 `<memory-guide>` 一次性投放）、提示词管理 |
+| `docs/env-and-commands.md` | §9：Windows 跑命令的 env、CRLF 补丁法、本地 link、引擎安装与回滚、本地向量受管运行时的安装/状态命令（§9.5）、MemU CLI 事实 |
+
+**W8（助手重复提示）已决定不做，不再重做。** 理由：120 次合成 A/B 未证明改善重复回答率，事实词面完整性反而下降。证据文档已删除，不得据此宣称“已证明任何防复读技术无效”。
 
 节号跨文件不变：看到「（§8.4）」就去 `docs/memory-semantics.md` 找 §8.4。
 

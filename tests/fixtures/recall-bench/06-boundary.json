@@ -1,0 +1,273 @@
+{
+  "name": "boundary — 角色/世界边界",
+  "status": "synthetic-draft-not-gold",
+  "draft": true,
+  "notGold": true,
+  "subclass": "boundary",
+  "notes": "Synthetic draft only. Same wording appears in a foreign channel/character/world/branch; context must exclude it.",
+  "entries": {
+    "mem-rb-bnd-world-jade": {
+      "id": "mem-rb-bnd-world-jade",
+      "title": "玉佩",
+      "content": "掌门把青玉佩交给林夏，说凭玉佩可以调动三名暗卫。",
+      "tags": [
+        "信物"
+      ],
+      "ageDays": 8,
+      "context": {
+        "worldId": "jianghu"
+      }
+    },
+    "mem-rb-bnd-world-spaceship": {
+      "id": "mem-rb-bnd-world-spaceship",
+      "title": "舰桥玉佩",
+      "content": "星舰舰长把青玉佩交给林夏保管，凭玉佩可以调动舰队守卫。",
+      "tags": [
+        "信物"
+      ],
+      "ageDays": 8,
+      "context": {
+        "worldId": "scifi"
+      }
+    },
+    "mem-rb-bnd-char-lin": {
+      "id": "mem-rb-bnd-char-lin",
+      "title": "林夏的旧伤",
+      "content": "林夏左肩有一道旧伤，阴天会疼，不能提重物。",
+      "tags": [
+        "旧伤"
+      ],
+      "ageDays": 18,
+      "context": {
+        "characterId": "lin"
+      }
+    },
+    "mem-rb-bnd-char-shen": {
+      "id": "mem-rb-bnd-char-shen",
+      "title": "沈砚的旧伤",
+      "content": "沈砚左肩也有旧伤，阴天会疼，但他从不说。",
+      "tags": [
+        "旧伤"
+      ],
+      "ageDays": 18,
+      "context": {
+        "characterId": "shen"
+      }
+    },
+    "mem-rb-bnd-channel-group": {
+      "id": "mem-rb-bnd-channel-group",
+      "title": "群里说过的事",
+      "content": "群里约好周五晚上八点开黑，迟到的人发红包。",
+      "tags": [
+        "约定"
+      ],
+      "ageDays": 6,
+      "context": {
+        "channelId": "group"
+      }
+    },
+    "mem-rb-bnd-channel-private": {
+      "id": "mem-rb-bnd-channel-private",
+      "title": "私下约定",
+      "content": "私下也约了周五晚上八点开黑，但只有林夏知道。",
+      "tags": [
+        "约定"
+      ],
+      "ageDays": 6,
+      "context": {
+        "channelId": "private"
+      }
+    },
+    "mem-rb-bnd-branch-a": {
+      "id": "mem-rb-bnd-branch-a",
+      "title": "A 线结局",
+      "content": "在 A 线里，林夏留在北境，成为守夜人。",
+      "tags": [
+        "结局"
+      ],
+      "ageDays": 14,
+      "context": {
+        "branchId": "route-a"
+      }
+    },
+    "mem-rb-bnd-branch-b": {
+      "id": "mem-rb-bnd-branch-b",
+      "title": "B 线结局",
+      "content": "在 B 线里，林夏没有留在北境，而是回江南开茶馆。",
+      "tags": [
+        "结局"
+      ],
+      "ageDays": 14,
+      "context": {
+        "branchId": "route-b"
+      }
+    },
+    "mem-rb-bnd-known": {
+      "id": "mem-rb-bnd-known",
+      "title": "只有沈砚知道",
+      "content": "沈砚知道林夏把信藏在第三块砖下，只有他能取。",
+      "tags": [
+        "秘密"
+      ],
+      "ageDays": 9,
+      "context": {
+        "knownBy": [
+          "shen"
+        ]
+      }
+    },
+    "mem-rb-bnd-public-letter": {
+      "id": "mem-rb-bnd-public-letter",
+      "title": "信的位置",
+      "content": "林夏把信藏在第三块砖下，谁都可以取。",
+      "tags": [
+        "信"
+      ],
+      "ageDays": 9,
+      "context": {}
+    }
+  },
+  "samples": [
+    {
+      "id": "rb-bnd-world",
+      "draft": true,
+      "notGold": true,
+      "subclass": "boundary",
+      "query": "林夏凭玉佩可以调动多少人？",
+      "context": {
+        "worldId": "jianghu",
+        "characterId": "lin"
+      },
+      "time": "2026-10-17T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-bnd-world-jade"
+      ],
+      "forbiddenIds": [
+        "mem-rb-bnd-world-spaceship"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-bnd-world-jade",
+        "mem-rb-bnd-world-spaceship",
+        "mem-rb-bnd-char-lin"
+      ]
+    },
+    {
+      "id": "rb-bnd-char",
+      "draft": true,
+      "notGold": true,
+      "subclass": "boundary",
+      "query": "谁左肩有旧伤，阴天会疼？",
+      "context": {
+        "characterId": "lin",
+        "worldId": "jianghu"
+      },
+      "time": "2026-10-18T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-bnd-char-lin"
+      ],
+      "forbiddenIds": [
+        "mem-rb-bnd-char-shen"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-bnd-char-lin",
+        "mem-rb-bnd-char-shen",
+        "mem-rb-bnd-world-jade"
+      ]
+    },
+    {
+      "id": "rb-bnd-channel",
+      "draft": true,
+      "notGold": true,
+      "subclass": "boundary",
+      "query": "周五晚上八点约好做什么？",
+      "context": {
+        "channelId": "group"
+      },
+      "time": "2026-10-19T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-bnd-channel-group"
+      ],
+      "forbiddenIds": [
+        "mem-rb-bnd-channel-private"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-bnd-channel-group",
+        "mem-rb-bnd-channel-private",
+        "mem-rb-bnd-public-letter"
+      ]
+    },
+    {
+      "id": "rb-bnd-branch",
+      "draft": true,
+      "notGold": true,
+      "subclass": "boundary",
+      "query": "林夏最后留在北境了吗？",
+      "context": {
+        "branchId": "route-a",
+        "worldId": "jianghu"
+      },
+      "time": "2026-10-10T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-bnd-branch-a"
+      ],
+      "forbiddenIds": [
+        "mem-rb-bnd-branch-b"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-bnd-branch-a",
+        "mem-rb-bnd-branch-b",
+        "mem-rb-bnd-world-jade"
+      ]
+    },
+    {
+      "id": "rb-bnd-known",
+      "draft": true,
+      "notGold": true,
+      "subclass": "boundary",
+      "query": "信藏在第几块砖下？",
+      "context": {
+        "characterId": "lin"
+      },
+      "time": "2026-10-11T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-bnd-public-letter"
+      ],
+      "forbiddenIds": [
+        "mem-rb-bnd-known"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-bnd-public-letter",
+        "mem-rb-bnd-known",
+        "mem-rb-bnd-char-lin"
+      ]
+    },
+    {
+      "id": "rb-bnd-world-2",
+      "draft": true,
+      "notGold": true,
+      "subclass": "boundary",
+      "query": "谁把青玉佩交给林夏？",
+      "context": {
+        "worldId": "jianghu"
+      },
+      "time": "2026-10-12T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-bnd-world-jade"
+      ],
+      "forbiddenIds": [
+        "mem-rb-bnd-world-spaceship"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-bnd-world-jade",
+        "mem-rb-bnd-world-spaceship",
+        "mem-rb-bnd-public-letter"
+      ]
+    }
+  ]
+}

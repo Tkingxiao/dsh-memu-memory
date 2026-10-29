@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { runChecks as runDocDriftChecks } from './check-doc-drift.mjs'
 
 const root = path.resolve(import.meta.dirname, '..')
 const failures = []
@@ -34,6 +35,24 @@ budget('AGENTS.md', 60000)
 
 check('i18n', process.execPath, ['scripts/check-i18n.mjs'])
 check('package.json', process.execPath, ['-e', 'JSON.parse(require("fs").readFileSync("package.json","utf8"))'])
+
+// W2 防漂移闸门：RPC 方法数标记、tests 跟踪状态、loader/stub 完整性。
+// 这三项由 scripts/check-doc-drift.mjs 实现，返回 ok / skipped / fail 三态：
+// skipped 只用于「没有 .git 的 npm 安装目录」这类明确不适用场景，不算失败。
+for (const result of runDocDriftChecks(root)) {
+  if (result.status === 'ok') {
+    console.log(`ok   ${result.label}: ${result.summary}`)
+    continue
+  }
+  if (result.status === 'skipped') {
+    console.log(`skip ${result.label}: ${result.summary}`)
+    for (const detail of result.details || []) console.log(`     ${detail}`)
+    continue
+  }
+  failures.push(result.label)
+  console.log(`FAIL ${result.label}: ${result.summary}`)
+  for (const detail of result.details || []) console.log(`     ${detail}`)
+}
 
 if (failures.length > 0) {
   console.log(`\n${failures.length} check(s) failed: ${failures.join(', ')}`)

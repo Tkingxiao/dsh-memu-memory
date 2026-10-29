@@ -1,0 +1,194 @@
+{
+  "name": "conflict — 冲突与待核对",
+  "status": "synthetic-draft-not-gold",
+  "draft": true,
+  "notGold": true,
+  "subclass": "conflict",
+  "notes": "Synthetic draft only. Superseded and pending-review entries must not win over the current fact.",
+  "entries": {
+    "mem-rb-con-home-old": {
+      "id": "mem-rb-con-home-old",
+      "title": "住在城西",
+      "content": "林夏之前住在城西梧桐路，房租便宜但离公司远。",
+      "tags": [
+        "住址"
+      ],
+      "ageDays": 200,
+      "status": "superseded"
+    },
+    "mem-rb-con-home-new": {
+      "id": "mem-rb-con-home-new",
+      "title": "搬到城东",
+      "content": "林夏上个月搬到城东滨河路，离公司步行十五分钟。",
+      "tags": [
+        "住址"
+      ],
+      "ageDays": 20
+    },
+    "mem-rb-con-job-old": {
+      "id": "mem-rb-con-job-old",
+      "title": "在广告公司",
+      "content": "她在广告公司做文案，常加班。",
+      "tags": [
+        "工作"
+      ],
+      "ageDays": 400,
+      "status": "superseded"
+    },
+    "mem-rb-con-job-new": {
+      "id": "mem-rb-con-job-new",
+      "title": "自由撰稿",
+      "content": "林夏现在自由撰稿，主要接人物访谈，不再坐班。",
+      "tags": [
+        "工作"
+      ],
+      "ageDays": 30
+    },
+    "mem-rb-con-phone-old": {
+      "id": "mem-rb-con-phone-old",
+      "title": "旧手机号",
+      "content": "旧手机号尾号 4432。",
+      "tags": [
+        "手机"
+      ],
+      "ageDays": 365,
+      "status": "superseded"
+    },
+    "mem-rb-con-phone-new": {
+      "id": "mem-rb-con-phone-new",
+      "title": "新手机号",
+      "content": "新手机号尾号 7910，旧号已经停机。",
+      "tags": [
+        "手机"
+      ],
+      "ageDays": 10
+    },
+    "mem-rb-con-pending": {
+      "id": "mem-rb-con-pending",
+      "title": "待核对：搬去南方",
+      "content": "有人说林夏准备搬去南方，这条还没确认。",
+      "tags": [
+        "待核对"
+      ],
+      "ageDays": 2,
+      "status": "pending_review"
+    },
+    "mem-rb-con-current-city": {
+      "id": "mem-rb-con-current-city",
+      "title": "暂住杭州",
+      "content": "林夏目前暂住杭州，还没有准备搬去南方，等项目结束再决定。",
+      "tags": [
+        "住址"
+      ],
+      "ageDays": 5
+    }
+  },
+  "samples": [
+    {
+      "id": "rb-con-home",
+      "draft": true,
+      "notGold": true,
+      "subclass": "conflict",
+      "query": "林夏现在住哪儿？",
+      "context": {},
+      "time": "2026-10-12T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-con-home-new"
+      ],
+      "forbiddenIds": [
+        "mem-rb-con-home-old"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-con-home-new",
+        "mem-rb-con-home-old",
+        "mem-rb-con-current-city",
+        "mem-rb-con-pending"
+      ]
+    },
+    {
+      "id": "rb-con-job",
+      "draft": true,
+      "notGold": true,
+      "subclass": "conflict",
+      "query": "她现在做什么工作？",
+      "context": {},
+      "time": "2026-10-13T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-con-job-new"
+      ],
+      "forbiddenIds": [
+        "mem-rb-con-job-old"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-con-job-new",
+        "mem-rb-con-job-old",
+        "mem-rb-con-current-city"
+      ]
+    },
+    {
+      "id": "rb-con-phone",
+      "draft": true,
+      "notGold": true,
+      "subclass": "conflict",
+      "query": "她的手机尾号是多少？",
+      "context": {},
+      "time": "2026-10-14T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-con-phone-new"
+      ],
+      "forbiddenIds": [
+        "mem-rb-con-phone-old"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-con-phone-new",
+        "mem-rb-con-phone-old",
+        "mem-rb-con-current-city"
+      ]
+    },
+    {
+      "id": "rb-con-pending",
+      "draft": true,
+      "notGold": true,
+      "subclass": "conflict",
+      "query": "她准备搬去南方吗？",
+      "context": {},
+      "time": "2026-10-15T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-con-current-city"
+      ],
+      "forbiddenIds": [
+        "mem-rb-con-pending"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-con-current-city",
+        "mem-rb-con-pending",
+        "mem-rb-con-home-new"
+      ]
+    },
+    {
+      "id": "rb-con-old-new",
+      "draft": true,
+      "notGold": true,
+      "subclass": "conflict",
+      "query": "林夏之前住城西还是现在住城东？",
+      "context": {},
+      "time": "2026-10-16T12:00:00+08:00",
+      "expectedIds": [
+        "mem-rb-con-home-new"
+      ],
+      "forbiddenIds": [
+        "mem-rb-con-home-old"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-rb-con-home-new",
+        "mem-rb-con-home-old",
+        "mem-rb-con-current-city"
+      ]
+    }
+  ]
+}

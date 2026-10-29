@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "kind": "repetition-eval-dialogue",
+  "draft": true,
+  "notGold": true,
+  "window": 4,
+  "id": "en-baseline",
+  "pairId": "en",
+  "category": "en",
+  "condition": "baseline",
+  "description": "English: repeated atmospheric filler vs name, quote, agreement and facts.",
+  "turns": [
+    {
+      "role": "user",
+      "text": "Mara, meet at the lighthouse at dusk. Don't open the blue door until I arrive."
+    },
+    {
+      "role": "assistant",
+      "text": "Mara nodded. A quiet sense of dread settled over the room, and the rain kept falling against the glass."
+    },
+    {
+      "role": "user",
+      "text": "Did you check the door?"
+    },
+    {
+      "role": "assistant",
+      "text": "A quiet sense of dread settled over the room. The rain kept falling. Mara promised, \"Meet at the lighthouse at dusk,\" then repeated, \"Don't open the blue door.\""
+    },
+    {
+      "role": "user",
+      "text": "What about the lighthouse?"
+    },
+    {
+      "role": "assistant",
+      "text": "Mara checked the lock, then went home. She said nothing about the letter."
+    }
+  ],
+  "labels": {
+    "necessaryPhrases": [
+      {
+        "text": "Mara",
+        "category": "name",
+        "turn": 1
+      },
+      {
+        "text": "Mara",
+        "category": "name",
+        "turn": 3
+      },
+      {
+        "text": "Meet at the lighthouse at dusk",
+        "category": "agreement",
+        "turn": 3
+      },
+      {
+        "text": "Don't open the blue door",
+        "category": "user-quote",
+        "turn": 3
+      },
+      {
+        "text": "Mara",
+        "category": "name",
+        "turn": 5
+      }
+    ],
+    "facts": [
+      {
+        "id": "en-f1",
+        "turn": 1,
+        "requiredTerms": [
+          "nodded",
+          "rain",
+          "glass"
+        ],
+        "description": "Mara nodded; rain against the glass"
+      },
+      {
+        "id": "en-f2",
+        "turn": 3,
+        "requiredTerms": [
+          "blue door",
+          "lighthouse"
+        ],
+        "description": "The door and the lighthouse are both named"
+      },
+      {
+        "id": "en-f3",
+        "turn": 5,
+        "requiredTerms": [
+          "lock",
+          "letter"
+        ],
+        "description": "Lock checked; letter not discussed"
+      }
+    ]
+  }
+}

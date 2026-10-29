@@ -231,11 +231,12 @@ await auto('B-2', 'a failing recall is reported and the turn still gets its text
   const exec = { agent: { session: { header: { id: sessionId, cwd, agentPreset: binding.agentPreset } } } }
   // The realistic failure: the engine backend is selected but not installed. It is
   // set through the same RPC the settings page uses, so this is the user-facing path.
-  await dispatch({}, 'setSettings', { patch: { memoryBackend: 'api' } })
-  const failed = await inject.buildRecall(binding, 'something to look up', 1, state.getSettings(), exec, sessionId)
-  await dispatch({}, 'setSettings', { patch: { memoryBackend: 'agent' } })
+  await dispatch({}, 'setSettings', { patch: { memoryBackend: 'api', vectorSource: 'local' } })
+  const failed = await inject.buildRecall(binding, 'title mem-b2a', 1, state.getSettings(), exec, sessionId)
+  await dispatch({}, 'setSettings', { patch: { memoryBackend: 'agent', vectorSource: 'local' } })
   assert.ok(failed.errors.length > 0, 'the failure is carried out, not swallowed')
-  assert.match(failed.errors.join(' '), /private recall failed/)
+  assert.match(failed.errors.join(' '), /semantic recall failed/)
+  assert.match(failed.text, /mem-b2a/, 'lexical fallback still returns the matching memory')
   assert.equal(typeof failed.text, 'string', 'the caller still receives a string to inject')
   const healthy = await inject.buildRecall(binding, 'something to look up', 2, state.getSettings(), exec, sessionId)
   assert.deepEqual(healthy.errors, [], 'a healthy turn reports nothing')

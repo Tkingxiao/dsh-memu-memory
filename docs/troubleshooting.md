@@ -10,7 +10,7 @@
 |---|---|
 | §1 硬规则（全文） | `AGENTS.md` 一句话版 + 本文件附录 E 全文 |
 | §2.1 模块地图 · §2.2 调用链 · §2.3 数据铁律 | 本文件 附录 A / B / C |
-| §3 出过的问题（3.0–3.15） | 本文件 |
+| §3 出过的问题（3.0–3.20） | 本文件 |
 | §4 改动流程 · §5 扩展点 · §10 提交前清单 | `docs/contributing.md` |
 | §6 宿主事实与 API 速查（6.1–6.7，除 6.3） | `docs/host-api.md` |
 | §6.3 三种 exec 形状 | 本文件 附录 D |
@@ -32,6 +32,7 @@
 同文件夹里某条记忆凭空消失 / 新会话侧边栏空 → §3.17
 聊很久一条记忆都没写 → §3.18
 人格预设会话里完全没有记忆 → §3.19
+鉴权 / 401/403 行为说不清 → §3.20
 ```
 
 ## 3. 出过的问题：症状 → 落点 → 守卫
@@ -203,22 +204,47 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 - **空闲窗口没落在应用开着的时候。** 巡检定时器只在应用运行时存在；应用关掉时结束的对话等不到那次 `runSleepPass`，而用户一回来发消息，`lastTurnAt` 就被顶新了。现在启动后 8 秒会补跑一次（最多 2 个会话），默认空闲阈值也从 8 分钟降到 3 分钟。
 - **新回合被评估为「不值得整理」。** `assessConsolidationValue` 只拒绝两种：`lastSleepSeq` 之后没有任何人类消息；或只有一条纯应答（「谢谢」「好的」「ok」，无工具调用）。其余都会进 fork，由整理提示词决定写不写——**写 0 条是合法结果**，不是故障。
 - **整理失败一直退避。** 看 binding 的 `lastSleepError` / `sleepRetryAt` / `sleepAttempts`。会话被删会得到 `session "…" not found`，现在会标 `sessionGone: true` 并停止重试（以前会每小时重来）。
+- **fork 失败被当成成功。** 旧版只等 `whenIdle()`；turn error 也会 resolve，于是 `lastSleepSeq` 被推进。现在 fork 必须继承父 `provider` / `model`（活跃会话取最近一轮 `requestHeader().config`，关闭会话取最后一条 `request/header` 的 `data.header.config`）；没有路由就拒绝创建，报 `cannot inherit the parent model/provider`。`whenIdle` 后还要检查 `turn/end.data.reason.kind === 'completed'`，`error` / `aborted` / 没有 `turn/end` 都返回 `ok:false`，不推进游标，由 `runSleepPass` 记 `lastSleepError`、`sleepRetryAt`、`sleepAttempts` 退避重试。
 
-**守卫**：`tests/cycle.test.mjs`（空闲阈值、启动补偿、`sessionGone` 只标记一次、寒暄不 fork）+ `tests/consolidation-value.test.mjs`（评估边界：插件通知不算人类消息、纯应答跳过、「我不吃香菜」这种五个字的偏好必须留下、`lastSleepSeq` 之后的尾巴才算）。手工核对：`state.json` 里 `lastSleepAt` / `lastSleepSeq` / `sessionGone` / `sleepAttempts` 四个字段。
+**守卫**：`tests/cycle.test.mjs`（空闲阈值、启动补偿、`sessionGone` 只标记一次、寒暄不 fork、失败 fork 必须退避）+ `tests/consolidation-value.test.mjs`（评估边界：插件通知不算人类消息、纯应答跳过、「我不吃香菜」这种五个字的偏好必须留下、`lastSleepSeq` 之后的尾巴才算）+ `tests/consolidation-fork.test.mjs`（继承父模型、失败 turn 不推进 `lastSleepSeq`）。手工核对：`state.json` 里 `lastSleepAt` / `lastSleepSeq` / `sessionGone` / `sleepAttempts` / `lastSleepError` / `sleepRetryAt` 六个字段。
 
 ### 3.19 人格预设（agent preset）的会话里完全没有记忆（S1 绑定 → S4 注入）
 
-**症状**：切到「完整人格」类预设（例如 `i-am-yuike`、`yuike-standard`、`yuike-ptc`）之后，那个会话里既没有 `<memory-anchor>`、也没有 `memu_*` 工具，`state.json` 的 `sessions` 里连这个会话的 binding 都没有（不是「写了没读到」，是「从来没接上」）。
+**症状**：切到「完整人格」类预设（例如 `i-am-yuike`、`yuike-standard`、`yuike-ptc`）之后，那个会话里既没有 `<memory-anchor>`、也没有 `memu_*` 工具，`state.json` 的 `sessions` 里连这个会话的 binding 都没有（不是「写了没读到」，是「从来没接上」）。这是**补挂之前**的状态，不等于所有预设会话都没有 `memu_*` 工具——工具面见本节「边界」。
 
 **落点**：预设会话的「模型可见插件集」是它自己那份 `cordis.yml` 清单，整棵子树是独立 scope——`agent/pre-step` 只会向自己的祖先冒泡，永远到不了部署级实例的监听器，于是 `ensureSession` 从不执行。`persona` 的 `complete: true` 只是把 system prompt 段剥掉，**不是原因**；所以「把 memu 加进预设」和「改预设的 cordis.patch.yml」都不是本插件该做的事（那是别人的人格插件）。
 
 **人格把提示词吃掉了**：`persona` 的 `complete: true` 会把本插件注入的 system prompt 段整段丢弃（实测 `E:p` 的会话 `system/message` 只有人格正文，但工具链里 `memu_private_*` 是在的）。仅靠 system prompt 段的话，模型有工具却不知道可以主动写。现在改为**首步用消息投放一次 `<memory-guide>`**（`binding.guideMessageAt` 去重），并在文末提示「没有 `memu_*` 工具就忽略本段」。
 
-**现在的做法**：`lib/preset-scope.js` 每 10 秒枚举 `ctx.get('agents').list()`，对**不在本插件 scope 树里**的会话（判据是沿 `agent.ctx.fiber` 往上找本插件的 fiber，找不到才算），在它**自己的 ctx** 上补挂 `registerInjection(ctx, { guide: false })`——只给记忆锚点，不承诺预设没有的工具。已挂过的按 agent ctx 记在进程级登记表里，会话消失就卸载；正常会话（同一棵树）跳过，避免注入两遍。
+**现在的做法**：`lib/preset-scope.js` 每 10 秒枚举 `ctx.get('agents').list()`，对**不在本插件 scope 树里**的会话（判据是沿 `agent.ctx.fiber` 往上找本插件的 fiber，找不到才算），在它**自己的 ctx**（`raw?.ctx || agent?.ctx || agents.get(sessionId)?.ctx`，`lib/preset-scope.js:71`）上补挂 `registerInjection(actx, { guide: false, guideMessage: true })`（`lib/preset-scope.js:79`）——**首参必须是这个 agent 自己的 ctx**，不是部署级实例的 ctx，否则绑定和注入都会挂错会话。`guide: false` 只表示不注册 system prompt 的 guide 段；规则改由 `guideMessage: true` 在首步用消息投放一次，正文自带「工具列表里没有 `memu_*` 就忽略本段」，所以不承诺预设没有的工具。已挂过的按 agent ctx 记在进程级登记表里，会话消失就卸载；正常会话（同一棵树）跳过，避免注入两遍。
 
-**边界**：这样接上的会话**只有注入，没有 `memu_*` 工具**（工具面由预设的清单决定，宿主的 tool registry 全局层对这些会话是空的）。要写记忆得让它进一次标准会话，或等该预设的维护者自己列上这个插件。
+**边界**要分三件事讲：① **注入监听**——补挂到 agent 自己的 ctx 后，锚点与召回上下文能送达；② **guide 投放**——首步一条 `<memory-guide>` 消息，会话内只发一次，正文自己声明「没有工具就忽略」；③ **最终工具面**——由该预设自己的 `cordis.yml` 清单与宿主 scope 决定，本插件**不能**从「有没有列上它」推断出一定有或一定没有。历史观察里同一节既记过「没有工具」，也记过某些预设的工具链里有 `memu_private_*`；**逐预设的真实工具名单仍须真机核实（W3）**，核实前不要写成「只有注入、没有工具」，也不要反过来写成「列上插件就一定可用」。真要在没有工具的会话里写记忆，进一次标准会话仍是最直接的办法——但如果该预设确实列了本插件且工具注册成功，记忆可以直接在那个会话里写。预设文件属于它的维护者，不要为了让工具出现去改别人的插件。
 
 **守卫**：`tests/preset-scope.test.mjs`（同树跳过、兄弟树挂上、只挂一次、agent 消失就卸载、子 agent 与无 ctx 的条目跳过、无 `agents` 服务不算错）。手工核对：日志里有 `attached memory injection to preset conversation <id>`，且 `state.json` 的 `sessions` 出现该会话。
+
+### 3.20 鉴权矩阵验证边界（W4）
+
+**症状**：本插件页面能打开，但说不清换旧前缀、换请求类型、带不带宿主凭据时会不会被挡；或者为了「修 401/403」在插件里另写一套认证、放行 localhost。
+
+**落点**：唯一入口是 `lib/rpc.js` 的 `registerRpc()`。同一 handler 分别注册在 `/dsh-memu-memory` 与旧 `/dsh-memu` 两个 prefix 上；handler 第一句 `c.connection.requestRejection(req)`，返回非 `undefined` 就原样写回状态并 `return`，之后才解析 URL、读正文、`dispatch`。插件不自己验 token/cookie；**不要**为测试或运行加「localhost 放行」、关闭认证、或改用共享 `/api`。
+
+**已验证（`tests/webui-auth.test.mjs`，2026-10-29，8 条全过）**：
+
+- 两条注册项各取自己的 `handler` 驱动；正式前缀与旧前缀各覆盖 UI（`/ui`、`/settings`）、资源（`/ui-assets/client.js`、`/ui-assets/icon.png`）、POST RPC（`createLibrary`、`getMemory`、`getAttachment`、`exportLibrary`、`importMemories`）、附件缩略图（`/attachment/<libraryId>/<sha256>`）、导出（`GET /export/<libraryId>.zip`）、导入（`POST /import/<libraryId>.zip`）。
+- `requestRejection` 返回 401/403 时响应体为 `unauthorized`/`forbidden`；请求体的异步迭代器一次都没有被拉取；`DSH_MEMU_HOME` 下的读/写探针为 0；`state.json`、索引、附件目录快照不变。
+- 放行时同一路径仍可用：UI/资源 200，附件缩略图 200 `image/webp`，导出 ZIP 可解出 `memories.json`，ZIP 导入与 `importMemories` 确实写目标库；POST 正文的首次拉取发生在 `requestRejection` 调用之后（调用计数为 1）。
+- 附件用损坏的 `*.media.json` 作绊线：放行请求走到 `attachmentThumbnail` 返回 503 `attachment unavailable`，同样的 401/403 请求仍是 401/403，证明拒绝发生在附件池读取之前。
+- 非 POST（`DELETE /ui`、`GET /listLibraries`）也先鉴权：401/403 优先于 405。
+
+**未验证 / 边界**：
+
+- **没有真机浏览器凭据测试**：未用真实宿主的 launch token、cookie、缺失/过期凭据及宿主支持的其他拒绝情形跑过；W4 只能记「部分验证」。真机证据不得保存 token/key/cookie。
+- 测试直接调用 `webServer.register` 捕获的 handler，**没有经过真实宿主的 HTTP prefix 匹配、URL 解码与静态资源层**；这些属于 `dsh-host-webserver`/`dsh-client-connection`，插件只消费 `requestRejection`。
+- 未验证跨站/CSRF、SameSite、代理头（`X-Forwarded-*`）与 WebSocket upgrade；插件不实现额外认证，也不应自行加。
+- 未验证 401/403 之外的宿主拒绝形态；当前代码把 `requestRejection` 的数字状态原样写回，只有 `undefined` 才放行。
+- 本边界只覆盖本插件路由；共享 `/api`、宿主 HTTP 服务与其他插件路由不在范围内。
+
+**守卫**：`tests/webui-auth.test.mjs`（两前缀各自 handler、401/403/放行、正文零拉取、home 读写探针、快照与附件池绊线）。手工排查时先确认 `requestRejection` 的调用计数为 1，再看拒绝响应体是否只有 `unauthorized`/`forbidden`；不要靠「页面能打开」判断鉴权通过。
 
 ---
 
@@ -247,12 +273,15 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.15 | 保存成功但没变 / 字段改不回来 | `tests/update-fields.test.mjs`、`tests/browser.test.mjs`；确认顺序：`unknown memory field` → `allowed` 与 `privateUpdate` 签名 → `memu_private_update` schema → `accuracyOf` 是否重算。 |
 | §3.16 | 弹窗选了却两边都勾上 | `tests/new-session-gate.test.mjs`（四张卡 + 四种「记住的选择」都断言 `useLibrary`/`useGlobal`，且换库不改层）；看 `state.json` 里该 binding 的两个布尔值是否等于卡片。 |
 | §3.17 | 同文件夹里某条记忆凭空消失 | `tests/visibility-migration.test.mjs`（迁移保留 context / 读时归一 / 落盘可证 / 幂等 / 拒绝 session / 空白作用域互读 / secret 不自动注入 / context 隔离）+ `tests/context-scope.test.mjs`；手工跑 `node scripts/migrate-visibility.mjs`，看条目上有没有 `migratedFromVisibility: 'session'`，以及 `context` 与当前会话是否一致。 |
-| §3.18 | 聊很久一条记忆都没写 | `tests/cycle.test.mjs`（阈值 / 启动补偿 / `sessionGone` 只标一次 / 寒暄不 fork）+ `tests/consolidation-value.test.mjs`（评估边界）；手工看 `state.json` 的 `lastSleepAt`/`lastSleepSeq`/`sessionGone`/`sleepAttempts`。 |
+| §3.18 | 聊很久一条记忆都没写 | `tests/cycle.test.mjs`（阈值 / 启动补偿 / `sessionGone` 只标一次 / 寒暄不 fork / fork 失败必须退避）+ `tests/consolidation-value.test.mjs`（评估边界）+ `tests/consolidation-fork.test.mjs`（继承父模型路由 / 失败 turn 不推进 `lastSleepSeq`）；手工看 `state.json` 的 `lastSleepAt`/`lastSleepSeq`/`sessionGone`/`sleepAttempts`/`lastSleepError`/`sleepRetryAt`。 |
 | §3.19 | 人格预设会话里完全没有记忆 | `tests/preset-scope.test.mjs`（同树跳过 / 兄弟树挂上 / 只挂一次 / agent 消失就卸载 / 子 agent 跳过）；日志 `attached memory injection to preset conversation`；`state.json` 里该会话出现 binding。 |
+| §3.20 | 鉴权矩阵 / 401/403 副作用 | `tests/webui-auth.test.mjs`：两前缀各自 handler、401/403/放行、正文零拉取、`DSH_MEMU_HOME` 读写探针为 0、库/附件快照不变；真机凭据与宿主路由层未验证。 |
 
 ## 附录 A · 模块地图（原 §2.1）
 
 ### 2.1 模块地图
+
+<!-- rpc-method-count: 83 -->
 
 | 文件 | 职责 / 什么时候碰它 |
 |---|---|
@@ -266,7 +295,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | `lib/private.js` | 私有整理：当前对话、历史 fork、notice 消息 |
 | `lib/curator.js` / `lib/cycle.js` | 全局 curator 与 `pending_review`；空闲整理 pass（过期/降级/晋升/自动整理） |
 | `lib/mood.js` / `lib/budget.js` / `lib/snippet.js` | 情绪价与峰值；token 换算（中文≈1 字符/token、英文≈3.4，任何 token 都走它）；注入片段裁剪 |
-| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 72 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
+| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 80 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
 | `lib/graph.js` / `lib/context.js` / `lib/media.js` | 关系边与实体；说话人/频道/角色/世界线/知情边界；附件采集、缩略图、受保护路由、ZIP |
 | `lib/prompts.js` + `lib/prompts/` | 提示词加载/覆盖/恢复/domain 变体解析 |
 | `lib/engine.js` / `lib/memu.js` / `lib/memu-config.js` | Python 引擎安装探测切换回滚；MemU CLI 适配（**所有 CLI 字符串只在这里**）；`~/.memu/config.env` 的 embedding |

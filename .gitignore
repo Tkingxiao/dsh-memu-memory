@@ -1,9 +1,9 @@
 node_modules/
 .engine-smoke/
 .screenshots/
-tests/
 *.log
 *.tgz
 coverage/
 .tmp-*
 .DS_Store
+%SystemDrive%/

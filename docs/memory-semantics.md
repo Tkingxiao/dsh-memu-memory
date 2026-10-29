@@ -28,12 +28,13 @@
 
 ### 8.4 注入
 
-- 静态 guide 在 system prompt（按 domain 选变体）；动态记忆走 plugin 消息。
+- 静态 guide 默认在 system prompt（按 domain 选变体）；动态记忆走 plugin 消息。`persona` 带 `complete: true` 的预设会把 system prompt 段整段丢弃，这类会话改由**一次性消息**投放：`withGuideMessage`（`lib/inject.js:703`）按 `binding.guideMessageAt` 在**首步**追加一条 `<memory-guide>` 插件消息，会话内只发一次（`:708` 只在 `step === 1` 投放，`:719` 发完写 binding；fail-open，`:721`）；投放的是静态规则，动态记忆仍然不进 system prompt。
 - 首轮锚点 + 每用户回合最多一次；长工具回合仅有新的真实人类消息批次时追加一次，普通工具步骤不触发。私有优先、全局补充；冲突时私有胜。
 - **`injectedIds` 只能记真正进入文本的条目**，否则从未展示的记忆被白白压制 8 轮。
 - 锚点分段预算 pin 40% / core 30% / global 30%；pin 装不下时末尾明示「另有 N 条未展开」，**不静默丢弃**。
 - 预算单位是**模型 token**不是字符：中文 ≈1 字符/token、英文 ≈3.4，一律走 `lib/budget.js`，**不要再用 `tokens * 3`**（英文口径，中文超支约 3 倍）。
 - 压缩后下一条用户消息重注入锚点；子代理不注入。文件夹两开关都关 → 不注入（看 clamp 后生效值，不是 binding 原始值）。召回为空必须留信号（§1.10）。
+- **召回排序的准确口径**：`privateWeighted`（`lib/memory.js:643`）只服务**私有召回流水线**（`privateRecall` 调用它）；全局召回（`globalRecall`，`lib/memory.js:1526`）走 `localRecall`，不经过它。cue 会经 `cueRecall`（`lib/inject.js:124`）**间接**调用 `privateRecall`，所以**不能**概括成「cue 不走私有排序」。心境一致性与唤起窄化**默认关闭**（`moodEnabled: false`，`lib/memory.js:645`），只有 `|valence| ≥ 0.15` 或 `|arousal − 0.35| ≥ 0.1` 才打开（`lib/memory.js:1110`，阈值见 `:75` 与 `lib/mood.js:27`），平缓对话里两项乘数恒为 1。`privateRecall` 的 topK 兜底是「传入 topK → `settings.privateTopK`（默认 5）→ 4」（`lib/memory.js:1107`）：引用 3 或 4 时必须说清是**设置默认值**还是**代码兜底值**，两个数不是同一个。
 
 ### 8.5 提示词管理
 
@@ -94,15 +95,41 @@
 
 ---
 
-### 8.10 人格预设（agent preset）会话：接得上注入，接不上工具
+### 8.10 人格预设（agent preset）会话：注入要另挂，工具面按预设清单
 
 预设会话的「模型可见插件集」不是 host composition，而是它自己那份 `cordis.yml`——整棵子树是独立 scope，`agent/pre-step` 只向自己的祖先冒泡，到不了部署级实例的监听器。所以预设会话最初的表现是「连 binding 都没有」，不是「写了没读到」。
 
-插件侧的处理（`lib/preset-scope.js`）：每 10 秒枚举 `ctx.get('agents').list()`，沿 `agent.ctx.fiber` 往上找本插件的 fiber——找不到（= 不在自己这棵树里）才在**该 agent 自己的 ctx** 上补挂 `registerInjection(ctx, { guide: false })`。同树的正常会话跳过，避免注入两遍；agent 消失就卸载。只挂锚点、不挂 guide，因为预设清单里没有 `memu_*` 工具，guide 会把不存在的工具说成可用。
+插件侧的处理（`lib/preset-scope.js`）：每 10 秒枚举 `ctx.get('agents').list()`，沿 `agent.ctx.fiber` 往上找本插件的 fiber——找不到（= 不在自己这棵树里）才在该 agent 自己的 ctx（`lib/preset-scope.js:71` 取 `raw?.ctx || agent?.ctx || agents.get(sessionId)?.ctx`）上补挂 `registerInjection(actx, { guide: false, guideMessage: true })`（`lib/preset-scope.js:79`）。**首参必须是这个 agent 自己的 ctx**，不是部署级实例的 ctx，否则绑定与注入会挂错会话。`guide: false` 只表示**不注册 system prompt 的 guide 段**（预设未列本插件时没有 `memu_*` 工具；即便列了，`persona` 的 `complete: true` 也会丢弃该段），规则改由 `guideMessage: true` 用一次性消息投放，正文自带「工具列表里没有 `memu_*` 就忽略本段」。同树的正常会话跳过，避免注入两遍；agent 消失就卸载。
 
-**提示词怎么办**：`persona` 常带 `complete: true`——装配完成后它会被恢复为唯一的 system prompt 段，本插件 `systemPrompt.section()` 注册的 guide 会被整段丢弃（实测 RP 会话的 `system/message` 只有人格正文）。所以预设会话改用**消息**投放规则：首步追加一次 `<memory-guide>` 插件消息（`withGuideMessage`，按 `binding.guideMessageAt` 会话内只发一次），并注明「工具列表里没有 `memu_*` 就忽略本段」。工具确实存在的预设会话（例如 RP 里的 `yuike`，工具链里有 `memu_private_*`）因此重新拿到主动性规则，而不是只有一个 anchor。
+**提示词怎么办**：`persona` 常带 `complete: true`——装配完成后它会被恢复为唯一的 system prompt 段，本插件 `systemPrompt.section()` 注册的 guide 会被整段丢弃（实测 RP 会话的 `system/message` 只有人格正文）。所以预设会话改用**消息**投放规则：首步追加一次 `<memory-guide>` 插件消息（`withGuideMessage`，按 `binding.guideMessageAt` 会话内只发一次），并注明「工具列表里没有 `memu_*` 就忽略本段」。工具确实存在的预设会话因此重新拿到主动性规则，而不是只有一个 anchor。
 
-**边界要讲清楚**：这样接上的会话只有**注入**（锚点、召回上下文），**没有工具**——工具面由预设的清单决定，宿主的 tool registry 全局层对这些会话是空的。要写记忆，得让这段对话进一次标准会话。反过来说，**不要为了这个去改别人的人格插件**：预设文件属于它的维护者，插件只能在自己的 scope 里做适配。
+**边界要分三件事讲**：① **注入监听**——补挂到 agent 自己的 ctx 后，锚点与召回上下文能送达；② **guide 投放**——首步一条 `<memory-guide>` 消息，会话内只发一次，正文自己声明「没有工具就忽略」；③ **最终工具面**——由该预设自己的 `cordis.yml` 清单与宿主 scope 决定，本插件**不能**从「有没有列上它」推断出一定有或一定没有。历史记录里曾出现过某些 RP 会话工具链含 `memu_private_*`，但 2026-10-29 复核无法把它归到本机 `yuike` bundle（该 bundle 未列本插件，且本机无 `agentPreset=yuike` 的真机会话），只能保留为未复核历史观察；**逐预设的真实工具名单仍须真机核实（W3）**，核实前不要写成「只有注入、没有工具」，也不要反过来写成「列上插件就一定可用」。真要在没有工具的会话里写记忆，进一次标准会话仍是最直接的办法——但如果该预设确实列了本插件且工具注册成功，记忆可以直接在那个会话里写。**不要为了这个去改别人的人格插件**：预设文件属于它的维护者，插件只能在自己的 scope 里做适配。
+
+### 8.11 全局整理的间接输入边界
+
+`startGlobalCuration` 不直接读私有 index：curator 输入里的 `existing_global_index` 来自 `compactGlobalIndex()`，只含全局条目（`archived` 被滤掉、`pending_review` 保留，正文截 600 字符）。但同一份输入还包含每个会话经 `condenseEvents`（`lib/curator.js:27`）压缩后的转录，这条是**内容级**通路，不按 `visibility` 过滤：
+
+- 保留：`source.kind === 'user'` 的用户原话、助手正文、工具调用参数（截 300 字符）、工具结果正文（截 400 字符）。`memu_private_recall` 的 secret 条目正是从工具结果进入转录的，助手也可能在正文里转述它。
+- 丢弃：所有插件消息（`source.kind` 不是 `user`），包括自动锚点与自动召回注入。原因是来源类型，**不是因为条目带 `secret`**；即便构造一条带 secret 的自动注入消息，它也止步于转录之前（`secret` 本身并不会自动注入，这不是一条生产通路）。
+- 唯一的字符串过滤是 `redactSecrets`（`lib/paths.js`）：只遮 `sk-…`、`Bearer …`、`api_key=…`、URL 内嵌凭据这类**凭据形状**，不识别普通私密叙述，也不看 `visibility`；提交层同样只过这一道，不校验内容来源。
+
+因此 **`secret` 不是保险箱**：能进入 curator prompt 的内容，理论上也能被模型抄进输出并落到全局 index。合成探针已证明到「输入通道存在」，未证明真实模型会照抄，也未证明真机发生过泄漏。本次**不新增**防泄漏、来源追踪或输入白名单，止于「探针 + 文档」；哪些层必须剥离什么、助手/用户转述如何处理、失败与重试是否同样拦截，属于强契约，留待用户决定后单独实施。
+
+探针：`tests/curator-probe.test.mjs` 用六通道各自唯一的合成标记，逐层断言压缩转录 → 真实 curator prompt → 模拟输出 → 提交后的全局 index；只写 `os.tmpdir()` + `DSH_MEMU_HOME`，不读取真实私有库。
+
+### 8.12 向量来源与受管召回（MemU 路径）
+
+默认 `memoryBackend="agent"` 的有效路由是 `lexical`，不调用 embedding。启用向量库（`memoryBackend="api"`）后，`vectorSource="local"` 对应 `managed-local`，`vectorSource="api"` 对应 `remote-api`；API 来源也可配置 localhost 端点。两者复用 MemU 存储与检索，不维护平行向量数据库。`memoryMode`（`local` / `cloud`）仅保留 MemU 存储兼容语义，不是 embedding 开关，也不覆盖来源选择。旧 `hybridRecall` / `hybridRecallMode` 生产开关已移除。
+
+总结生成与向量路由解耦：常规私有整理通过 Agent fork；显式远程总结动作调用配置的聊天端点，其产物同样经 `privateRemember` 提交。启用向量不自动启用远程总结；聊天/总结模型不参与召回重排，也不作为向量失败回退。
+
+受管召回只在候选阶段把词法结果与 MemU semantic retrieve 结果按 RRF（k=60）融合：先按 `isMemoryEligible`、`visibleToSession`、自动召回的 `secret` 排除及 context/scope 过滤，再按 canonical id 去重与候选上限处理。显式与自动召回共用候选融合；`touchAccessMany` 仍只对显式召回执行。精确记忆 id 走直达路径，切库期间中止以避免混合两个库。
+
+服务不可用时仅回退词法并保留可见错误信号；不暗切远端、不调用 LLM。真实 embedding 质量、延迟和跨模型收益仍需单独评测；W8（助手重复提示）已决定不做，结论与理由见 `AGENTS.md`。
+
+模型下载、进度与 profile 切换/迁移已有实现，但真实模型/runtime 下载、原生推理及切换全链路在本轮仍未验证。candidate / `pending` artifact 不是可用制品，必须通过制品、校验与迁移门槛后才可进入可用/激活状态。
+
+回归与管线测试：`tests/hybrid-recall.test.mjs` 仅保留 RRF、去重、稳定排序、资格过滤与候选上限等通用融合 helper 覆盖；managed vector 行为由 `tests/managed-memory.test.mjs` 覆盖。
 
 ---
 

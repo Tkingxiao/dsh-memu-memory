@@ -1,0 +1,279 @@
+{
+  "name": "boundary — 人工金标候选（待审核）",
+  "status": "gold-candidate-pending-review",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "subclass": "boundary",
+  "notes": "候选样本，尚未经过人工逐条确认，不是 gold set。同一措辞存在于其他 channel/character/world/branch/knownBy，上下文应排除。",
+  "entries": {
+    "mem-gcc-bnd-world-jade": {
+      "id": "mem-gcc-bnd-world-jade",
+      "title": "江湖·青玉佩",
+      "content": "掌门把青玉佩交给江徊，说凭玉佩可以调动三名暗卫。",
+      "tags": [
+        "信物",
+        "玉佩"
+      ],
+      "ageDays": 8,
+      "context": {
+        "worldId": "jianghu"
+      }
+    },
+    "mem-gcc-bnd-world-spaceship": {
+      "id": "mem-gcc-bnd-world-spaceship",
+      "title": "星舰·青玉佩",
+      "content": "星舰舰长把青玉佩交给江徊保管，凭玉佩可以调动舰队守卫。",
+      "tags": [
+        "信物",
+        "玉佩"
+      ],
+      "ageDays": 8,
+      "context": {
+        "worldId": "scifi"
+      }
+    },
+    "mem-gcc-bnd-char-jiang": {
+      "id": "mem-gcc-bnd-char-jiang",
+      "title": "江徊的旧伤",
+      "content": "江徊右腕有旧伤，握剑久了会发抖，阴雨天更明显。",
+      "tags": [
+        "旧伤",
+        "江徊"
+      ],
+      "ageDays": 18,
+      "context": {
+        "characterId": "jiang"
+      }
+    },
+    "mem-gcc-bnd-char-xie": {
+      "id": "mem-gcc-bnd-char-xie",
+      "title": "谢无咎的旧伤",
+      "content": "谢无咎右腕也有旧伤，但他从不让人看见换药。",
+      "tags": [
+        "旧伤",
+        "谢无咎"
+      ],
+      "ageDays": 18,
+      "context": {
+        "characterId": "xie"
+      }
+    },
+    "mem-gcc-bnd-channel-tavern": {
+      "id": "mem-gcc-bnd-channel-tavern",
+      "title": "客栈里的约定",
+      "content": "客栈里约好三更在后门碰头，带两匹马。",
+      "tags": [
+        "约定",
+        "客栈"
+      ],
+      "ageDays": 6,
+      "context": {
+        "channelId": "tavern"
+      }
+    },
+    "mem-gcc-bnd-channel-council": {
+      "id": "mem-gcc-bnd-channel-council",
+      "title": "议事厅的约定",
+      "content": "议事厅里定的是四更从正门走，只带一封密信。",
+      "tags": [
+        "约定",
+        "议事厅"
+      ],
+      "ageDays": 6,
+      "context": {
+        "channelId": "council"
+      }
+    },
+    "mem-gcc-bnd-branch-fire": {
+      "id": "mem-gcc-bnd-branch-fire",
+      "title": "焚城线结局",
+      "content": "焚城线里，江徊留在废墟守城，没有跟船南下。",
+      "tags": [
+        "结局",
+        "焚城线"
+      ],
+      "ageDays": 14,
+      "context": {
+        "branchId": "route-fire"
+      }
+    },
+    "mem-gcc-bnd-branch-ice": {
+      "id": "mem-gcc-bnd-branch-ice",
+      "title": "渡冰线结局",
+      "content": "渡冰线里，江徊在渡口上了船，最后去了南屿。",
+      "tags": [
+        "结局",
+        "渡冰线"
+      ],
+      "ageDays": 14,
+      "context": {
+        "branchId": "route-ice"
+      }
+    },
+    "mem-gcc-bnd-known-private": {
+      "id": "mem-gcc-bnd-known-private",
+      "title": "只有谢无咎知道",
+      "content": "密道入口在祠堂供桌下，只有谢无咎知道。",
+      "tags": [
+        "密道",
+        "秘密"
+      ],
+      "ageDays": 9,
+      "context": {
+        "knownBy": [
+          "xie"
+        ]
+      }
+    },
+    "mem-gcc-bnd-public-map": {
+      "id": "mem-gcc-bnd-public-map",
+      "title": "密道地图",
+      "content": "密道入口在祠堂供桌下，这张地图在议事厅公开挂着。",
+      "tags": [
+        "密道",
+        "地图"
+      ],
+      "ageDays": 9,
+      "context": {}
+    }
+  },
+  "samples": [
+    {
+      "id": "gcc-bnd-char",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "boundary",
+      "query": "江徊的右腕为什么握剑会抖？",
+      "context": {
+        "worldId": "jianghu",
+        "characterId": "jiang"
+      },
+      "time": "2026-10-05T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-bnd-char-jiang"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-bnd-char-xie"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-bnd-char-jiang",
+        "mem-gcc-bnd-char-xie",
+        "mem-gcc-bnd-world-jade",
+        "mem-gcc-bnd-world-spaceship"
+      ]
+    },
+    {
+      "id": "gcc-bnd-branch",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "boundary",
+      "query": "焚城线里江徊最后留在哪里？",
+      "context": {
+        "branchId": "route-fire",
+        "worldId": "jianghu"
+      },
+      "time": "2026-10-06T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-bnd-branch-fire"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-bnd-branch-ice"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-bnd-branch-fire",
+        "mem-gcc-bnd-branch-ice",
+        "mem-gcc-bnd-world-jade",
+        "mem-gcc-bnd-known-private"
+      ]
+    },
+    {
+      "id": "gcc-bnd-channel",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "boundary",
+      "query": "客栈那边约的是三更后门还是四更正门？",
+      "context": {
+        "channelId": "tavern"
+      },
+      "time": "2026-10-07T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-bnd-channel-tavern"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-bnd-channel-council"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-bnd-channel-tavern",
+        "mem-gcc-bnd-channel-council",
+        "mem-gcc-bnd-known-private",
+        "mem-gcc-bnd-public-map"
+      ]
+    },
+    {
+      "id": "gcc-bnd-known",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "boundary",
+      "query": "祠堂供桌下的密道位置，谁可以知道？",
+      "context": {
+        "characterId": "xie"
+      },
+      "time": "2026-10-08T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-bnd-known-private"
+      ],
+      "forbiddenIds": [],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-bnd-known-private",
+        "mem-gcc-bnd-public-map",
+        "mem-gcc-bnd-char-jiang",
+        "mem-gcc-bnd-channel-tavern"
+      ]
+    },
+    {
+      "id": "gcc-bnd-world",
+      "status": "gold-candidate-pending-review",
+      "draft": true,
+      "notGold": true,
+      "gold": false,
+      "review": "pending",
+      "subclass": "boundary",
+      "query": "星舰世界里青玉佩能调动什么？",
+      "context": {
+        "worldId": "scifi"
+      },
+      "time": "2026-10-09T12:00:00+08:00",
+      "expectedIds": [
+        "mem-gcc-bnd-world-spaceship"
+      ],
+      "forbiddenIds": [
+        "mem-gcc-bnd-world-jade"
+      ],
+      "noAnswer": false,
+      "library": [
+        "mem-gcc-bnd-world-spaceship",
+        "mem-gcc-bnd-world-jade",
+        "mem-gcc-bnd-branch-fire",
+        "mem-gcc-bnd-branch-ice"
+      ]
+    }
+  ]
+}

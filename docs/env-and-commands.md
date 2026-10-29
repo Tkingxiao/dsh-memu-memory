@@ -52,4 +52,17 @@ python -m memu commit payload.json --json --db <db>
 
 `commit` payload：`{ recall_files: [{ name, track: memory, description, content }], resource: [], user: {} }`。
 
+### 9.5 本地向量运行时（受管，2026-10-30）
+
+**不再需要手工环境变量**：运行时（`onnxruntime-node` 1.31.1 + `onnxruntime-common` + `@huggingface/tokenizers`）由插件按 catalog pin 装进 `<dataDir>/downloads/embeddings/runtime/`，规格见 §14.13。`DSH_MEMU_EMBED_RUNTIME_DIR` 只剩「显式覆盖」用途：指向的目录里没有那三个包时会被忽略（`warn`）并回落到受管目录；也不需要 Ollama。
+
+```bash
+node scripts/local-runtime-install.mjs                      # 只读：打印 pin 的制品、状态、已装 checks
+node scripts/local-runtime-install.mjs --download           # 显式联网装（≈ 设置页「安装运行时」）
+node scripts/local-runtime-install.mjs --download --cache <dir>   # 用离线 tarball 装，仍按 pin 校验 bytes/sha256
+node scripts/local-runtime-install.mjs --target <dir> --platform win32-x64 --id <modelId> --shallow
+```
+
+状态 `installed / absent / unsupported / downloading / verifying / installing / failed / cancelled`；`unsupported` = catalog 没 pin 该平台原生库（如 `darwin-x64`）。装失败只 `warn` + 回词法召回，不会自动改用云端 embedding。
+
 ---
