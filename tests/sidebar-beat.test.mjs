@@ -155,7 +155,11 @@ async function paintTab() {
 test('mounting paints once and arms exactly one heartbeat', async () => {
   const tab = await paintTab()
   assert.equal(fullCalls(tab.calls).length, 1, 'the panel fetches the first screen once on mount')
-  assert.equal(intervals.length, 1, 'exactly one heartbeat interval is armed')
+  // 两个定时器：记忆心跳（秒级）+ 整理提醒的慢轮询（20s，跨会话失败提醒的数据源）。
+  // 真正的 beat 只允许有一个，且必须是秒级。
+  assert.equal(intervals.length, 2, 'the beat plus the consolidation-feed poll, nothing else')
+  assert.equal(intervals.filter(interval => interval.ms <= 5000).length, 1, 'exactly one short heartbeat interval is armed')
+  assert.equal(intervals[0].ms, Math.min(...intervals.map(interval => interval.ms)), 'the beat is the first timer, so intervals[0] targets it')
   assert.ok(intervals[0].ms > 0 && intervals[0].ms <= 5000, 'the beat is seconds apart, not minutes')
   assert.equal(visibilityListeners.size, 1, 'returning to the window is listened for')
 })

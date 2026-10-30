@@ -149,11 +149,14 @@ test('maybeCue falls back to a fixed sentence when no memory qualifies', async (
 
 test('a tense room pulls charged memories further ahead than a quiet one', async () => {
   const { sessionId, exec } = setup('arousal')
+  // 两条正文词面不同（dice 0.512，低于 TOPIC_DICE）：事实级去重上线后，同文改标题的
+  // 旧写法会被写入侧打标/召回侧折叠，唤醒度因子就测不到了。语义并行 + 显式 arousal
+  // 仍然隔离这个因子。
   const calm = await memory.privateRemember({
     exec, content: 'The hallway smelled of rain on warm stone.', title: 'hallway calm', arousal: 0.1, moodValence: 0.05,
   })
   const loud = await memory.privateRemember({
-    exec, content: 'The hallway smelled of rain on warm stone.', title: 'hallway loud', arousal: 0.95, moodValence: 0.05,
+    exec, content: 'Rain hammered the hallway stones while voices echoed off the walls.', title: 'hallway loud', arousal: 0.95, moodValence: 0.05,
   })
 
   async function gapAt(arousal) {
@@ -189,8 +192,9 @@ test('arousal cannot outrank a clearly better semantic hit', async () => {
 
 test('a mood that is tense but neither good nor bad still counts as a mood', async () => {
   const { sessionId, exec } = setup('tense')
+  // 正文词面不同（dice 0.514）：同文会被事实级去重拒绝，这里改写保持语义并行。
   const flat = await memory.privateRemember({ exec, content: 'The invoice is due on the fourteenth.', title: 'invoice', arousal: 0.1, moodValence: 0 })
-  const edge = await memory.privateRemember({ exec, content: 'The invoice is due on the fourteenth.', title: 'invoice edge', arousal: 0.9, moodValence: 0 })
+  const edge = await memory.privateRemember({ exec, content: 'The invoice payment must arrive by the fourteenth without fail.', title: 'invoice edge', arousal: 0.9, moodValence: 0 })
   // valence is exactly neutral here, so without the arousal gate this room would be
   // treated as "no mood at all" and arousal would never reach recallScore.
   state.setSessionMood(sessionId, { valence: 0, arousal: 0.9 })

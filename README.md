@@ -23,14 +23,14 @@
 
 ---
 
-`dsh-memu-memory` is built for long-form RP and companion chats. It gives a DSH conversation a memory that behaves like memory instead of a log: three retention layers that fade, a first-turn anchor plus at most one per-turn recall, provenance that cannot be quietly upgraded from "I inferred it" to "they said it", contradictions that wait for a decision instead of both being read as true, and an optional relationship graph with evidence. Speakers, characters, worlds and story branches form hard boundaries, and what a character is allowed to know stays separate from what actually happened.
+`dsh-memu-memory` is built for long-form RP and companion chats. It gives a DSH conversation a memory that behaves like memory instead of a log: three retention layers that fade, a first-turn anchor plus at most one per-turn recall, provenance that cannot be quietly upgraded from "I inferred it" to "they said it", contradictions that wait for a decision instead of both being read as true, near-identical facts collapse to one entry and one recall seat, and an optional relationship graph with evidence. Speakers, characters, worlds and story branches form hard boundaries, and what a character is allowed to know stays separate from what actually happened.
 
 It is **local-first by default**. The default `agent` backend stores full text in JSON indexes and recalls lexically — no Python, no embedding service, no API key. The `api` backend switches recall to the optional, pinned MemU engine (vector search). MemU is a plugin for people who want it, not a requirement for the plugin to start.
 
 > [!WARNING]
 > **Early-stage software.** This plugin is still early and may contain unforeseen errors, bugs or breaking changes. Back up your data, and please [report an issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) or send a pull request — feedback helps the project improve.
 
-> **Status:** 1.1.2. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
+> **Status:** 1.2.1. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
 
 ## Screenshots
 
@@ -99,6 +99,8 @@ For scale, the whole 4-hour session tree measured here consumed 132M input and 1
 
 The sidebar has exactly **one** entry: **MemU WebUI**. The memory wall and all settings live in the same navigation, with deep links such as `#/settings/memories`, `#/settings/folders` and `#/settings/stats`. The interface follows the browser locale (Chinese or English).
 
+**Private / global groups with multi-select.** The "Memories" page splits into **Private** and **Global** blocks (private first, default). The private block supports **multi-select**: bulk archive, restore and permanent delete (two-step confirm) — one failed row never eats the rest. Every row on the Global memory page has a "View" action that jumps straight to that entry on the wall.
+
 **In-place work.** Clicking a memory card opens a right-side drawer with the full text and the fields that decide how it behaves — title, content, tags, disclosure, confidence, open loop — plus save, archive, restore and "open in the browser" for heavier work. Archived memories can be deleted in the same drawer; the first click only arms it and the second confirms. Global memories are read-only in the drawer and link to their own page. Filters and scroll position stay where they were. Cards that carry images use the first usable attachment as a cover, and the drawer opens the full gallery; `secret` and `never_say` entries never receive a pixel URL, so they show a label instead.
 
 **Graph and list together.** The **Relations** tab renders the graph canvas and the adjacency list side by side (stacked on narrow screens), with the focus selector above them and link/entity/relationship tools below. There is no mode switch to forget.
@@ -107,13 +109,13 @@ The locally bundled D3 force layout preserves positions and the camera across ba
 
 | Page | What it is for |
 |---|---|
-| Memories | Cross-library wall, source/status/library/preview, in-place drawer, Relations tab |
+| Memories | Private/global grouped wall, source/status/library/preview, in-place drawer, multi-select bulk ops, Relations tab |
 | Engine & connection | Optional MemU engine install/switch, embedding endpoint, backups and restore |
 | Memory settings | Injection mode, token budgets, topK, relevance threshold, retention, automation |
 | Folders | Folder-level private/global ceiling, expandable conversations and their own switches |
 | Libraries | Create, rename, archive, restore, explicitly delete libraries |
 | Memory browser | Full-text editing, attachments, review queue, graph and bounded canvas, JSON/ZIP import/export |
-| Global memory | Domain-scoped global memories, evidence, review queue and the separate curator |
+| Global memory | Domain-scoped global memories, evidence, review queue and the separate curator; every row can jump to the wall |
 | Prompts | General / RP / Coding / Mixed variants, overrides and per-key reset; new conversations start on RP and can pick a domain in the first-run prompt |
 | Stats | Daily activity, hit distribution, health, never-recalled shortlist, 7-day write/read ratio |
 
@@ -348,6 +350,8 @@ With the preview running, use `npm run test:graph-browser -- http://127.0.0.1:77
 The suite includes one real-engine integration case that is skipped unless `DSH_MEMU_TEST_ENGINE_PYTHON` is set; the 50 automated acceptance checks pass. The optional engine was installed and smoke-tested in an isolated directory with the pinned wheel; embedding tests use a local deterministic server, which proves the protocol, not semantic quality.
 
 ## Changelog
+
+**1.2.1 (2026-10-31)**: fact-level dedup (write-side gate + recall-side cluster folding); consolidation now works in PTC (run_code) sessions; sidebar consolidation-failure alerts (cross-session, clearable, jump-to-library); the "currently in vector store" count follows real additions and deletions; private/global groups and multi-select bulk ops on the memory wall; one-click view from the global page; graph delete cascades with orphan-entity cleanup; remote consolidation counts only what actually landed.
 
 **1.1.3 (2026-10-30)**: managed local vectors are usable end to end (runtime/model download, switch-and-rebuild, progress with per-item failures); activity log with a Logs page; consolidation results move under the sidebar button; archive/restore and list refresh drop from seconds to milliseconds; a date written in the text is picked up when the field is empty; default topK 5/5; fixes the blank settings/WebUI panel (React #310).
 

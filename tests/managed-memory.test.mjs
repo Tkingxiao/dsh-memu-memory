@@ -425,6 +425,61 @@ test('a write under an active generation records which vector space it entered',
   assert.equal(state.loadPrivateIndex(f.libraryId).entries[plain.id].vector, undefined)
 })
 
+test('the vector count follows reality: writes stamp, review/import/curator stamp, deletes shrink', async () => {
+  // 现场事故（2026-10-31）：设置页"当前已入向量库 N 条"只数迁移账本 —— 账本在切换
+  // 那一刻写完就再也不更新，聊天里新写的记忆永远不进计数。membership = 账本腿（迁移
+  // 写入，扣除已删除）+ 戳腿（迁移后写入）。每条迁移后写入路径都必须落戳，否则漏数。
+  const vm = await import('../lib/vector-migration.js')
+  const f = fixture({
+    'mem-migrated': entry('迁移时就有的记忆'),
+    'mem-held': entry('待审的主张', { status: 'pending_review' }),
+  })
+  activate([f.libraryId])
+  // 预置"切换时写入 1/1"的账本快照：mem-migrated 在迁移时进了向量库（索引故意无戳）。
+  const { ledger } = vm.loadLedger(profile.fingerprint, 1)
+  ledger.libraries[f.libraryId] = { items: { 'mem-migrated': { hash: 'seed', at: new Date().toISOString() } }, tombstones: {}, snapshot: null }
+  vm.saveLedger(ledger)
+  const migrator = vm.createVectorMigrator({
+    listLibraries: () => state.listLibraries().map(item => item.id),
+    loadIndex: libraryId => libraryId == null ? state.loadGlobalIndex() : state.loadPrivateIndex(libraryId),
+    commit: async () => {}, forget: async () => {}, listFiles: async () => [],
+  })
+  const idsOf = scope => (migrator.membership()[scope] || []).sort()
+  assert.deepEqual(idsOf(f.libraryId), ['mem-migrated'], 'starts at the migration count — the reported bug state')
+
+  // 聊天写入：戳腿接管，计数跟着涨。
+  const written = await memory.privateRemember({ exec: f.exec, content: '切换后新写的记忆', title: '新记忆' })
+  assert.equal(state.loadPrivateIndex(f.libraryId).entries[written.id].vector.generation, 1)
+  assert.deepEqual(idsOf(f.libraryId), ['mem-migrated', written.id])
+
+  // 编辑重提交：行被重写进当前空间，戳刷新到当前代际。
+  await memory.privateUpdate({ exec: f.exec, id: written.id, content: '更新后的记忆内容' })
+  const updated = state.loadPrivateIndex(f.libraryId).entries[written.id]
+  assert.equal(updated.vector.generation, 1)
+  assert.equal(updated.vector.route, 'managed-local')
+  assert.deepEqual(idsOf(f.libraryId), ['mem-migrated', written.id])
+
+  // 批量恢复与评审接受：此前完全不落戳，是计数漏数的另外两条路。
+  await memory.importMemories({ libraryId: f.libraryId, memories: [{ content: '恢复回来的独特观察' }] })
+  const imported = Object.entries(state.loadPrivateIndex(f.libraryId).entries).find(([, item]) => item.content === '恢复回来的独特观察')[0]
+  assert.equal(state.loadPrivateIndex(f.libraryId).entries[imported].vector.generation, 1)
+  await memory.resolveMemoryReview({ libraryId: f.libraryId, id: 'mem-held', action: 'accept' })
+  assert.equal(state.loadPrivateIndex(f.libraryId).entries['mem-held'].vector.generation, 1)
+  assert.ok(idsOf(f.libraryId).includes(imported) && idsOf(f.libraryId).includes('mem-held'))
+
+  // 永久删除：引擎行先删、索引行后删，账本不知道 —— membership 必须把它扣掉。
+  await memory.privateArchive({ exec: f.exec, id: 'mem-migrated' })
+  await memory.privateDelete({ exec: f.exec, id: 'mem-migrated' })
+  assert.equal(idsOf(f.libraryId).includes('mem-migrated'), false, 'a permanently deleted migration item leaves the count')
+
+  // 全局整理：同样的口径，提交成功即落戳。
+  const clean = await curator.commitCuratorOutput({ memories: [curated()] }, { job: job() })
+  assert.equal(clean.created, 1)
+  const curatedId = Object.keys(state.loadGlobalIndex().entries)[0]
+  assert.equal(state.loadGlobalIndex().entries[curatedId].vector.route, 'managed-local')
+  assert.deepEqual((migrator.membership().global || []), [curatedId])
+})
+
 test('managed curator clean output commits under lease and held output is index-only', async () => {
   activate()
   const clean = await curator.commitCuratorOutput({ memories: [curated()] }, { job: job() })

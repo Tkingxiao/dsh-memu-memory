@@ -69,9 +69,16 @@ test('eligibility and context are applied before the candidate cap', () => {
 test('the per-route candidate cap is bounded and deterministic', () => {
   const entries = {}
   const local = []
+  // Distinct bodies: near-identical candidates would fold into one cluster slot
+  // (fact-level dedup), and this test is about the cap, not the folding.
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz'
+  const token = (n) => alphabet[n % 26] + alphabet[Math.floor(n / 26) % 26]
   for (let i = 0; i < 60; i += 1) {
     const id = 'mem-' + String(i).padStart(2, '0')
-    entries[id] = entry({ title: 'memory ' + i })
+    entries[id] = entry({
+      title: 'topic ' + token(180 + i),
+      content: [token(3 * i), token(3 * i + 1), token(3 * i + 2)].join('of'),
+    })
     local.push({ name: id })
   }
   assert.equal(memory.hybridCandidateLimit(1), 12)
@@ -83,8 +90,31 @@ test('the per-route candidate cap is bounded and deterministic', () => {
   assert.deepEqual(fused.files.map((file) => file.name), local.slice(0, 12).map((file) => file.name).sort((a, b) => a.localeCompare(b)))
 })
 
+test('near-duplicate candidates fold into one candidate slot before the cap', () => {
+  const entries = {}
+  const local = []
+  for (let i = 0; i < 12; i += 1) {
+    const id = 'mem-dup-' + String(i).padStart(2, '0')
+    entries[id] = entry({ title: 'deploy window ' + (i ? 'variant ' + i : ''), content: 'the deploy window is thursday two to four am, grey releases only' })
+    local.push({ name: id })
+  }
+  entries['mem-real'] = entry({ title: 'reimbursement deadline', content: 'expense reports are due before the last working day of each month' })
+  const fused = memory.fuseRecallCandidates({ local: [...local, { name: 'mem-real' }], semantic: [], index: indexOf(entries), limit: 12 })
+  // The cluster spends one slot instead of twelve, so the real memory enters
+  // even though 13 candidates competed for 12 places.
+  assert.equal(fused.debug.localCandidates, 2)
+  assert.deepEqual(fused.files.map((file) => file.name), ['mem-dup-00', 'mem-real'])
+  assert.deepEqual(fused.debug.collapsed, [{ kept: 'mem-dup-00', dropped: local.slice(1).map((file) => file.name) }])
+  assert.equal(fused.debug.clusterCount, 1)
+})
+
 test('equal fused scores fall back to the best rank and then the canonical id', () => {
-  const index = indexOf({ 'mem-a': entry(), 'mem-b': entry() })
+  // Distinct texts: two byte-identical memories would fold as one fact before
+  // the tie-break this test is about ever gets a chance to run.
+  const index = indexOf({
+    'mem-a': entry({ title: 'alpha topic', content: 'alpha body' }),
+    'mem-b': entry({ title: 'beta topic', content: 'beta body' }),
+  })
   const first = memory.fuseRecallCandidates({ local: [{ name: 'mem-a' }], semantic: [{ name: 'mem-b' }], index })
   const second = memory.fuseRecallCandidates({ local: [{ name: 'mem-a' }], semantic: [{ name: 'mem-b' }], index })
   assert.deepEqual(first.files.map((file) => file.name), ['mem-a', 'mem-b'])

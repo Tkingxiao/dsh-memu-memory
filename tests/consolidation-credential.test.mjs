@@ -208,7 +208,12 @@ test('a tool surface without memory tools is unavailable, and nothing is forked'
   }
 })
 
-test('a PTC-only tool surface is reported as PTC and not as a generic miss', async () => {
+test('a PTC-only tool surface is not a refusal: the fork proceeds and only an honest receipt failure is reported', async () => {
+  // 2026-10-31 口径变更：PTC 会话的 header 只有 run_code（或任意 PTC transport 名），
+  // 其余工具走 run_code 程序里的 SDK 绑定 —— header 名单不承载"能不能写"。
+  // 所以 PTC 不再产生 unavailable：fork 照常创建，写入能力由 scope 挂载与回执裁决。
+  // 这个 fake 的 worker 不写回执，所以结果是一次诚实的 receipt-missing 失败，
+  // 而不是"从不尝试"。
   const sessionId = 'cred-tools-ptc'
   state.ensureSession(sessionId, { cwd: path.join(home, 'proj-ptc'), agentPreset: 'standard' })
   const ctx = host({
@@ -216,15 +221,21 @@ test('a PTC-only tool surface is reported as PTC and not as a generic miss', asy
     events: [
       { seq: 0, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '用 PTC 跑一下' }] } },
       { seq: 1, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
-      { seq: 2, type: 'tool/ptc-dispatch', data: {} },
+      { seq: 2, type: 'tool/ptc-dispatch', data: { name: 'ptc_exec' } },
       { seq: 3, type: 'request/header', data: { header: { config: { provider: 'p', model: 'm' }, tools: [{ name: 'ptc_exec' }] } } },
     ],
   })
   const result = await requestPrivateConsolidation(ctx, sessionId, { force: true })
+  assert.equal(ctx.rec.created.length, 1, 'a PTC surface no longer blocks the fork')
   assert.equal(result.ok, false)
-  assert.equal(result.reasonCode, 'worker-tools-ptc-only')
-  assert.equal(result.ptc, true)
-  assert.equal(ctx.rec.created.length, 0)
+  assert.equal(result.reasonCode, 'receipt-missing', 'the fake worker gave no receipt: an honest run failure, not a refusal')
+  // 任务书按 PTC 口径写：点名 run_code transport 与 SDK 调用形态。
+  const followup = ctx.rec.followedUp[0]
+  const brief = Array.isArray(followup?.content)
+    ? followup.content.map((block) => block?.text || '').join('\n')
+    : String(followup || '')
+  assert.match(brief, /run_code/)
+  assert.match(brief, /tools\.memu_private_remember/)
 })
 
 test('a parent that changes its library mid-run voids the credential', async () => {

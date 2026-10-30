@@ -75,3 +75,20 @@ test('relationship snapshots preserve unknowns, evidence, boundaries and previou
   assert.ok(next.history[0].validTo)
   assert.throws(() => graph.updateRelationship({ libraryId, fromId: a.id, toId: b.id, state: {}, evidenceIds: [], reason: 'no evidence' }), /evidence/)
 })
+
+test('a dangling edge is reported as missing, matching the graph view placeholder', () => {
+  // mem-1 was deleted from the index in an earlier test; its inbound edge from
+  // mem-0 remains. getGraph renders a [deleted] placeholder for it, so recall
+  // must report the same edge with the same missing mark instead of dropping it.
+  const view = graph.getGraph({ libraryId, focusId: 'mem-0', depth: 1 })
+  assert.equal(view.nodes.find(node => node.id === 'mem-1').missing, true)
+  const related = graph.recallRelations(libraryId, state.loadPrivateIndex(libraryId), 'mem-0', null)
+  const dangling = related.find(item => item.id === 'mem-1')
+  assert.ok(dangling, 'the edge must be reported, not silently dropped')
+  assert.equal(dangling.missing, true)
+  assert.equal(dangling.title, '[deleted]')
+  // mem-2 still links at the Zhou entity: a resolvable relation is marked false.
+  const zhou = Object.values(graph.graphExport(libraryId).entities).find(entity => entity.name === 'Zhou')
+  const healthy = graph.recallRelations(libraryId, state.loadPrivateIndex(libraryId), 'mem-2', null)
+  assert.equal(healthy.find(item => item.id === zhou.id).missing, false)
+})

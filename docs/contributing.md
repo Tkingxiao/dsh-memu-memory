@@ -75,9 +75,9 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 
 ### 5.3 新增一个 RPC 方法
 
-<!-- rpc-method-count: 83 -->
+<!-- rpc-method-count: 86 -->
 
-1. `lib/rpc.js` 的 `switch` 加 case（共 83 个方法，按功能分组，别乱插）。
+1. `lib/rpc.js` 的 `switch` 加 case（共 86 个方法，按功能分组，别乱插）。
 2. 返回**形状稳定**：客户端 `call()` 直接解构，列表类给 `{items, total}` 而不是裸数组。
 3. `revisionOnly` 分支只回 `{revision, stamp}`、**不要求 sessionId**（三端轮询，设置页与独立页没会话）、**不塞业务数据**（每 2.5 秒一次）；顺带 `noteMemoryBeat()`，`memu_status` 靠它分「没写」与「没人轮询」。
 4. 写成功后 `bumpMemoryRevision()`/`notifyMemoryWrite()`（§7）；能让 `state.json` 或索引落盘的写，`state.js` 自动记写事件供 `memu_status` 展示。

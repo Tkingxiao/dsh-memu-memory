@@ -22,6 +22,14 @@ execFile(process.execPath, ["--check", "lib/x.js"], { cwd, env });
 
 **源码是 CRLF**：任何补丁都按「读 → `split("\r\n").join("\n")` → 断言 `from` 命中 **1 次** → 替换 → 写回还原 `\r\n`」。命中 0 或 >1 次先停下看，不要盲写。（`tests/webui.test.mjs` 是 LF，别套 CRLF。）
 
+### 9.1.1 链路回放巡检
+
+```bash
+npm run replay
+```
+
+`scripts/replay.mjs`：不走测试框架，按生产代码路径端到端重放七条链路（事实级去重工具层、PTC 整理成功/失败、整理提醒与日志页数据、侧边栏提醒块真实渲染、向量计数账本+戳、MemU 记忆页分组/多选/查看跳转）。只有 MemU 引擎子进程换成内存桩，其余全是真实模块；退出码 0 = 全部检查点通过。改动整理/去重/向量计数/提醒任一链路后跑一次，比单测更接近「用户点下去会发生什么」。
+
 ### 9.2 本地 link 到 DSH profile
 
 `~/.dsh/profiles/<profile>/package.json` 里 `"dsh-memu-memory": "link:D:/Code/dsh-plugin/dsh-memu-memory"` 并加入 `dsh.profile.bundles`。是符号链接 → 改源码即刻生效（无 bundle 缓存）。`lstat` 验证是否 symlink（§3.10）。

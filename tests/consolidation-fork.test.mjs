@@ -8,6 +8,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-memory-fork-'))
 process.env.DSH_MEMU_HOME = home
 
 const state = await import('../lib/state.js')
+const activity = await import('../lib/activity-log.js')
 const { requestPrivateConsolidation, isConsolidating } = await import('../lib/private.js')
 
 test.after(() => {
@@ -52,8 +53,9 @@ function assertHostCreateAccepts(spec = {}) {
   }
 }
 
-function host({ live = false, whenIdle = null, parentOptions = { provider: 'test-provider', model: 'test-model' }, requestConfig = null, extraEvents = [], transcriptSize = 0, turnReason = { kind: 'completed' }, emitTurnEnd = true } = {}) {
-  const rec = { liveFollowups: [], created: [], forkFollowups: [], disposed: [], sessionHandlers: [] }
+function host({ live = false, whenIdle = null, parentOptions = { provider: 'test-provider', model: 'test-model' }, requestConfig = null, extraEvents = [], transcriptSize = 0, turnReason = { kind: 'completed' }, emitTurnEnd = true, headerTools = null, childCtxFactory = null } = {}) {
+  const rec = { liveFollowups: [], created: [], forkFollowups: [], disposed: [], sessionHandlers: [], workerToolRegistrations: [], workerToolDisposals: [] }
+  const childContexts = new Map()
   const tick = String.fromCharCode(96)
   const receiptFence = (range, identity) => [tick + tick + tick + 'memu-consolidation-receipt', JSON.stringify({ version: 1, ...identity, status: 'completed', outcome: 'no_value', checkedRange: range, createdIds: [], updatedIds: [], heldIds: [], reasonCode: null, retryable: false }), tick + tick + tick].join('\n')
   // 真实长会话的规模：补齐不产生证据的事件，只影响 fork 成本判定。
@@ -72,16 +74,24 @@ function host({ live = false, whenIdle = null, parentOptions = { provider: 'test
     get: (name) => {
       if (name === 'agents') {
         return {
-          get: (id) => (live
-            ? {
-                followup: (message) => rec.liveFollowups.push({ id, message }),
-                ...(parentOptions ? { options: parentOptions } : {}),
-                ...(requestConfig ? { session: { requestHeader: () => ({ config: requestConfig }) } } : {}),
-              }
-            : undefined),
+          get: (id) => {
+            // attachWorkerTools 用 childContexts 模拟"宿主在 create 后暴露的 agent ctx"。
+            if (childContexts.has(id)) return { ctx: childContexts.get(id) }
+            return (live
+              ? {
+                  followup: (message) => rec.liveFollowups.push({ id, message }),
+                  ...(parentOptions ? { options: parentOptions } : {}),
+                  ...(requestConfig || headerTools ? { session: { requestHeader: () => ({
+                    ...(requestConfig ? { config: requestConfig } : {}),
+                    ...(headerTools ? { tools: headerTools.map((toolName) => ({ name: toolName })) } : {}),
+                  }) } } : {}),
+                }
+              : undefined)
+          },
           create: async (spec) => {
             assertHostCreateAccepts(spec)
             rec.created.push(spec)
+            if (childCtxFactory) childContexts.set(spec.sessionId, childCtxFactory())
             const childSession = { id: spec.sessionId }
             return {
               agent: {
@@ -354,4 +364,126 @@ test('a large transcript that was never consolidated does fork, because the back
   const result = await requestPrivateConsolidation(ctx, 'fork-large-owed')
   assert.equal(result.ok, true, 'the backlog bound lets this one through')
   assert.equal(ctx.rec.created.length, 1, 'a large unconsolidated backlog is worth exactly one fork')
+})
+// ---------------------------------------------------------------- PTC 兼容
+// 现场（2026-10-31，yuike-ptc 会话）：PTC 模式下 request/header 的工具表只有 run_code，
+// probe 曾据此判 unavailable（worker-tools-ptc-only），PTC 会话永远不被整理。宿主的
+// PTC executor 明确 "only run_code is directly callable"，其余工具走 run_code 程序里的
+// SDK 绑定（tools.schemas(agent, toolSet) 枚举可见面）—— header 名单在 PTC 会话里
+// 不承载"能不能写记忆"。修复后：PTC 不构成否证 + fork 时把读写四件挂进 worker 自己的
+// scope（注册表按 scope 链取可见面，不扩散到其它会话）。
+
+test('a PTC session (run_code only header) is consolidated and the worker gets write tools on its own scope', async () => {
+  const registered = []
+  const disposals = []
+  state.ensureSession('fork-ptc', { cwd: path.join(home, 'proj-ptc'), agentPreset: 'yuike-ptc' })
+  const ctx = host({
+    live: true,
+    headerTools: ['run_code'],
+    extraEvents: [
+      { seq: 3, type: 'tool/ptc-dispatch-start', data: { rootCallId: 'r1', parentCallId: 'r1', subCallId: 'r1:ptc:1', name: 'read', arguments: {} } },
+      { seq: 4, type: 'tool/ptc-dispatch', data: { rootCallId: 'r1', parentCallId: 'r1', subCallId: 'r1:ptc:1', name: 'read', arguments: {}, isError: false, content: [] } },
+    ],
+    childCtxFactory: () => ({
+      tools: {
+        register: (tool) => {
+          registered.push(tool?.name)
+          return () => { disposals.push(tool?.name) }
+        },
+      },
+    }),
+  })
+  const result = await requestPrivateConsolidation(ctx, 'fork-ptc')
+  assert.equal(result.ok, true, 'a run_code header must not block consolidation: ' + String(result.error || ''))
+  assert.equal(result.settled, true)
+  assert.equal(ctx.rec.created.length, 1, 'the fork is created for the PTC conversation')
+  // 只挂读写四件；archive/delete/unpin 这些破坏性工具不得进 worker 的工具面。
+  assert.deepEqual([...registered].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  // 整理结束（finally）必须卸载挂载，不能给这条一次性 worker 留常驻注册。
+  assert.deepEqual([...disposals].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  // 全量挂载的活动元数据：attached=实际子集（此处=完整 wanted）、requested=完整 wanted、
+  // partial=false。三件一起钉住"成功路径不再含糊"。
+  const started = startedEntryFor(ctx, 'fork-ptc')
+  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.equal(started.detail.workerToolsPartial, false, 'a full mount is not partial')
+  const followup = ctx.rec.forkFollowups[0]?.message
+  const brief = Array.isArray(followup?.content)
+    ? followup.content.map((block) => block?.text || '').join('\n')
+    : String(followup || '')
+  assert.match(brief, /run_code/, 'the brief names the PTC transport')
+  assert.match(brief, /tools\.memu_private_remember/, 'the brief shows the SDK invocation shape')
+})
+
+// "整理已开始"那条活动日志：按 sessionId + phase=started 取，childId 对上这次的 fork。
+function startedEntryFor(ctx, sessionId) {
+  const childId = ctx.rec.created[0]?.sessionId
+  const entry = activity.listEvents({ kind: 'consolidate', sessionId })
+    .find((row) => row.detail?.phase === 'started' && row.detail?.childId === childId)
+  assert.ok(entry, 'the consolidation-started activity entry exists')
+  return entry
+}
+
+test('a host registry refusing one write tool leaves a structured partial mount in the activity log', async () => {
+  // 宿主注册表对单件工具说"不"（重名、scope 锁定）是真实的部分挂载路径：registerTools
+  // 逐件 fail-open，其余三件照常挂上。活动日志必须记实际子集 + requested + partial，
+  // 而不是把 wanted 全量误报成已挂载（旧口径的缺陷）。
+  const registered = []
+  const disposals = []
+  state.ensureSession('fork-ptc-partial', { cwd: path.join(home, 'proj-ptc-partial'), agentPreset: 'yuike-ptc' })
+  const ctx = host({
+    live: true,
+    headerTools: ['run_code'],
+    childCtxFactory: () => ({
+      tools: {
+        register: (tool) => {
+          if (tool?.name === 'memu_private_remember') throw new Error('registry refused: name already bound')
+          registered.push(tool?.name)
+          return () => { disposals.push(tool?.name) }
+        },
+      },
+    }),
+  })
+  const result = await requestPrivateConsolidation(ctx, 'fork-ptc-partial')
+  assert.equal(result.ok, true, String(result.error || ''))
+  assert.equal(result.settled, true)
+  assert.deepEqual([...registered].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_update'],
+    'exactly the tools that actually registered are mounted')
+  assert.deepEqual([...disposals].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_update'],
+    'dispose unmounts exactly what was mounted')
+  const started = startedEntryFor(ctx, 'fork-ptc-partial')
+  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_update'],
+    'the log records the actual subset, not the full wanted list')
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.equal(started.detail.workerToolsPartial, true)
+  // 挂载为部分子集时任务书仍带 PTC 调用形态：worker 知道写记忆走 run_code 的 SDK 绑定。
+  const followup = ctx.rec.forkFollowups[0]?.message
+  const brief = Array.isArray(followup?.content)
+    ? followup.content.map((block) => block?.text || '').join('\n')
+    : String(followup || '')
+  assert.match(brief, /await tools\.memu_private_remember/, 'the brief keeps the PTC invocation shape on a partial mount')
+})
+
+test('a fork context without a tools service records a null mount, the request and the partial flag', async () => {
+  // 宿主不暴露 agent ctx（或 ctx 上没有 tools 服务）→ attachWorkerTools 的现有 warn 路径。
+  // 语义：workerToolsAttached=null = 挂载没有完成（与"挂全了"严格区分）；requested 仍记
+  // 完整 wanted；workerToolsPartial=true —— "未证明拿到完整 wanted 集"，一件都没有
+  // 是它最极端的形态。若这里标 false，false 会被一眼读成"全量挂载"，元数据又不准了。
+  state.ensureSession('fork-ptc-notools', { cwd: path.join(home, 'proj-ptc-notools'), agentPreset: 'yuike-ptc' })
+  const ctx = host({ live: true, headerTools: ['run_code'] })
+  const result = await requestPrivateConsolidation(ctx, 'fork-ptc-notools')
+  assert.equal(result.ok, true, String(result.error || ''))
+  const started = startedEntryFor(ctx, 'fork-ptc-notools')
+  assert.equal(started.detail.workerToolsAttached, null, 'no mount completed, so the log must not claim one')
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.equal(started.detail.workerToolsPartial, true)
+})
+
+test('a non-PTC header without write tools still refuses to fork', async () => {
+  state.ensureSession('fork-notools', { cwd: path.join(home, 'proj-notools'), agentPreset: 'coding' })
+  const ctx = host({ live: true, headerTools: ['read', 'shell', 'edit'] })
+  const result = await requestPrivateConsolidation(ctx, 'fork-notools')
+  assert.equal(result.ok, false)
+  assert.equal(result.reasonCode, 'worker-tools-missing')
+  assert.equal(ctx.rec.created.length, 0, 'no fork when the model surface provably lacks the write tools')
 })

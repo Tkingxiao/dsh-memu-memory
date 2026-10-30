@@ -135,8 +135,9 @@ test('wall heartbeat retries failed paints, pauses hidden and shares the metadat
 })
 test('the settings button preserves the host SPA and links to individual pages', () => {
   const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  assert.match(client, /function openWebUiPage\(page = null\)/)
-  assert.match(client, /\/dsh-memu-memory\/ui#\/settings\//)
+  // libraryId 选项：整理失败提醒的跳转按钮按库深链（?libraryId=…#/settings/browser）。
+  assert.match(client, /function openWebUiPage\(page = null, \{ libraryId = null \} = \{\}\)/)
+  assert.match(client, /\/dsh-memu-memory\/ui' \+ query \+ '#\/settings\//)
   assert.match(client, /toggleWebUiOverlay\(url\)/)
   assert.ok(!/window\.location(?:\.href)?\s*=/.test(client))
   // The host ctx is a Cordis service proxy: reading an unknown property such as

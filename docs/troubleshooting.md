@@ -205,8 +205,9 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 - **新回合被评估为「不值得整理」。** `assessConsolidationValue` 只拒绝两种：`lastSleepSeq` 之后没有任何人类消息；或只有一条纯应答（「谢谢」「好的」「ok」，无工具调用）。其余都会进 fork，由整理提示词决定写不写——**写 0 条是合法结果**，不是故障。
 - **整理失败一直退避。** 看 binding 的 `lastSleepError` / `sleepRetryAt` / `sleepAttempts`。会话被删会得到 `session "…" not found`，现在会标 `sessionGone: true` 并停止重试（以前会每小时重来）。
 - **fork 失败被当成成功。** 旧版只等 `whenIdle()`；turn error 也会 resolve，于是 `lastSleepSeq` 被推进。现在 fork 必须继承父 `provider` / `model`（活跃会话取最近一轮 `requestHeader().config`，关闭会话取最后一条 `request/header` 的 `data.header.config`）；没有路由就拒绝创建，报 `cannot inherit the parent model/provider`。`whenIdle` 后还要检查 `turn/end.data.reason.kind === 'completed'`，`error` / `aborted` / 没有 `turn/end` 都返回 `ok:false`，不推进游标，由 `runSleepPass` 记 `lastSleepError`、`sleepRetryAt`、`sleepAttempts` 退避重试。
+- **PTC 会话（`run_code` 预设）曾被一刀切拒绝（2026-10-31 已修）。** 旧 probe 看到 header 工具表里没有 `memu_private_remember/update` 就判 `worker-tools-ptc-only` 不建 fork——但 PTC 模式下 header 本来就只有 `run_code`，其余工具走 run_code 程序里的 SDK 绑定，header 名单不承载"能不能写"。现在的口径：PTC 不构成否证（probe 返回 `source: 'ptc-header'`），fork 创建后把读写四件（`memu_private_remember/update/recall/list`）挂进 worker 自己的 agent ctx scope（注册表按 scope 链取可见面，只对这个一次性 worker 可见，整理结束即卸载）；任务书写明 `await tools.memu_private_remember({...})` 的调用形态。宿主不暴露 agent ctx（记录上没有 `ctx.tools`）时挂载失败只 warn，worker 会按任务书如实回执 `tools-unavailable`，空闲扫描照常退避。证据看活动日志"整理已开始"行的 `detail.probe` 与 `detail.workerToolsAttached`。
 
-**守卫**：`tests/cycle.test.mjs`（空闲阈值、启动补偿、`sessionGone` 只标记一次、寒暄不 fork、失败 fork 必须退避）+ `tests/consolidation-value.test.mjs`（评估边界：插件通知不算人类消息、纯应答跳过、「我不吃香菜」这种五个字的偏好必须留下、`lastSleepSeq` 之后的尾巴才算）+ `tests/consolidation-fork.test.mjs`（继承父模型、失败 turn 不推进 `lastSleepSeq`）。手工核对：`state.json` 里 `lastSleepAt` / `lastSleepSeq` / `sessionGone` / `sleepAttempts` / `lastSleepError` / `sleepRetryAt` 六个字段。
+**守卫**：`tests/cycle.test.mjs`（空闲阈值、启动补偿、`sessionGone` 只标记一次、寒暄不 fork、失败 fork 必须退避）+ `tests/consolidation-value.test.mjs`（评估边界：插件通知不算人类消息、纯应答跳过、「我不吃香菜」这种五个字的偏好必须留下、`lastSleepSeq` 之后的尾巴才算）+ `tests/consolidation-fork.test.mjs`（继承父模型、失败 turn 不推进 `lastSleepSeq`、PTC 会话照常 fork 且只挂读写四件、非 PTC 名单缺写工具仍然拒绝）。手工核对：`state.json` 里 `lastSleepAt` / `lastSleepSeq` / `sessionGone` / `sleepAttempts` / `lastSleepError` / `sleepRetryAt` 六个字段。
 
 ### 3.19 人格预设（agent preset）的会话里完全没有记忆（S1 绑定 → S4 注入）
 
@@ -281,7 +282,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 ### 2.1 模块地图
 
-<!-- rpc-method-count: 83 -->
+<!-- rpc-method-count: 86 -->
 
 | 文件 | 职责 / 什么时候碰它 |
 |---|---|
@@ -295,7 +296,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | `lib/private.js` | 私有整理：当前对话、历史 fork、notice 消息 |
 | `lib/curator.js` / `lib/cycle.js` | 全局 curator 与 `pending_review`；空闲整理 pass（过期/降级/晋升/自动整理） |
 | `lib/mood.js` / `lib/budget.js` / `lib/snippet.js` | 情绪价与峰值；token 换算（中文≈1 字符/token、英文≈3.4，任何 token 都走它）；注入片段裁剪 |
-| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 80 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
+| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 86 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
 | `lib/graph.js` / `lib/context.js` / `lib/media.js` | 关系边与实体；说话人/频道/角色/世界线/知情边界；附件采集、缩略图、受保护路由、ZIP |
 | `lib/prompts.js` + `lib/prompts/` | 提示词加载/覆盖/恢复/domain 变体解析 |
 | `lib/engine.js` / `lib/memu.js` / `lib/memu-config.js` | Python 引擎安装探测切换回滚；MemU CLI 适配（**所有 CLI 字符串只在这里**）；`~/.memu/config.env` 的 embedding |

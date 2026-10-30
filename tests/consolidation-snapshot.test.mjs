@@ -262,15 +262,54 @@ test('a header without memory tools is unavailable rather than a silent wasted f
   assert.equal(probe.reasonCode, 'worker-tools-missing')
 })
 
-test('a PTC-only turn is reported as PTC, not as a generic missing tool', () => {
+test('a PTC-only turn is not a refusal: the probe reports ptc and the SDK surface is checked at fork time', () => {
+  // 2026-10-31 口径变更：PTC 模式下 header 只列 transport（这里 ptc_exec，真实宿主为
+  // run_code），其余工具走 run_code 程序里的 SDK 绑定 —— header 名单不承载"能不能写"，
+  // 不再产生 worker-tools-ptc-only 拒绝；fork 后由 attachWorkerTools 挂载读写工具。
   const events = [
     { seq: 0, type: 'request/header', data: { header: { config: { provider: 'p', model: 'm' }, tools: [{ name: 'ptc_exec' }] } } },
-    { seq: 1, type: 'tool/ptc-dispatch', data: {} },
+    { seq: 1, type: 'tool/ptc-dispatch', data: { name: 'ptc_exec' } },
   ]
   const probe = probeToolSurface({ ctx: null, sessionId: 's', events })
-  assert.equal(probe.ok, false)
-  assert.equal(probe.reasonCode, 'worker-tools-ptc-only')
+  assert.equal(probe.ok, true, 'a PTC surface can never disprove write ability')
+  assert.equal(probe.source, 'ptc-header')
   assert.equal(probe.ptcObserved, true)
+  assert.equal(probe.hasWrite, null)
+})
+
+test('a run_code header alone (no dispatch events yet) is still recognized as PTC', () => {
+  // 新 PTC 会话一次 run_code 都没跑过时也要认得出来：run_code 出现在名单里就是证据。
+  const events = [{ seq: 0, type: 'request/header', data: { header: { config: { provider: 'p', model: 'm' }, tools: [{ name: 'run_code' }] } } }]
+  const probe = probeToolSurface({ ctx: null, sessionId: 's', events })
+  assert.equal(probe.ok, true)
+  assert.equal(probe.source, 'ptc-header')
+  assert.equal(probe.ptcObserved, true)
+})
+
+test('a mixed surface (run_code beside native memu_*) proves write ability and keeps the PTC shape', () => {
+  // 混合面：PTC transport 与原生 memu_* 同时出现在 header 名单（preset 部分列出本插件、
+  // 或 PTC 与原生工具共存的会话）。probe 既不能当纯 PTC（hasWrite:null 会丢掉"名单里
+  // 明摆着有写工具"的证据），也不能当普通名单（ptcObserved:false 会丢掉 PTC transport）。
+  // hasWrite:true + ptcObserved:true 是钉住的口径；任务书（buildWorkerBrief）在混合面下
+  // 既要列原生名单、又要带 run_code 的 SDK 调用形态——两种 transport 都覆盖。
+  const events = [{
+    seq: 0,
+    type: 'request/header',
+    data: { header: { config: { provider: 'p', model: 'm' }, tools: [{ name: 'run_code' }, ...MEMU_TOOLS] } },
+  }]
+  const probe = probeToolSurface({ ctx: null, sessionId: 's', events })
+  assert.equal(probe.ok, true)
+  assert.equal(probe.hasWrite, true, 'a native write tool in the list still proves write ability')
+  assert.equal(probe.ptcObserved, true, 'run_code in the list is PTC evidence even beside native tools')
+  assert.equal(probe.source, 'header-event')
+  const brief = buildWorkerBrief({
+    snapshot: { fromSeq: 0, throughSeq: 5, eventCount: 6, hash: 'mix001' },
+    probe,
+    contract: 'MIXED-CONTRACT',
+  })
+  assert.match(brief, /run_code, memu_private_remember, memu_private_update/, 'the brief lists the native names')
+  assert.match(brief, /await tools\.memu_private_remember/, 'the brief keeps the PTC SDK invocation shape on a mixed surface')
+  assert.match(brief, /MIXED-CONTRACT/)
 })
 
 test('a missing tool list is unknown, not a refusal', () => {

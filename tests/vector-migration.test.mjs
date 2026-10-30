@@ -61,7 +61,9 @@ function createFixture() {
     async listLibraries() {
       return [{ id: 'lib_a' }, { id: 'lib_b' }]
     },
-    async loadIndex(libraryId) {
+    // 同步读：membership() 是同步接口（getSettingsState 心跳不能起 Promise 链），
+    // 与 state.js 的真实 loadIndex 保持同一约定。
+    loadIndex(libraryId) {
       return indexes[libraryId ?? 'global'] ?? { version: 1, entries: {} }
     },
     async commit({ db, libraryId, item }) {
@@ -301,6 +303,61 @@ test('membership reports which ids are actually inside the active generation', a
   assert.deepEqual((membership.lib_a || []).sort(), ['m1'], 'archived entries are not admitted')
   assert.deepEqual((membership.global || []).sort(), ['g1'])
   assert.ok(Array.isArray(membership.lib_b), 'every scope in the generation gets a bucket')
+})
+
+test('membership grows with post-migration writes and shrinks with permanent deletes', async () => {
+  resetAll()
+  const fx = createFixture()
+  fx.setIndex('lib_a', { m1: { text: '迁移时就有的', status: 'active' } })
+  const migrator = fx.migrator()
+  const { generation } = await migrator.switchProfile({ profile: BGE })
+  assert.deepEqual(fx.migrator().membership().lib_a, ['m1'], 'the count starts at the migration ledger')
+
+  // 切换之后聊天写入的记忆：索引条目带当前代际的戳（privateRemember 落盘），账本不知道。
+  // 迁移账本永远停在 8/8 那一刻——这就是"当前已入向量库"只显示迁移数的根因。
+  fx.indexes.lib_a.entries['mem-new'] = { text: '切换后写入', status: 'active', vector: { route: 'managed-local', generation } }
+  let membership = fx.migrator().membership()
+  assert.deepEqual((membership.lib_a || []).sort(), ['m1', 'mem-new'], 'a stamped post-migration write is counted')
+
+  // 永久删除：引擎行和索引行都删了，但账本还挂着 m1 —— 必须从计数里扣掉。
+  delete fx.indexes.lib_a.entries.m1
+  membership = fx.migrator().membership()
+  assert.deepEqual(membership.lib_a, ['mem-new'], 'a deleted migration item is not counted anymore')
+})
+
+test('membership ignores stamps that belong to another generation', async () => {
+  resetAll()
+  const fx = createFixture()
+  fx.setIndex('lib_a', { m1: { text: '第一代写入', status: 'active' } })
+  const migrator = fx.migrator()
+  const first = await migrator.switchProfile({ profile: BGE })
+  fx.indexes.lib_a.entries['mem-g1'] = { text: '第一代新写入', status: 'active', vector: { route: 'managed-local', generation: first.generation } }
+
+  // 切到第二个模型：新代际把 m1 / mem-g1 全部重写进新空间（账本接管），新写入带新代际戳。
+  const second = await migrator.switchProfile({ profile: ALT })
+  assert.notEqual(second.generation, first.generation)
+  fx.indexes.lib_a.entries['mem-g2'] = { text: '第二代写入', status: 'active', vector: { route: 'managed-local', generation: second.generation } }
+  let membership = fx.migrator().membership()
+  assert.deepEqual((membership.lib_a || []).sort(), ['m1', 'mem-g1', 'mem-g2'], 'the new space holds everything migrated into it plus new writes')
+
+  // 第二代写入的条目随后被归档：回滚只重放可准入的条目，它留在旧空间里。
+  // 回滚后的代际是全新编号，它身上的旧代际戳不得把它带进新计数。
+  fx.indexes.lib_a.entries['mem-g2'].status = 'archived'
+  await migrator.rollbackProfile()
+  membership = fx.migrator().membership()
+  assert.deepEqual((membership.lib_a || []).sort(), ['m1', 'mem-g1'], 'a held second-generation write stays out of the rolled-back count')
+})
+
+test('membership counts only managed-local stamps, not remote-api ones', async () => {
+  resetAll()
+  const fx = createFixture()
+  fx.setIndex('global', { g1: { text: '全局偏好', status: 'active' } })
+  const migrator = fx.migrator()
+  const { generation } = await migrator.switchProfile({ profile: BGE })
+  // remote-api 的戳描述的是远端空间；本地代际的计数不能把它算进来。
+  fx.indexes.global.entries['mem-remote'] = { text: '远端写入', status: 'active', vector: { route: 'remote-api', generation } }
+  const membership = fx.migrator().membership()
+  assert.deepEqual(membership.global, ['g1'])
 })
 
 test('a legacy requested={"status":"active"} marker is not a pending switch', async () => {
