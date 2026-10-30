@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "kind": "active-memory-ab-case",
+  "id": "clean-recent-recall",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "annotationSource": "synthetic-proxy",
+  "interference": "off",
+  "title": "刚注入过记忆：抑制而不是检查",
+  "annotationNotes": "合成代理标注：抑制是调度结果，不是 no_value；这条用来验证抑制不会被记成“检查过且没东西”。",
+  "snapshot": {
+    "domain": "coding",
+    "idleAtSnapshotEndMinutes": 20,
+    "lastInjectedAt": "2026-10-30T01:58:00.000Z",
+    "events": [
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:00:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "刚注入过记忆的回合不要再 fork 一次，这条抑制规则保留。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "保留：距上次注入不到召回冷却时间就不检查。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:00:00.000Z",
+        "step": 1
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:00:30.000Z"
+      },
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:01:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:01:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "嗯，其余照旧。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:01:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "好。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:01:00.000Z",
+        "step": 2
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:03:00.000Z"
+      }
+    ]
+  },
+  "labels": {
+    "expected": [
+      {
+        "id": "mem-ab-recall-suppress-rule",
+        "class": "decision",
+        "sourceSeq": 1,
+        "note": "距上次注入不足冷却时间就抑制检查"
+      }
+    ],
+    "mainProactive": [],
+    "userReminders": []
+  },
+  "expect": {
+    "maxBackgroundChecks": 0,
+    "blockedReasons": [
+      "recent-recall"
+    ],
+    "uncoveredLabelIds": [
+      "mem-ab-recall-suppress-rule"
+    ]
+  }
+}

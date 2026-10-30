@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "kind": "active-memory-ab-case",
+  "id": "clean-thin-turn",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "annotationSource": "synthetic-proxy",
+  "interference": "off",
+  "title": "薄回合：没有空闲窗口，也不该唤醒",
+  "annotationNotes": "合成代理标注：薄回合本身没有应记事件；留一条标签是为了量“未被覆盖的区间”，不是假装覆盖。",
+  "snapshot": {
+    "domain": "coding",
+    "idleAtSnapshotEndMinutes": 0.5,
+    "lastInjectedAt": null,
+    "events": [
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:00:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "继续"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "好，接着上次的进度。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:00:00.000Z",
+        "step": 1
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:00:30.000Z"
+      },
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:01:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:01:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "嗯"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:01:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "需要我改哪一块？"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:01:00.000Z",
+        "step": 2
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:01:30.000Z"
+      }
+    ]
+  },
+  "labels": {
+    "expected": [
+      {
+        "id": "mem-ab-thin-uncovered-note",
+        "class": "decision",
+        "sourceSeq": 1,
+        "note": "薄回合里没有真实决定，这条标签用于标出未被检查覆盖的区间"
+      }
+    ],
+    "mainProactive": [],
+    "userReminders": []
+  },
+  "expect": {
+    "maxBackgroundChecks": 0,
+    "uncoveredLabelIds": [
+      "mem-ab-thin-uncovered-note"
+    ]
+  }
+}

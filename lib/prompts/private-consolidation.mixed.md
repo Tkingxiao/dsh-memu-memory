@@ -26,6 +26,7 @@
 - open_loop：仅明确的外部阻塞、未完成承诺或影响后续的已铺垫悬念；普通犹豫或未知不自动标 true。
 - confidence：不确定就低一点。
 - 工程事实用 owner=about_project、mood_valence=0、arousal=0.35、peak=false；人物经历的感受与事实置信分开，不让聊天情绪污染技术结论。
+- 情绪按事件所在回合还原：人物侧填那一轮对话里的情绪（emotion/arousal/dominance），技术侧不写角色情绪；同一轮拆开的多条条目各填各的，一次争吵的情绪不串到所有条目。工程事实（owner=about_project）固定中性。dominance 只跟人物侧的 emotion 一起填，技术侧省略。
 
 永久记忆只留给"忘了就不再是我"或绝不能违反的约束；普通决定不要 pin。
 不要写全局记忆；全局记忆只由 curator 写。

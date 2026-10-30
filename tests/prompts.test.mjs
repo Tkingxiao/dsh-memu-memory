@@ -209,43 +209,30 @@ test('all shipped template variables are declared and fully rendered, with bound
     }
     assert.doesNotMatch(prompts.loadPrompt(definition.key, vars).text, /\{\{\s*\w+\s*\}\}/)
   }
-  // A size guard, not a tokenizer or a claim about model behavior.
+  // A size guard, not a tokenizer or a claim about model behavior. Only the
+  // guide is resident now; private-policy is retained as a template but is not
+  // delivered to the main conversation.
   for (const domain of ['general', 'coding', 'rp', 'mixed']) {
-    const text = ['system-guide', 'private-policy'].map(key => prompts.loadPromptForDomain(key, vars, domain).text).join('\n')
+    const text = prompts.loadPromptForDomain('system-guide', vars, domain).text
     assert.ok(text.length < 7200, `${domain} resident instructions grew too large: ${text.length}`)
   }
 })
 
-test('registered system sections follow the live domain override and render actual budgets', async () => {
+test('no system prompt section is registered; the guide still follows the domain', async () => {
   const { registerInjection } = await import('../lib/inject.js')
-  const sessionId = 'prompt-routing'
-  state.ensureSession(sessionId, { cwd: path.join(home, 'routing') })
-  const sections = []
+  const injected = []
   registerInjection({
-    inject: (_dependencies, fn) => fn({ effect: fn => fn(), systemPrompt: { section: spec => { sections.push(spec); return () => {} } } }),
+    inject: (...args) => injected.push(args),
     on: () => () => {},
   })
-  assert.equal(sections.length, 2)
-  const context = { agent: { session: { header: { id: sessionId } } } }
-  const saved = state.getPromptDomains()
-  state.updateSettings({ promptDomains: ['rp', 'coding', 'mixed'] })
-  try {
-    for (const domain of ['coding', 'rp', 'mixed', 'general']) {
-      state.setSessionBinding(sessionId, { domainOverride: domain })
-      for (let i = 0; i < sections.length; i++) {
-        const key = i === 0 ? 'system-guide' : 'private-policy'
-        const settings = state.getSettings()
-        const expected = prompts.loadPromptForDomain(key, {
-          mustRememberCap: settings.mustRememberCap, unpinBudget: settings.unpinBudgetPerSession,
-          shortTermTtlHours: settings.shortTermTtlHours, anchorTokens: settings.anchorTokens, turnTokens: settings.turnTokens,
-        }, domain).text
-        assert.equal(sections[i].text(context), expected)
-        assert.doesNotMatch(expected, /\{\{\s*\w+\s*\}\}/)
-      }
-    }
-  } finally {
-    state.updateSettings({ promptDomains: saved })
+  assert.equal(injected.length, 0, 'rules must travel as a plugin message, not a system section')
+  const vars = { mustRememberCap: 16, unpinBudget: 2, shortTermTtlHours: 48, anchorTokens: 700, turnTokens: 500 }
+  const bodies = ['coding', 'rp', 'mixed', 'general'].map(domain => prompts.loadPromptForDomain('system-guide', vars, domain).text)
+  for (const text of bodies) {
+    assert.ok(text.length > 0)
+    assert.doesNotMatch(text, /\{\{\s*\w+\s*\}\}/)
   }
+  assert.notEqual(bodies[0], bodies[1], 'domain variants are still distinct')
 })
 
 test('local consolidation adds actual tools while the shared domain body stays backend-neutral', async () => {

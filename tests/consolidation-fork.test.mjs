@@ -52,8 +52,13 @@ function assertHostCreateAccepts(spec = {}) {
   }
 }
 
-function host({ live = false, whenIdle = null, parentOptions = { provider: 'test-provider', model: 'test-model' }, requestConfig = null, extraEvents = [], turnReason = { kind: 'completed' }, emitTurnEnd = true } = {}) {
+function host({ live = false, whenIdle = null, parentOptions = { provider: 'test-provider', model: 'test-model' }, requestConfig = null, extraEvents = [], transcriptSize = 0, turnReason = { kind: 'completed' }, emitTurnEnd = true } = {}) {
   const rec = { liveFollowups: [], created: [], forkFollowups: [], disposed: [], sessionHandlers: [] }
+  const tick = String.fromCharCode(96)
+  const receiptFence = (range, identity) => [tick + tick + tick + 'memu-consolidation-receipt', JSON.stringify({ version: 1, ...identity, status: 'completed', outcome: 'no_value', checkedRange: range, createdIds: [], updatedIds: [], heldIds: [], reasonCode: null, retryable: false }), tick + tick + tick].join('\n')
+  // 真实长会话的规模：补齐不产生证据的事件，只影响 fork 成本判定。
+  const padding = Math.max(0, transcriptSize - 3 - extraEvents.length)
+  const filler = Array.from({ length: padding }, (_, i) => ({ seq: 3 + extraEvents.length + i, type: 'todo/write', data: {} }))
   const ctx = {
     rec,
     on: (name, handler) => {
@@ -84,6 +89,12 @@ function host({ live = false, whenIdle = null, parentOptions = { provider: 'test
                 followup: (message) => {
                   rec.forkFollowups.push({ child: spec.sessionId, message })
                   if (emitTurnEnd) {
+                    if (turnReason?.kind === 'completed') {
+                      const throughSeq = 2 + extraEvents.length + padding
+                      for (const handler of rec.sessionHandlers) {
+                        handler(childSession, { type: 'assistant/message', seq: 99, data: { message: { content: [{ type: 'text', text: receiptFence({ fromSeq: 0, throughSeq }, state.getSessionBinding(spec.sessionId)) }] } } })
+                      }
+                    }
                     for (const handler of rec.sessionHandlers) {
                       handler(childSession, { type: 'turn/end', seq: 100, data: { turn: 1, reason: turnReason } })
                     }
@@ -104,6 +115,7 @@ function host({ live = false, whenIdle = null, parentOptions = { provider: 'test
               { seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', name: 'read', arguments: '{}' }] } } },
               { seq: 2, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '看到了' }] } } },
               ...extraEvents,
+              ...filler,
             ],
             session: { cwd: path.join(home, 'proj'), agentPreset: 'coding' },
           }),
@@ -156,9 +168,11 @@ test('a live session is consolidated in a fork, not by queueing on itself', asyn
   assert.equal(Object.hasOwn(spec.meta, 'inheritedEventCount'), false, 'must not hide in the session meta: prepare() drops it')
   assert.deepEqual(spec.agentOptions, parentOptions, 'the fork starts on the parent model route')
   const child = state.getSessionBinding(spec.sessionId)
-  assert.equal(child.libraryId, binding.libraryId, 'the fork writes into the parent library')
-  assert.equal(child.useLibrary, true)
+  assert.equal(child, null, 'disposed worker binding is removed')
   assert.equal(state.getSessionBinding('fork-live').lastSleepSeq, 2, 'only a completed turn advances the sleep cursor')
+  assert.equal(result.scanned, 3, 'report how much of the transcript was scanned')
+  assert.equal(result.fresh, 3, 'report how many events were new since the last consolidation')
+  assert.equal(result.wrote, 0, 'the fake fork writes nothing, but the metric must still be measured')
 })
 test('a live session inherits the route of its latest turn, not stale creation options', async () => {
   state.ensureSession('fork-route', { cwd: path.join(home, 'proj-route'), agentPreset: 'coding' })
@@ -290,4 +304,54 @@ test('an unbound session is refused before any fork is attempted', async () => {
   assert.match(result.error, /not bound/)
   assert.equal(ctx.rec.created.length, 0)
   assert.equal(ctx.rec.liveFollowups.length, 0)
+})
+test('thin evidence holds the fork back until the starvation threshold', async () => {
+  state.ensureSession('fork-thin', { cwd: path.join(home, 'proj-thin'), agentPreset: 'coding' })
+  // 空闲 5 分钟：还在"短空闲"区间，证据又薄（一条短消息 + 一个工具调用），不唤醒。
+  state.setSessionBinding('fork-thin', { lastTurnAt: new Date(Date.now() - 5 * 60_000).toISOString() })
+  const ctx = host({ live: true })
+  const result = await requestPrivateConsolidation(ctx, 'fork-thin')
+  assert.equal(result.ok, true)
+  assert.equal(result.skipped, 'low-score')
+  assert.equal(ctx.rec.created.length, 0, 'a thin short-idle session must not pay for a fork')
+})
+
+test('starvation wakes a thin session so it can never be starved', async () => {
+  state.ensureSession('fork-starved', { cwd: path.join(home, 'proj-starved'), agentPreset: 'coding' })
+  state.setSessionBinding('fork-starved', { lastTurnAt: new Date(Date.now() - 40 * 60_000).toISOString() })
+  const ctx = host({ live: true })
+  const result = await requestPrivateConsolidation(ctx, 'fork-starved')
+  assert.equal(result.ok, true)
+  assert.equal(ctx.rec.created.length, 1, 'past the starvation threshold the check runs regardless of score')
+})
+
+test('a large transcript with nothing new since the cursor does not refork', async () => {
+  // 真机会话 5913 条事件、26MB 转录。游标停在末尾附近时，待整理区间只剩几条纯轮询：
+  // 没有新的真人回合，就没有可整理的证据，不该为此把整段转录重新种进 fork。
+  // （桩把填充事件全放在末尾，所以「大会话 + 末尾一句轻话」这种形态表达不出来；
+  //   另一侧「从未整理过就必须整理」由下一条用例覆盖。）
+  state.ensureSession('fork-large-thin', { cwd: path.join(home, 'proj-large'), agentPreset: 'coding' })
+  state.setSessionBinding('fork-large-thin', {
+    lastTurnAt: new Date(Date.now() - 40 * 60_000).toISOString(),
+    lastSleepSeq: 5905,
+  })
+  const ctx = host({ live: true, transcriptSize: 5913 })
+  const result = await requestPrivateConsolidation(ctx, 'fork-large-thin')
+  assert.equal(result.ok, true)
+  assert.equal(result.skipped, 'no-human-turn', 'the increment carries no human turn to consolidate')
+  assert.equal(result.settled, false, 'nothing was consolidated, so the cursor must not move')
+  assert.equal(ctx.rec.created.length, 0, 'no fork when the pending increment has no evidence')
+  assert.equal(state.getSessionBinding('fork-large-thin').lastSleepSeq, 5905, 'the cursor must not advance')
+})
+
+test('a large transcript that was never consolidated does fork, because the backlog is real', async () => {
+  // 同一条会话，但没有整理过：整段 5913 条事件都躺在 pending 里。
+  // 守卫要躲的是「为一句轻话重种整段转录」，不是「把从没整理过的大会话永远挡在门外」；
+  // 没有这条上界，长会话早期的决定永远进不了记忆——那不是省 token，是丢失。
+  state.ensureSession('fork-large-owed', { cwd: path.join(home, 'proj-large-owed'), agentPreset: 'coding' })
+  state.setSessionBinding('fork-large-owed', { lastTurnAt: new Date(Date.now() - 40 * 60_000).toISOString() })
+  const ctx = host({ live: true, transcriptSize: 5913 })
+  const result = await requestPrivateConsolidation(ctx, 'fork-large-owed')
+  assert.equal(result.ok, true, 'the backlog bound lets this one through')
+  assert.equal(ctx.rec.created.length, 1, 'a large unconsolidated backlog is worth exactly one fork')
 })

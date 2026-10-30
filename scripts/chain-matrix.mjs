@@ -262,9 +262,19 @@ function remoteVectorRetrieve(libraryId) {
 }
 
 // ------------------------------------------------------------ 宿主 ctx（fork 宿主）
+// 加权唤醒要求真实的检查理由：多回合、有结论、有去重后的工具工作。
+// 只有一条消息 + 一个工具调用的旧 fixture 现在会（正确地）落进 low-score。
 const TRANSCRIPT = [
   { seq: 0, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '帮我把这段对话里值得记的东西整理成记忆，尤其是海边的那个傍晚。' }] } },
-  { seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', name: 'read', arguments: '{}' }] } } },
+  { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '另外把回滚步骤和失败原因也写清楚。' }] } },
+  { seq: 2, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '最后给我一版可以直接照做的清单。' }] } },
+  { seq: 3, type: 'assistant/message', data: { message: { content: [
+    { type: 'text', text: '海边的傍晚那一段是这次对话里最值得留下的内容。'.repeat(120) },
+    { type: 'tool-call', name: 'read', arguments: '{}' },
+  ] } } },
+  { seq: 4, type: 'tool/result', data: { message: { isError: false, content: [{ type: 'text', text: '回滚步骤与失败明细'.repeat(160) }] } } },
+  { seq: 5, type: 'tool/result', data: { message: { isError: false, content: [{ type: 'text', text: '迁移账本与索引差异'.repeat(160) }] } } },
+  { seq: 6, type: 'tool/result', data: { message: { isError: false, content: [{ type: 'text', text: '验收清单与测试输出'.repeat(160) }] } } },
 ]
 
 function makeHost({ sessionId, cwd, onFork }) {

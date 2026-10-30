@@ -14,7 +14,7 @@
 
 1. **不改 DSH 源码**，只用插件、公开 service、RPC、slot；只用公开扩展点。
 2. **不让主 agent 写全局记忆**：全局只由 curator 写，主 agent 只读。
-3. **动态记忆不进 system prompt**（静态 guide 可以）：走独立 plugin 消息，保护 KV cache 也让注入可折叠。`persona` 带 `complete: true` 的预设会丢弃本插件的 system prompt 段，这类会话的 guide 改由首步一条 `<memory-guide>` 消息投放（`withGuideMessage`，按 `binding.guideMessageAt` 只发一次，`lib/inject.js`）——仍然是 plugin 消息，不是把动态记忆写进 system prompt。
+3. **记忆规则与动态记忆都走 plugin 消息**：当前版本不再注册 system prompt 段；静态 guide 在回合首步以 `<memory-guide rules="…">` 投放（`rulesKey` 处理切域/改稿/压缩丢失），动态记忆走独立 plugin 消息，保护 KV cache 并让注入可折叠。
 4. **不每步注入**：普通回合首步注入；长工具回合只在出现尚未处理的真实人类消息批次时追加一次。工具日志、心跳不算人类消息。
 5. **不自动删除记忆**：永久记忆移出 = 边缘化；删库必须显式确认；删会话默认只解绑。
 6. **Python 不装进系统解释器 / 用户 site-packages**，只装 `engine/<version>/venv`，且 venv 里不留 pip（`--without-pip` 建，再用基础 Python 的 `pip --python` 指进去装）。

@@ -28,6 +28,7 @@
 - open_loop：只标外部阻塞（等对方决定、等发布、等一个跑不完的验证），不标「还没想清楚」。
 - confidence：没完全确认就写低一点。
 - 工程事实用 owner=about_project、mood_valence=0、arousal=0.35、peak=false；工作偏好才用 owner=about_user，不把排障焦虑当作事实准确性。
+- 情绪按事件所在回合还原：emotion 描述的是那条记忆里的那次事件，不是整理时的心情；工程事实不写角色情绪，owner=about_project 固定中性。dominance 只在写人物侧条目时填（自己在推动为正、被推着走为负），工程事实省略。同一轮的多条条目各填各的，不把一次争吵的情绪串到所有条目。
 
 永久记忆只留给「永远不能违反的约束」；普通决定不要 pin。
 不要写全局记忆；全局记忆只由 curator 写。

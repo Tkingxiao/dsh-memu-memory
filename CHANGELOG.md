@@ -1,5 +1,24 @@
 # 更新日志 / Changelog
 
+## [1.2.0] - 2026-10-30
+
+### 情绪模型（四项构成 + 双辅助轴）
+
+- `readMood` 从单一 valence 扩展为四项构成（joy/anger/sorrow/fear，和为 1）+ arousal（强度）+ dominance（掌控感）；返回值继续带 `valence`，旧调用不受影响。
+- 复合情绪不再是新维度，而是单纯形上的具名点：委屈/尴尬/嫉妒/心疼/不甘各有明确词条与默认掌控感。
+- 召回新增 overlap 一致性路径（±30%）与 dominance 乘数（±10%），旧条目无 `emotion` 时回落原 valence 路径，不反推四轴。
+- 门控改为三条独立条件的 OR：主导项 share ≥ 0.35、`|arousal − 0.35| ≥ 0.1`、`|dominance| ≥ 0.25`。
+- 写入区分三种语义：省略=继承会话心情，`null`=明确中性，对象=模型读数；`emotionSource` 记录来源（model/session/content/unknown）。
+- 后台整理 fork 显式不继承父会话心境，四份整理提示词要求按事件所在回合还原情绪。
+- 修掉派生 valence 把 anger 记为正、`emotion: null` 被继承覆盖、`dominanceBias(null)` 返回 1.05 三处偏差。
+
+### 主动记忆 A/B 数据集
+
+- 新增 4 个规模梯度 case（98 / 998 / 4998 / 19998 事件），用既有 padding 生成器产出，零手写事件；数据集 10 → 14 个 case。
+- 梯度暴露了一个此前被 fixture 规模掩盖的事实：`guide-weighted` 的覆盖在阈值以上低于 legacy（11/20 vs 14/20），守卫在 2000 事件处把薄回合的覆盖换成 seed 成本（19,998 事件一次 fork 约 32k token → 0）。
+- 新增 `guide-weighted:structural` 行，用 `lib/consolidation-receipt.js` 的 `parseReceipt` 把 C 包回执映射成凭证；14 个 case 与 oracle 行逐条一致。
+- 真实模型运行器的 dry-run 计划从 20 个请求变为 28 个（14 case × 2 臂）。
+
 ## [1.1.3] - 2026-10-30
 
 ### 本地向量（受管）

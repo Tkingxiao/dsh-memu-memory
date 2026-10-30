@@ -1,0 +1,351 @@
+{
+  "schemaVersion": 1,
+  "kind": "active-memory-ab-case",
+  "id": "clean-dense-turn",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "annotationSource": "synthetic-proxy",
+  "interference": "off",
+  "title": "密集回合：分数达标就检查，不等空闲",
+  "annotationNotes": "合成代理标注：按 seq 指向“若由人来标也应记”的事件，未经过人工确认。",
+  "snapshot": {
+    "domain": "coding",
+    "idleAtSnapshotEndMinutes": 0.5,
+    "lastInjectedAt": null,
+    "events": [
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:00:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "我们决定把主动记忆改成快照 worker：主会话不再等整理跑完，worker 只处理固定前缀 (fromSeq, throughSeq]。根因是现在的 fork 每次都把整段转录重新种进去，5 个成功 fork 实测平均 9.4 万 input（含缓存读），长会话一次就接近 22 万。这条结论要留在记忆里，别再回头讨论窗口化 seed——宿主目前不支持，重编号会被拒。另外记一下约定：worker 只能写私有层，全局条目只读，不许把全局正文复制进私有条目；凭证必须带 fromSeq、throughSeq、snapshotSha256 和 scopeGeneration 四样，缺一样就不能前移游标。还有一条：检查结果为 no_value 必须来自 completed 凭证，空白输出、任务 idle、工具不可达都不算 no_value，要分别记成 failed 或 deferred，并且不能前移游标。这些口径以后都按这个来，不再重新讨论。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "记下了：检查走快照 worker，窗口化 seed 先不做。我把两处证据分别标出来：一是 fork 的 usage，二是宿主 seed 语义的实测边界。结论按四条落库：快照 worker、全局只读、凭证四要素、no_value 的口径。这样后面写测试就有明确断言点。"
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "c1",
+                "name": "read",
+                "arguments": {
+                  "path": "docs/active-memory-construction.md"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "tool/result",
+        "at": "2026-10-30T02:00:00.000Z",
+        "toolCallId": "c1",
+        "data": {
+          "message": {
+            "isError": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "§13.11 每次 fork 实测（只看种子截止标记之后的 fork 自有回合，数据来自 assistant/message.data.usage）：\n\n| fork | 源会话 | 事件数 | LLM 步数 | uncached input | cache read | output |\n| mvttm41k | 62056bff | 2327 | 5 | 161161 | 55680 | 2325 |\n| mvtyrh91 | 62056bff | 5956 | 3 | 83504 | 13696 | 1853 |\n| mvtqiitr | e38a0de0 | 105 | 2 | 21426 | 19584 | 769 |\n| mvu0wkex | edf7dc5c | 80 | 3 | 16979 | 35200 | 962 |\n| mvu1kbw4 | edf7dc5c | 104 | 3 | 19090 | 43008 | 3406 |\n\n平均每次约 9.4 万 input（含缓存读）+ 1.9k output；首请求约 2~4 万 input，之后随记忆工具步数增长，宿主会压缩上下文。宿主 seed 语义实证（@deepseek-ai/dsh-session）：buildForkSeed(events, lastSeq) 加 inheritedEventCount = lastSeq + 1 会被接受；只种最近窗口（重编号 + inheritedEventCount: 0）被拒绝，报 sourceEventSeqs must reference earlier events: 4653 >= current seq 7；不重编号直接切片报 seq 4648 (expected 0); seed must be contiguous from 0。因此窗口化 seed 不是「改改 count」能做的，在宿主提供官方 windowed seed 之前不做。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:00:00.000Z",
+        "step": 1
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:01:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "还有一条硬约束：迁移脚本只允许在 engine/<version>/venv 里跑，不许碰系统解释器，也不许往用户 site-packages 里装东西。venv 里不留 pip，用基础 Python 的 pip --python 指进去装。这是安全底线，不是风格偏好，任何“为了快一点”的临时方案都不算数；如果某次真的要破例，必须先在记忆里留下一条待复核的条目说明原因，并且等我确认。升级引擎也只装声明版本，走新 venv + smoke + 切换 + 保留旧版，不自动追最新 MemU；备份目录只保留最新三份，破坏性操作前必须自动再备份一次，删库这种操作必须我显式确认。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:01:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "明白，venv 是唯一允许的 Python 安装位置。我把这条记成硬约束，并在检查凭证里保留来源 seq，避免以后被“临时方案”悄悄覆盖。顺带把引擎升级与备份纪律一起记：只装声明版本、新 venv 切换、备份留三份、删库必须显式确认。"
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "c2",
+                "name": "grep",
+                "arguments": {
+                  "pattern": "site-packages"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "tool/result",
+        "at": "2026-10-30T02:01:00.000Z",
+        "toolCallId": "c2",
+        "data": {
+          "message": {
+            "isError": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "lib/engine.js:112 只使用 engine/<version>/venv/bin/python 调用引擎；scripts/setup.mjs 用 --without-pip 建 venv，再用基础 Python 的 pip --python 装依赖，venv 里不留 pip；docs/env-and-commands.md §9 记录了引擎安装、smoke、切换、回滚顺序与 prune 白名单（current / recommended 不参与 prune）；lib/backup.js 的备份只保留最新三份，破坏性操作前自动再备份一次；删库必须显式确认，删会话默认只解绑不删库。\n\n没有发现往系统解释器或用户 site-packages 写入的路径；唯一可疑的写法是把 pip install 放进 setup 的临时目录，但它已经在 venv 内执行。原会话里那次“直接 pip install 到系统”的记录来自上个月的旧脚本，已经删除。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:01:00.000Z",
+        "step": 2
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:02:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "第三个决定：人审候选集和 gold gating 要分开。评审状态先保持 pending，合成代理标注永远不许标成 gold；真实模型调用必须我明确选择之后才能做，你不要自己去联网跑对照。评测结果先写 provisional，宁可说“调度/管线通过”，也不要把合成代理的数字说成真实模型的主功率提升。评测要报的口径我也定一下：应记事件覆盖率与延迟、检查 no_value 率、重复与 held 条数、每千有效步骤的检查次数、额外调用与 token 估算、主任务阻塞耗时，调度结果与模型效果必须分开写。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:02:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "接受这个口径。报告里我会把 goldGating 与 model 两块分开写：executed 固定为 false，标注来源标 synthetic-proxy，覆盖率先给上下界而不是点估计；指标按你列的那几项输出，调度与模型效果分栏。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:02:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "先把指标口径核对一遍，避免报告里混着写。"
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "c3",
+                "name": "grep",
+                "arguments": {
+                  "pattern": "per1000Steps"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "tool/call",
+        "at": "2026-10-30T02:02:00.000Z",
+        "toolCallId": "c3",
+        "name": "grep",
+        "arguments": {
+          "pattern": "per1000Steps"
+        }
+      },
+      {
+        "type": "tool/result",
+        "at": "2026-10-30T02:02:00.000Z",
+        "toolCallId": "c3",
+        "data": {
+          "message": {
+            "isError": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "scripts/recall-bench.mjs 里已有的口径是：候选 id 与最终注入 id 分别算 Recall@3、MRR@3、无答案误召回率、隔离违规、延迟统计、按子类分组；预算只报 estimate，字段名写明 estimateOnly，并注明「不是实际 token 用量」。同样的纪律搬到这里：覆盖率先给上下界（oracle 上界、no-value 下界），延迟用「人类回合数 / step-start 事件数」而不是毫秒，成本用 estTokens 估算并在报告里注明 estimateOnly=true，阻塞只报结构性口径（旧 fork 每个检查都让主会话等满整段前缀，快照 worker 不等）而不编造真实延迟。所有这些字段名必须与 doc 一致，否则读者会拿估算当实测。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:02:30.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "再确认一条：held 不能算覆盖。"
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "c4",
+                "name": "read",
+                "arguments": {
+                  "path": "docs/active-memory-construction.md"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "tool/call",
+        "at": "2026-10-30T02:02:30.000Z",
+        "toolCallId": "c4",
+        "name": "read",
+        "arguments": {
+          "path": "docs/active-memory-construction.md"
+        }
+      },
+      {
+        "type": "tool/result",
+        "at": "2026-10-30T02:02:30.000Z",
+        "toolCallId": "c4",
+        "data": {
+          "message": {
+            "isError": false,
+            "content": [
+              {
+                "type": "text",
+                "text": "§13.6 正常输出与成功条件：检查结果至少有 checked range / snapshot identity / scope generation、status: completed | skipped | deferred | failed、outcome: created | updated | mixed | no_value、createdIds / updatedIds / heldIds、reasonCode / retryable。no_value 必须有明确正常结果，不等于空输出或任务 idle。工具动作的 id、正文版本和来源事件要能核验；重复写返回已有 id 不算新增。冲突 pending_review 单独计 held，不计可召回成功。§13.6 游标与恢复：只有完整覆盖范围且有凭证的 completed / no_value 才前移相应 checked 游标；失败、不支持工具、超时、半步、格式错误不能前移；分批时只确认实际覆盖前缀。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:02:00.000Z",
+        "step": 3
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:03:00.000Z"
+      },
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:04:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:04:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "继续，把剩下两个测试补上。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:04:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "好的，先跑用例结构检查。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:05:00.000Z"
+      }
+    ]
+  },
+  "labels": {
+    "expected": [
+      {
+        "id": "mem-ab-dense-worker-decision",
+        "class": "decision",
+        "sourceSeq": 1,
+        "note": "检查改用固定前缀快照 worker，主会话不等整理"
+      },
+      {
+        "id": "mem-ab-dense-fork-root-cause",
+        "class": "root-cause",
+        "sourceSeq": 3,
+        "note": "fork 重复种整段转录，每次约 9.4 万 input"
+      },
+      {
+        "id": "mem-ab-dense-venv-constraint",
+        "class": "preference",
+        "sourceSeq": 5,
+        "note": "Python 只装 engine/<version>/venv，不碰系统解释器"
+      },
+      {
+        "id": "mem-ab-dense-gold-gating",
+        "class": "promise",
+        "sourceSeq": 9,
+        "note": "合成代理标注不标 gold；真实模型调用需用户明确选择"
+      }
+    ],
+    "mainProactive": [],
+    "userReminders": []
+  },
+  "expect": {
+    "wakeReasons": [
+      "score"
+    ],
+    "minBackgroundChecks": 1,
+    "coveredLabelIds": [
+      "mem-ab-dense-worker-decision",
+      "mem-ab-dense-fork-root-cause",
+      "mem-ab-dense-venv-constraint",
+      "mem-ab-dense-gold-gating"
+    ]
+  }
+}

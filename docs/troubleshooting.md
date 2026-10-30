@@ -214,11 +214,11 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **落点**：预设会话的「模型可见插件集」是它自己那份 `cordis.yml` 清单，整棵子树是独立 scope——`agent/pre-step` 只会向自己的祖先冒泡，永远到不了部署级实例的监听器，于是 `ensureSession` 从不执行。`persona` 的 `complete: true` 只是把 system prompt 段剥掉，**不是原因**；所以「把 memu 加进预设」和「改预设的 cordis.patch.yml」都不是本插件该做的事（那是别人的人格插件）。
 
-**人格把提示词吃掉了**：`persona` 的 `complete: true` 会把本插件注入的 system prompt 段整段丢弃（实测 `E:p` 的会话 `system/message` 只有人格正文，但工具链里 `memu_private_*` 是在的）。仅靠 system prompt 段的话，模型有工具却不知道可以主动写。现在改为**首步用消息投放一次 `<memory-guide>`**（`binding.guideMessageAt` 去重），并在文末提示「没有 `memu_*` 工具就忽略本段」。
+**人格把提示词吃掉了**：`persona` 的 `complete: true` 会把 system prompt 段整段丢弃（实测 `E:p` 的会话 `system/message` 只有人格正文，但工具链里 `memu_private_*` 是在的）。仅靠 system prompt 段的话，模型有工具却不知道可以主动写。当前版本所有会话统一改为**回合首步用消息投放 `<memory-guide rules="…">`**（`rulesKey` 版本控制，切域/改稿/压缩丢失会替换），并在文末提示「没有 `memu_*` 工具就忽略本段」。
 
 **现在的做法**：`lib/preset-scope.js` 每 10 秒枚举 `ctx.get('agents').list()`，对**不在本插件 scope 树里**的会话（判据是沿 `agent.ctx.fiber` 往上找本插件的 fiber，找不到才算），在它**自己的 ctx**（`raw?.ctx || agent?.ctx || agents.get(sessionId)?.ctx`，`lib/preset-scope.js:71`）上补挂 `registerInjection(actx, { guide: false, guideMessage: true })`（`lib/preset-scope.js:79`）——**首参必须是这个 agent 自己的 ctx**，不是部署级实例的 ctx，否则绑定和注入都会挂错会话。`guide: false` 只表示不注册 system prompt 的 guide 段；规则改由 `guideMessage: true` 在首步用消息投放一次，正文自带「工具列表里没有 `memu_*` 就忽略本段」，所以不承诺预设没有的工具。已挂过的按 agent ctx 记在进程级登记表里，会话消失就卸载；正常会话（同一棵树）跳过，避免注入两遍。
 
-**边界**要分三件事讲：① **注入监听**——补挂到 agent 自己的 ctx 后，锚点与召回上下文能送达；② **guide 投放**——首步一条 `<memory-guide>` 消息，会话内只发一次，正文自己声明「没有工具就忽略」；③ **最终工具面**——由该预设自己的 `cordis.yml` 清单与宿主 scope 决定，本插件**不能**从「有没有列上它」推断出一定有或一定没有。历史观察里同一节既记过「没有工具」，也记过某些预设的工具链里有 `memu_private_*`；**逐预设的真实工具名单仍须真机核实（W3）**，核实前不要写成「只有注入、没有工具」，也不要反过来写成「列上插件就一定可用」。真要在没有工具的会话里写记忆，进一次标准会话仍是最直接的办法——但如果该预设确实列了本插件且工具注册成功，记忆可以直接在那个会话里写。预设文件属于它的维护者，不要为了让工具出现去改别人的插件。
+**边界**要分三件事讲：① **注入监听**——补挂到 agent 自己的 ctx 后，锚点与召回上下文能送达；② **guide 投放**——首步一条 `<memory-guide>` 消息，规则变化或压缩丢失时替换，不是每回合重复；正文自己声明「没有工具就忽略」；③ **最终工具面**——由该预设自己的 `cordis.yml` 清单与宿主 scope 决定，本插件**不能**从「有没有列上它」推断出一定有或一定没有。历史观察里同一节既记过「没有工具」，也记过某些预设的工具链里有 `memu_private_*`；**逐预设的真实工具名单仍须真机核实（W3）**，核实前不要写成「只有注入、没有工具」，也不要反过来写成「列上插件就一定可用」。真要在没有工具的会话里写记忆，进一次标准会话仍是最直接的办法——但如果该预设确实列了本插件且工具注册成功，记忆可以直接在那个会话里写。预设文件属于它的维护者，不要为了让工具出现去改别人的插件。
 
 **守卫**：`tests/preset-scope.test.mjs`（同树跳过、兄弟树挂上、只挂一次、agent 消失就卸载、子 agent 与无 ctx 的条目跳过、无 `agents` 服务不算错）。手工核对：日志里有 `attached memory injection to preset conversation <id>`，且 `state.json` 的 `sessions` 出现该会话。
 
@@ -383,7 +383,7 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 
 1. **不改 DSH 源码**，只用插件、公开 service、RPC、slot；只用公开扩展点。
 2. **不让主 agent 写全局记忆**：全局只由 curator 写，主 agent 只读。
-3. **动态记忆不进 system prompt**（静态 guide 可以）：走独立 plugin 消息，保护 KV cache 也让注入可折叠。
+3. **记忆规则与动态记忆都走 plugin 消息**：当前版本不再注册 system prompt 段；静态 guide 在回合首步以 `<memory-guide rules="…">` 投放（`rulesKey` 处理切域/改稿/压缩丢失），动态记忆走独立 plugin 消息，保护 KV cache 并让注入可折叠。
 4. **不每步注入**：普通回合首步注入；长工具回合只在出现尚未处理的真实人类消息批次时追加一次。工具日志、心跳不算人类消息。
 5. **不自动删除记忆**：永久记忆移出 = 边缘化；删库必须显式确认；删会话默认只解绑。
 6. **Python 不装进系统解释器 / 用户 site-packages**，只装 `engine/<version>/venv`，且 venv 里不留 pip（`--without-pip` 建，再用基础 Python 的 `pip --python` 指进去装）。

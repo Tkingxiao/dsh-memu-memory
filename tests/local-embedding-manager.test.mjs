@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { spawn as spawnReal } from 'node:child_process'
-import { createEmbeddingWorkerManager, embeddingWorkerManager, closeEmbeddingWorkers } from '../lib/local-embedding-manager.js'
+import { createEmbeddingWorkerManager, childEnvironment, embeddingWorkerManager, closeEmbeddingWorkers } from '../lib/local-embedding-manager.js'
 
 const MODEL = 'bge-small-zh-v1.5@r1+mean-l2-512'
 const TOKEN_PATTERN = /^[0-9a-f]{64}$/
@@ -436,4 +436,41 @@ test('a real child process serves the ready line and does not outlive the manage
       try { child.kill() } catch {}
     }
   }
+})
+
+test('the ready timeout still fires when nothing but the timer holds the event loop', async () => {
+  // N2: an unref'd boot timer never fires on an event loop that has nothing else to do,
+  // so acquire() stays pending instead of degrading to lexical recall. A stand-in spawn
+  // (no pid, no libuv handle) is exactly that situation, and node:test keeps the loop
+  // alive for its own reasons, so the only honest check runs out of process: this probe
+  // exits on its own the moment nothing references it, and prints nothing if it does.
+  const managerUrl = new URL('../lib/local-embedding-manager.js', import.meta.url).href
+  const profileJson = JSON.stringify(PROFILE)
+  const script = [
+    'const { createEmbeddingWorkerManager } = await import(' + JSON.stringify(managerUrl) + ')',
+    'const { EventEmitter } = await import("node:events")',
+    'const spawnImpl = () => {',
+    '  const child = new EventEmitter()',
+    '  child.stdin = new EventEmitter(); child.stdin.end = () => {}',
+    '  child.stdout = new EventEmitter(); child.stderr = new EventEmitter()',
+    '  child.kill = () => {}',
+    '  return child',
+    '}',
+    'const profile = ' + profileJson,
+    'const manager = createEmbeddingWorkerManager({ spawnImpl, verifyProfile: () => {}, logger: { warn() {} }, timeoutMs: 300 })',
+    'const outcome = await manager.acquire(profile).then(() => "RESOLVED", error => "REJECTED:" + error.code)',
+    'manager.close()',
+    'process.stdout.write(outcome + String.fromCharCode(10))',
+  ].join(String.fromCharCode(10))
+  const child = spawnReal(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'ignore'], env: childEnvironment({}) })
+  let out = ''
+  child.stdout.setEncoding('utf8')
+  child.stdout.on('data', chunk => { out += chunk })
+  let guard = null
+  const closed = new Promise(resolve => child.once('close', code => resolve(code)))
+  const deadline = new Promise(resolve => { guard = setTimeout(() => resolve('hung'), 20_000) })
+  const result = await Promise.race([closed, deadline])
+  clearTimeout(guard)
+  assert.equal(result, 0, 'the probe must settle on the boot timeout, not drain with the acquire still pending')
+  assert.equal(out.trim(), 'REJECTED:LOCAL_VECTOR_START_TIMEOUT', 'a stand-in child that never reports ready must time out')
 })

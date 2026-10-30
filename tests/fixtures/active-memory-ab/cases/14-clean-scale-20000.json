@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "kind": "active-memory-ab-case",
+  "id": "clean-scale-20000",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "annotationSource": "synthetic-proxy",
+  "interference": "off",
+  "title": "规模梯度 20000 事件：上限区，薄回合被拦且完整前缀种子成本最高",
+  "annotationNotes": "合成代理标注。与 clean-large-thin 同证据、同标签、同 expect 形状，唯一变量是 padding.count，用于标定 largeTranscriptEvents 阈值。padding 是确定性工具轮询，文本完全相同，去重后只算 1 个工作单元。",
+  "snapshot": {
+    "domain": "coding",
+    "idleAtSnapshotEndMinutes": 20,
+    "lastInjectedAt": null,
+    "events": [
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:00:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "先按计划把迁移脚本跑通，日志我看产出就行。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "开始跑。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:00:00.000Z",
+        "step": 1
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:00:30.000Z"
+      },
+      {
+        "type": "padding",
+        "at": "2026-10-30T02:01:00.000Z",
+        "startAt": "2026-10-30T02:01:00.000Z",
+        "count": 4997,
+        "intervalMs": 1000,
+        "tool": "read",
+        "text": "polling: no change"
+      },
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:10:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:10:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "继续"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:10:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "还在跑。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:10:00.000Z",
+        "step": 4997
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:10:00.000Z"
+      }
+    ]
+  },
+  "labels": {
+    "expected": [
+      {
+        "id": "mem-ab-scale-plan-scope",
+        "class": "decision",
+        "sourceSeq": 1,
+        "note": "迁移脚本先跑通，日志以产出为准"
+      },
+      {
+        "id": "mem-ab-scale-thin-tail",
+        "class": "promise",
+        "sourceSeq": 19994,
+        "note": "末尾薄回合（“继续”）本身没有新事实，用于量漏记"
+      }
+    ],
+    "mainProactive": [],
+    "userReminders": []
+  },
+  "expect": {
+    "maxBackgroundChecks": 0,
+    "blockedReasons": [
+      "large-transcript-thin"
+    ]
+  }
+}

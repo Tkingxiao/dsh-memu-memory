@@ -18,7 +18,16 @@ const check = (label, command, args) => {
 }
 
 for (const dir of ['lib', 'scripts', 'tests']) {
-  for (const file of fs.readdirSync(path.join(root, dir), { recursive: true })) {
+  const abs = path.join(root, dir)
+  // 一个目录可以合法缺席：老版本 npm 包不发布 tests/，开发检出里才有。
+  // 以前这里直接 readdirSync，产物内 `npm run check` 会 ENOENT 崩在第一步，
+  // 而 `npm test` 因为通配符匹配不到文件反而报 0 条测试、exit 0（假绿）。
+  // 缺席就 skip 并说明，不当作失败，也不让脚本崩。
+  if (!fs.existsSync(abs)) {
+    console.log(`skip ${dir}/: directory not present in this install`)
+    continue
+  }
+  for (const file of fs.readdirSync(abs, { recursive: true })) {
     if (!/\.(js|mjs)$/.test(file)) continue
     check(`${dir}/${file}`, process.execPath, ['--check', path.join(dir, file)])
   }

@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "kind": "active-memory-ab-case",
+  "id": "clean-starved-small",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "annotationSource": "synthetic-proxy",
+  "interference": "off",
+  "title": "小会话饥饿：空闲到阈值就无条件检查一次",
+  "annotationNotes": "合成代理标注：短关键口径（no_value 的语义）算应记事件，不能因为字符少就丢。",
+  "snapshot": {
+    "domain": "coding",
+    "idleAtSnapshotEndMinutes": 20,
+    "lastInjectedAt": null,
+    "events": [
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:00:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "把刚才那个 no_value 的口径记一下：检查正常返回空结果才算 no_value，空白输出和 idle 都不算。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "收到，no_value 只在凭证 completed 且没有候选时成立。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:00:00.000Z",
+        "step": 1
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:00:30.000Z"
+      },
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:01:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:01:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "对，就这个。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:01:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "已经按这个口径记好了。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:01:00.000Z",
+        "step": 2
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:01:30.000Z"
+      }
+    ]
+  },
+  "labels": {
+    "expected": [
+      {
+        "id": "mem-ab-starved-no-value-rule",
+        "class": "decision",
+        "sourceSeq": 1,
+        "note": "no_value 必须是正常空结果，空白输出与 idle 不算"
+      }
+    ],
+    "mainProactive": [],
+    "userReminders": []
+  },
+  "expect": {
+    "wakeReasons": [
+      "starved"
+    ],
+    "minBackgroundChecks": 1,
+    "coveredLabelIds": [
+      "mem-ab-starved-no-value-rule"
+    ]
+  }
+}

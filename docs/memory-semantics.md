@@ -28,22 +28,23 @@
 
 ### 8.4 注入
 
-- 静态 guide 默认在 system prompt（按 domain 选变体）；动态记忆走 plugin 消息。`persona` 带 `complete: true` 的预设会把 system prompt 段整段丢弃，这类会话改由**一次性消息**投放：`withGuideMessage`（`lib/inject.js:703`）按 `binding.guideMessageAt` 在**首步**追加一条 `<memory-guide>` 插件消息，会话内只发一次（`:708` 只在 `step === 1` 投放，`:719` 发完写 binding；fail-open，`:721`）；投放的是静态规则，动态记忆仍然不进 system prompt。
+- 静态 guide 与动态记忆都走 plugin 消息；当前版本不再注册本插件的 system prompt 段。所有会话（含 `persona` `complete: true`）统一由 `lib/inject.js` 的 `ensureUnifiedGuide` 在**回合首步**投放一条 `<memory-guide rules="…">` 插件消息；`rulesKey` 由协议版本、domain 和实际渲染正文计算，domain/覆盖/默认稿变化或压缩丢失（`guideLost`）时在下一个合法首步替换，同一规则不逐回合重复。旧 binding 只有 `guideMessageAt`、没有 `guideRulesKey` 时视为旧版，补投一次；失败 fail-open，不写新版本。
 - 首轮锚点 + 每用户回合最多一次；长工具回合仅有新的真实人类消息批次时追加一次，普通工具步骤不触发。私有优先、全局补充；冲突时私有胜。
 - **`injectedIds` 只能记真正进入文本的条目**，否则从未展示的记忆被白白压制 8 轮。
 - 锚点分段预算 pin 40% / core 30% / global 30%；pin 装不下时末尾明示「另有 N 条未展开」，**不静默丢弃**。
 - 预算单位是**模型 token**不是字符：中文 ≈1 字符/token、英文 ≈3.4，一律走 `lib/budget.js`，**不要再用 `tokens * 3`**（英文口径，中文超支约 3 倍）。
 - 压缩后下一条用户消息重注入锚点；子代理不注入。文件夹两开关都关 → 不注入（看 clamp 后生效值，不是 binding 原始值）。召回为空必须留信号（§1.10）。
-- **召回排序的准确口径**：`privateWeighted`（`lib/memory.js:643`）只服务**私有召回流水线**（`privateRecall` 调用它）；全局召回（`globalRecall`，`lib/memory.js:1526`）走 `localRecall`，不经过它。cue 会经 `cueRecall`（`lib/inject.js:124`）**间接**调用 `privateRecall`，所以**不能**概括成「cue 不走私有排序」。心境一致性与唤起窄化**默认关闭**（`moodEnabled: false`，`lib/memory.js:645`），只有 `|valence| ≥ 0.15` 或 `|arousal − 0.35| ≥ 0.1` 才打开（`lib/memory.js:1110`，阈值见 `:75` 与 `lib/mood.js:27`），平缓对话里两项乘数恒为 1。`privateRecall` 的 topK 兜底是「传入 topK → `settings.privateTopK`（默认 5）→ 4」（`lib/memory.js:1107`）：引用 3 或 4 时必须说清是**设置默认值**还是**代码兜底值**，两个数不是同一个。
+- **召回排序的准确口径**：`privateWeighted` 只服务**私有召回流水线**（`privateRecall` 调用它）；全局召回（`globalRecall`）走 `localRecall`，不经过它。cue 会经 `cueRecall` **间接**调用 `privateRecall`，所以**不能**概括成「cue 不走私有排序」。排序里的心境项默认关闭——`privateWeighted` 自己的缺省上下文就是 `moodEnabled: false`，真正打开它的是 `privateRecall`，条件是 `|valence| ≥ MOOD_MIN_STRENGTH` 或 `|arousal − BASE_AROUSAL| ≥ 0.1`（`BASE_AROUSAL` 来自 `lib/mood.js`）；平缓对话里两项乘数恒为 1。`privateRecall` 的 topK 兜底是「传入 topK → `settings.privateTopK`（默认 5）→ 4」：引用 3 或 4 时必须说清是**设置默认值**还是**代码兜底值**，两个数不是同一个。
+- **情绪模型（v3）**：一条记忆的情绪由四项构成 `joy / anger / sorrow / fear`（归一后和为 1）、强度 `arousal` 与掌控感 `dominance` 组成，`moodValence` 只是四轴在旧路径上的兼容投影。门控是三条**独立**条件的 OR：主导项 share ≥ 0.35、`|arousal − 0.35| ≥ 0.1`、`|dominance| ≥ 0.25`——「没有情绪构成」只关掉第一条，高唤起或明确的掌控感仍会打开排序项。双方都有合法 emotion 时用 overlap（各轴取较小值再求和）算一致性，任一侧缺失就回落到旧的 valence 路径；旧条目不从 valence 反推四轴。情绪只影响排序权重，不写进注入文本，也不进记忆正文。
 
 ### 8.5 提示词管理
 
 - 默认稿在 `lib/prompts/*.md`（随包）；用户覆盖在 `~/.dsh/dsh-memu-memory/prompts/*.md`；`manifest.json` 记 `defaultHash / userHash / defaultUpdated`。运行时统一 `lib/prompts.js` 的 `loadPrompt(key, vars)` / `loadPromptForDomain(key, vars, domain)`，**业务代码里不许硬编码正文**。
-- system prompt 的 section `text` 必须是函数（每次装配重读文件，保存后下一轮生效）且**整体包 try/catch**（§3.7）。
+- 规则消息每次首步重新渲染；`rulesKey` 只含版本、domain 和渲染后的正文，不含时间/回合，避免每轮不同。`private-policy` 模板保留供查阅和覆盖记录，但当前版本不再自动投放主会话；字段契约由工具 schema 与运行校验提供。
 - 模板只做单趟 `{{variable}}` 替换，变量值里的 `{{` 不会被二次展开——所以把记忆正文当变量塞进模板是安全的。**改成多趟插值前先想清楚这点。**
 - 恢复默认 = 只删用户覆盖；全部恢复 = 清空覆盖目录。升级后：无覆盖用新默认，有覆盖保留并标 `defaultUpdated`。
 - 分层：**作用域 → 类型页 → 项**。类型页是数据（`settings.promptDomains`，默认 `[rp, coding, mixed]` 全启用；`domainOverride` 默认 `rp`），`general` 内置不可删。变体 `<name>.<domain>.md` 由 `resolveDef` 解析：domain 在列表内且变体文件存在（默认**或**覆盖目录）→ 用变体，否则回落基础稿。
-- **职责分工**：`system-guide.*` 只写领域行为、检索时机、回答口径；字段定义、层级、复核、预算、unpin 只写在 `private-policy.*`。同一规则不要两份都写——重复撑长常驻提示词，改一处还留下另一半旧口径。
+- **职责分工**：`system-guide.*` 是唯一常驻规则，只写领域行为、检索时机、回答口径；`private-policy.*` 保留为字段规约参考，不再投放，避免两套常驻文本互相漂移。
 - **只有三个 key 分域**：`system-guide`、`private-policy`、`private-consolidation`；`global-curator` 不分域。
 - **远程与本地共用一份 `private-consolidation`**：正文讲「记什么、字段怎么填」，差异只有输出协议（`CONSOLIDATION_CONTRACTS.local` 调工具 / `.remote` 返回 JSON，代码追加）。不要拆第二份。
 - RP 与 coding 是**内容**差异：coding 记事实（决定、约束、踩过的坑、工程偏好），召回当「可能过期的事实」，与代码冲突时以代码为准；rp 记经验（具体瞬间、半句原话、身体感觉、没说出口的话），允许模糊记错，不确定就标低 `confidence`。
@@ -88,10 +89,11 @@
 ### 8.9 空闲整理：什么时候跑，以及为什么可以什么都不写
 - 触发：`settings.sleepConsolidation` 开着时，每 5 分钟扫一遍（`lib/cycle.js` 的 `runSleepPass`），挑「`lastTurnAt` 早于 `lastSleepAt` 且已经安静 ≥ `sleepAfterIdleMinutes`」的会话，交给 `requestPrivateConsolidation` 起一个 fork 去读转录、写记忆。**默认 3 分钟**（`lib/state.js` 的 `DEFAULT_SETTINGS`）；旧值 8/20 的安装保留原选择，只是新装默认更短。
 - 应用启动后 8 秒补跑一次（`STARTUP_SWEEP_MS`），因为定时器只在应用开着时存在：一段对话如果是在应用关着的时候结束的，它永远等不到那个「空闲窗口」——用户一回来发消息，`lastTurnAt` 就被顶新了。补偿每次最多处理 **2 个**会话（`runSleepPass` 的 `limit`），按最近活动排序。
-- **有新回合 ≠ 该写记忆。** 进 fork 之前先做一次本地评估（`lib/private.js` 的 `assessConsolidationValue`，只看 `lastSleepSeq` 之后的转录）：①没有任何人类消息（只有插件通知、工具结果、心跳）→ 跳过；②只有一条**纯应答**（「谢谢」「好的」「ok」「收到」，且没有任何工具调用）→ 跳过。**这里刻意不按字数判断**：字数少的偏好句（「我不吃香菜」）比一千字的闲聊更该留，长度是坏代理。其余一律交给 fork——**跳过只是省一次 fork，「该不该留」仍由整理提示词判断**，它完全可以读完写 0 条。宁可多跑一次，也不要在本地猜「这条不重要」。
-- 评估通过但整理写了 0 条 = 正常成功（`lastSleepAt` 前移），不会每小时重来。
-- 会话被删：host 对 `readSession` 报 `session "…" not found`，这是**不变量**而不是瞬时故障。`runSleepPass` 一旦看到就把 binding 标 `sessionGone: true` 并清掉重试计数，此后直接跳过（以前会按 2 的幂退避、封顶 1 小时，永远重试）；同名会话后来真的收到新消息时（`lib/inbound.js`）会清掉这个标记。
-- 手动「整理这场对话」（RPC `generatePrivate`）带 `force: true`，跳过上面那道评估：用户已经决定了。
+- **有新回合 ≠ 该写记忆。** 进 fork 之前先做两道本地评估（只看 `lastSleepSeq` 之后的转录）：① `assessConsolidationValue` 的硬门槛——没有任何人类消息（只有插件通知、工具结果、心跳）→ 跳过；只有一条**纯应答**（「谢谢」「好的」「ok」「收到」，且没有任何工具调用）→ 跳过。**这里刻意不按字数判断**：字数少的偏好句（「我不吃香菜」）比一千字的闲聊更该留，长度是坏代理。② `assessWake` 的加权分（`lib/active-memory.js`）：`H` 真人回合、`C` 真人文字 + 助手正文 + 去重后的成功工具结果（每个结果最多 2000 字符）、`U` 去重后的有效工具单元；`score = 0.35*min(H/3,2) + 0.45*min(C/4000,2) + 0.20*min(U/20,2)`，默认 `activeMemoryMinScore = 0.8`。空闲未到 `activeMemoryStarvationMinutes`（默认 15 分钟）时分数必须达标；到了饥饿阈值，**小于 2000 条事件的会话**无条件唤醒，**大 transcript 不吃饥饿豁免**——fork 的 seed 是整段前缀（真机 5913 条事件约 26MB），宿主虽然会压缩上下文，实测一次整理仍要约 4~22 万 input tokens（含缓存读，主要取决于记忆工具步数）；一个「继续」级薄回合只有 0.14~0.43 分，不能靠饥饿反复付这笔钱；大会话里的密集回合仍按分数正常触发。
+- **近期触发过记忆就不 fork。** `runSleepPass` 先看 `suppressionReason`：距上次整理不足 `activeMemoryCooldownMinutes`（默认 0）或距上次**注入过记忆**不足 `activeMemoryRecallCooldownMinutes`（默认 15 分钟）→ 跳过并发 `check` 日志。被抑制或低分跳过的回合返回 `settled: false`，不推进 `lastSleepSeq`/`lastSleepAt`；下一轮扫描重新评估，等真正有密集新内容再整理。
+- 评估通过但整理写了 0 条 = 正常成功（`lastSleepAt` 前移），不会每小时重来。整理日志额外记录 `scanned/fresh/index +N`（扫描多少事件、上次游标后新增多少、索引实际新增多少），`check` 日志记录 `score/reason/parts/空闲分钟/会话事件数`，用来区分「没触发、被门挡住、提取空转」。
+- 会话被删：host 对 `readSession` 报 `session "…" not found`，这是**不变量**而不是瞬时故障。`runSleepPass` 一旦看到就把 binding 标 `sessionGone: true` 并清掉重试计数，此后直接跳过（以前会按 2 的幂退避、封顶 1 小时，永远重试）；同名会话后来真的收到新消息时（`lib/inbound.js`）会清掉这个标记。**"读不出来"不是"被删了"**：转录读失败（例如 `ENOENT`）由快照层显式标成可重试（`lib/consolidation-snapshot.js` 的 `failed()` → `retryable: true`），`runSleepPass` 只按退避重试、不打 `sessionGone`——`isGoneSessionError` 只认宿主那句 `session "…" not found` / `no such session`。
+- 手动「整理这场对话」（RPC `generatePrivate`）带 `force: true`，跳过上面两道评估与抑制：用户已经决定了。
 
 ---
 
@@ -101,9 +103,9 @@
 
 插件侧的处理（`lib/preset-scope.js`）：每 10 秒枚举 `ctx.get('agents').list()`，沿 `agent.ctx.fiber` 往上找本插件的 fiber——找不到（= 不在自己这棵树里）才在该 agent 自己的 ctx（`lib/preset-scope.js:71` 取 `raw?.ctx || agent?.ctx || agents.get(sessionId)?.ctx`）上补挂 `registerInjection(actx, { guide: false, guideMessage: true })`（`lib/preset-scope.js:79`）。**首参必须是这个 agent 自己的 ctx**，不是部署级实例的 ctx，否则绑定与注入会挂错会话。`guide: false` 只表示**不注册 system prompt 的 guide 段**（预设未列本插件时没有 `memu_*` 工具；即便列了，`persona` 的 `complete: true` 也会丢弃该段），规则改由 `guideMessage: true` 用一次性消息投放，正文自带「工具列表里没有 `memu_*` 就忽略本段」。同树的正常会话跳过，避免注入两遍；agent 消失就卸载。
 
-**提示词怎么办**：`persona` 常带 `complete: true`——装配完成后它会被恢复为唯一的 system prompt 段，本插件 `systemPrompt.section()` 注册的 guide 会被整段丢弃（实测 RP 会话的 `system/message` 只有人格正文）。所以预设会话改用**消息**投放规则：首步追加一次 `<memory-guide>` 插件消息（`withGuideMessage`，按 `binding.guideMessageAt` 会话内只发一次），并注明「工具列表里没有 `memu_*` 就忽略本段」。工具确实存在的预设会话因此重新拿到主动性规则，而不是只有一个 anchor。
+**提示词怎么办**：所有会话现在都走同一条消息路径，预设的 `complete: true` 不再造成投放差异；`ensureUnifiedGuide` 在回合首步追加 `<memory-guide rules="…">`，文末提示「工具列表里没有 `memu_*` 就忽略本段」。切域、改稿、默认稿升级和压缩丢失由 `rulesKey`/`guideLost` 处理；旧会话只有 `guideMessageAt` 时补投一次。
 
-**边界要分三件事讲**：① **注入监听**——补挂到 agent 自己的 ctx 后，锚点与召回上下文能送达；② **guide 投放**——首步一条 `<memory-guide>` 消息，会话内只发一次，正文自己声明「没有工具就忽略」；③ **最终工具面**——由该预设自己的 `cordis.yml` 清单与宿主 scope 决定，本插件**不能**从「有没有列上它」推断出一定有或一定没有。历史记录里曾出现过某些 RP 会话工具链含 `memu_private_*`，但 2026-10-29 复核无法把它归到本机 `yuike` bundle（该 bundle 未列本插件，且本机无 `agentPreset=yuike` 的真机会话），只能保留为未复核历史观察；**逐预设的真实工具名单仍须真机核实（W3）**，核实前不要写成「只有注入、没有工具」，也不要反过来写成「列上插件就一定可用」。真要在没有工具的会话里写记忆，进一次标准会话仍是最直接的办法——但如果该预设确实列了本插件且工具注册成功，记忆可以直接在那个会话里写。**不要为了这个去改别人的人格插件**：预设文件属于它的维护者，插件只能在自己的 scope 里做适配。
+**边界要分三件事讲**：① **注入监听**——补挂到 agent 自己的 ctx 后，锚点与召回上下文能送达；② **guide 投放**——首步一条 `<memory-guide>` 消息，规则变化或压缩丢失时替换，不是每回合重复；正文自己声明「没有工具就忽略」；③ **最终工具面**——由该预设自己的 `cordis.yml` 清单与宿主 scope 决定，本插件**不能**从「有没有列上它」推断出一定有或一定没有。历史记录里曾出现过某些 RP 会话工具链含 `memu_private_*`，但 2026-10-29 复核无法把它归到本机 `yuike` bundle（该 bundle 未列本插件，且本机无 `agentPreset=yuike` 的真机会话），只能保留为未复核历史观察；**逐预设的真实工具名单仍须真机核实（W3）**，核实前不要写成「只有注入、没有工具」，也不要反过来写成「列上插件就一定可用」。真要在没有工具的会话里写记忆，进一次标准会话仍是最直接的办法——但如果该预设确实列了本插件且工具注册成功，记忆可以直接在那个会话里写。**不要为了这个去改别人的人格插件**：预设文件属于它的维护者，插件只能在自己的 scope 里做适配。
 
 ### 8.11 全局整理的间接输入边界
 

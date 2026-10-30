@@ -12,9 +12,13 @@ process.env.DSH_MEMU_HOME = home
 process.env.DSH_MEMU_MEMORY_HOME = home
 const calls = []
 const warnings = []
+const backendRows = new Map()
+const backendKey = (db, name) => JSON.stringify([db, name])
 let commitHook = null
 let retrieveHook = null
 let failCommit = false
+let failForget = false
+let forgetHook = null
 let vp
 
 globalThis.__managedMemoryTest = {
@@ -22,11 +26,12 @@ globalThis.__managedMemoryTest = {
     calls.push({ op: 'commit', ...args })
     // The lease invariant only exists while there is a generation to protect. A
     // requested-but-never-migrated profile writes without vectors on purpose.
-    if (vp.hasActiveVectorGeneration()) {
+    if (args.route === 'managed-local' && vp.hasActiveVectorGeneration()) {
       assert.ok(Object.keys(vp.activeVectorState().writeGuard.leases).length, 'lease spans MemU await')
     }
     if (commitHook) await commitHook(args)
     if (failCommit) throw new Error('mock managed commit failed')
+    for (const row of args.payload.recall_files) backendRows.set(backendKey(args.db, row.name), structuredClone(row))
     return { ok: true }
   },
   async retrieve(args) {
@@ -35,8 +40,11 @@ globalThis.__managedMemoryTest = {
   },
   async forget(args) {
     calls.push({ op: 'forget', ...args })
-    if (vp.hasActiveVectorGeneration()) assert.ok(Object.keys(vp.activeVectorState().writeGuard.leases).length)
-    return { ok: true }
+    if (args.route === 'managed-local' && vp.hasActiveVectorGeneration()) assert.ok(Object.keys(vp.activeVectorState().writeGuard.leases).length)
+    if (forgetHook) return forgetHook(args)
+    if (failForget) throw new Error('mock managed forget failed')
+    backendRows.delete(backendKey(args.db, args.name))
+    return { deleted: 1, segments: 1 }
   },
   async listFiles() { throw new Error('unexpected list engine call') },
 }
@@ -95,6 +103,9 @@ test.beforeEach(() => {
   commitHook = null
   retrieveHook = null
   failCommit = false
+  failForget = false
+  forgetHook = null
+  backendRows.clear()
   paths.setWarnSink(message => warnings.push(String(message)))
 })
 test.after(() => {
@@ -254,6 +265,141 @@ test('managed agent update import delete and review call engine under lease; hel
   assert.equal(state.loadPrivateIndex(f.libraryId).entries['mem-archived'], undefined)
 })
 
+test('post-CAS remember failure compensates the newly committed backend row', async () => {
+  const f = fixture()
+  activate([f.libraryId])
+  commitHook = async () => state.setSessionBinding(f.sessionId, { libraryId: 'rebound-library' })
+  await assert.rejects(
+    memory.privateRemember({ exec: f.exec, content: 'must compensate', title: 'must compensate' }),
+    /memory scope changed during write; retry/,
+  )
+  assert.deepEqual(calls.map(call => call.op), ['commit', 'forget'])
+  assert.equal(calls[1].db, calls[0].db, 'cleanup uses the captured database after rebind')
+  assert.equal(calls[1].name, calls[0].payload.recall_files[0].name)
+  assert.equal(backendRows.size, 0, 'no orphan survives in the fake backend')
+  assert.deepEqual(state.loadPrivateIndex(f.libraryId).entries, {})
+  assert.equal(Object.keys(vp.activeVectorState().writeGuard.leases).length, 0)
+})
+
+test('post-CAS update failure deletes the new row and restores the old backend payload', async () => {
+  const old = entry('old backend fact', { title: 'old title' })
+  const f = fixture({ 'mem-live': old })
+  activate([f.libraryId])
+  commitHook = async () => state.setSessionBinding(f.sessionId, { libraryId: 'rebound-library' })
+  await assert.rejects(
+    memory.privateUpdate({ exec: f.exec, id: 'mem-live', content: 'new backend fact', title: 'new title' }),
+    /memory scope changed during update; retry/,
+  )
+  assert.deepEqual(calls.map(call => call.op), ['commit', 'forget', 'commit'])
+  assert.equal(calls[2].payload.recall_files[0].content, old.content)
+  assert.equal(calls[2].payload.recall_files[0].description, old.title)
+  assert.equal(calls[1].db, calls[0].db)
+  assert.equal(calls[2].db, calls[0].db)
+  assert.equal(backendRows.get(backendKey(calls[0].db, 'mem-live')).content, old.content)
+  assert.deepEqual(state.loadPrivateIndex(f.libraryId).entries['mem-live'], old)
+  assert.equal(Object.keys(vp.activeVectorState().writeGuard.leases).length, 0)
+})
+
+test('uncertain backend compensation is visible instead of reported as a successful write', async () => {
+  const f = fixture()
+  activate([f.libraryId])
+  commitHook = async () => state.setSessionBinding(f.sessionId, { libraryId: 'rebound-library' })
+  failForget = true
+  await assert.rejects(
+    memory.privateRemember({ exec: f.exec, content: 'uncertain backend state' }),
+    error => error?.code === 'PRIVATE_BACKEND_COMPENSATION_FAILED' && /compensation uncertain/.test(error.message)
+      && /memory scope changed/.test(error.cause?.message) && /mock managed forget failed/.test(error.compensationError?.message),
+  )
+  assert.deepEqual(calls.map(call => call.op), ['commit', 'forget'])
+})
+
+test('a failed restore is reported as uncertain and never erases the authoritative index', async () => {
+  const f = fixture({ 'mem-live': entry('original backend payload') })
+  activate([f.libraryId])
+  const original = state.loadPrivateIndex(f.libraryId).entries['mem-live']
+  let count = 0
+  commitHook = async () => {
+    if (++count > 1) throw new Error('restore unavailable')
+    state.setSessionBinding(f.sessionId, { useLibrary: false })
+  }
+  await assert.rejects(memory.privateUpdate({ exec: f.exec, id: 'mem-live', content: 'rejected edit' }), error => {
+    assert.equal(error.code, 'PRIVATE_BACKEND_COMPENSATION_FAILED')
+    assert.match(error.compensationError.message, /restore unavailable/)
+    return true
+  })
+  assert.deepEqual(calls.map(call => call.op), ['commit', 'forget', 'commit'])
+  assert.deepEqual(state.loadPrivateIndex(f.libraryId).entries['mem-live'], original)
+  assert.ok(warnings.some(warning => /compensation uncertain/.test(warning)))
+})
+
+test('unparseable compensation acknowledgement is visibly uncertain', async () => {
+  const f = fixture()
+  activate([f.libraryId])
+  commitHook = async () => state.setSessionBinding(f.sessionId, { useLibrary: false })
+  forgetHook = async () => ({ deleted: 0, parseWarning: 'mock non-JSON acknowledgement' })
+  await assert.rejects(memory.privateRemember({ exec: f.exec, content: 'rejected new payload' }), {
+    code: 'PRIVATE_BACKEND_COMPENSATION_FAILED',
+  })
+  assert.equal(backendRows.size, 1, 'uncertain cleanup is not claimed to remove the orphan')
+  assert.deepEqual(state.loadPrivateIndex(f.libraryId).entries, {})
+  forgetHook = async () => ({ ok: true })
+  state.setSessionBinding(f.sessionId, { useLibrary: true })
+  await assert.rejects(memory.privateRemember({ exec: f.exec, content: 'malformed delete acknowledgement' }), {
+    code: 'PRIVATE_BACKEND_COMPENSATION_FAILED',
+  })
+})
+
+test('a concurrently replaced index refuses destructive compensation', async () => {
+  const f = fixture({ 'mem-live': entry('original backend payload') })
+  activate([f.libraryId])
+  commitHook = async () => state.updatePrivateIndex(f.libraryId, index => {
+    index.entries['mem-live'].content = 'externally replaced authoritative value'
+  })
+  await assert.rejects(memory.privateUpdate({ exec: f.exec, id: 'mem-live', content: 'rejected edit' }), error => {
+    assert.equal(error.code, 'PRIVATE_BACKEND_COMPENSATION_FAILED')
+    assert.match(error.cause.message, /memory changed concurrently/)
+    assert.match(error.compensationError.message, /changed before backend compensation/)
+    return true
+  })
+  assert.deepEqual(calls.map(call => call.op), ['commit'], 'do not delete a newer same-name backend row')
+  assert.equal(state.loadPrivateIndex(f.libraryId).entries['mem-live'].content, 'externally replaced authoritative value')
+})
+
+test('library queue spans compensation across routes and releases after failure', async () => {
+  const f = fixture()
+  activate([f.libraryId])
+  let entered
+  let release
+  const started = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  commitHook = async () => {
+    commitHook = null
+    state.setSessionBinding(f.sessionId, { useLibrary: false })
+  }
+  forgetHook = async args => {
+    entered()
+    await gate
+    backendRows.delete(backendKey(args.db, args.name))
+    return { deleted: 1 }
+  }
+  const first = memory.privateRemember({ exec: f.exec, content: 'first write must roll back' })
+  const rejected = assert.rejects(first, /private memory is turned off/)
+  await started
+  // A remote writer to the same library must wait for managed compensation.
+  state.updateSettings({ vectorSource: 'api' })
+  const second = memory.importMemories({ libraryId: f.libraryId, memories: [{ content: 'later remote write' }] })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(calls.map(call => call.op), ['commit', 'forget'])
+  assert.equal(Object.keys(vp.activeVectorState().writeGuard.leases).length, 1)
+  release()
+  await rejected
+  const imported = await second
+  assert.equal(imported.imported, 1)
+  assert.equal(calls[2].route, 'remote-api')
+  assert.equal(Object.keys(vp.activeVectorState().writeGuard.leases).length, 0)
+  assert.equal(backendRows.size, 1)
+})
+
 test('managed import failure rejects without index-first false success', async () => {
   const f = fixture()
   activate([f.libraryId])
@@ -366,4 +512,25 @@ test('an existing but torn generation still refuses writes loudly', async () => 
     { code: 'VECTOR_TORN_STATE' },
   )
   assert.deepEqual(Object.keys(state.loadPrivateIndex(f.libraryId).entries), [], 'a torn generation must not leave an index-only entry behind')
+})
+
+test('deleting an active archived library removes its route without tearing later writes', async () => {
+  const f = fixture()
+  const databases = activate([f.libraryId])
+  const activeDb = vp.resolveVectorPath(databases.libraries[f.libraryId].path)
+  fs.writeFileSync(path.join(home, 'libraries', f.libraryId + '.old.g1.sqlite3'), '')
+  state.archiveLibrary(f.libraryId)
+  await vp.withVectorWrite(async () => {
+    assert.throws(() => state.deleteLibrary(f.libraryId), { code: 'VECTOR_WRITE_BUSY' })
+  })
+  const result = state.deleteLibrary(f.libraryId)
+  assert.equal(result.ok, true)
+  assert.equal(vp.activeVectorState().active.databases.libraries[f.libraryId], undefined)
+  assert.equal(fs.existsSync(activeDb), false)
+  assert.equal(fs.existsSync(path.join(home, 'libraries', f.libraryId + '.old.g1.sqlite3')), false)
+
+  const next = fixture()
+  const remembered = await memory.privateRemember({ exec: next.exec, content: 'write after deleting another library', title: 'route remains healthy' })
+  assert.equal(state.loadPrivateIndex(next.libraryId).entries[remembered.id].content, 'write after deleting another library')
+  assert.equal(vp.activeVectorState().active.databases.libraries[f.libraryId], undefined)
 })

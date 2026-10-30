@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 1,
+  "kind": "active-memory-ab-lead-reviewed-reference",
+  "status": "lead-ai-reviewed",
+  "gold": false,
+  "annotationSource": "lead-ai-reviewed",
+  "reviewer": "lead-ai",
+  "reviewedAt": "2026-10-30",
+  "sourceDataset": {
+    "status": "synthetic-proxy-not-gold",
+    "gold": false,
+    "source": "local fixture cases/ (unchanged; no synthetic label was promoted)"
+  },
+  "policy": {
+    "seedMode": "complete-contiguous-prefix",
+    "windowedSeed": false,
+    "heldCountsAsCovered": false,
+    "halfStep": "deferred without model scoring",
+    "noHumanTurn": "skipped",
+    "thinNoFact": "no_value only when normal completed check returns no candidates"
+  },
+  "cases": [
+    {
+      "id": "clean-dense-turn",
+      "expectedStatus": "completed",
+      "labels": [
+        {
+          "class": "decision",
+          "sourceSeq": 1,
+          "canonical": "snapshot-worker-does-not-block-main-session"
+        },
+        {
+          "class": "root-cause",
+          "sourceSeq": 1,
+          "canonical": "repeated-full-transcript-forking-drives-input-cost"
+        },
+        {
+          "class": "preference",
+          "sourceSeq": 5,
+          "canonical": "python-installation-is-confined-to-engine-venv"
+        },
+        {
+          "class": "promise",
+          "sourceSeq": 9,
+          "canonical": "synthetic-labels-never-become-gold-without-review"
+        }
+      ],
+      "notes": [
+        "The worker/root-cause decision is at seq 1; the venv constraint is at seq 5; the gold-gating promise is at seq 9."
+      ]
+    },
+    {
+      "id": "clean-thin-turn",
+      "expectedStatus": "completed",
+      "labels": [],
+      "outcome": "no_value",
+      "notes": [
+        "The two human turns contain no durable decision or preference; the fixture label marks an uncovered interval, not a memory."
+      ]
+    },
+    {
+      "id": "clean-starved-small",
+      "expectedStatus": "completed",
+      "labels": [
+        {
+          "class": "decision",
+          "sourceSeq": 1,
+          "canonical": "no_value-requires-normal-completed-empty-result"
+        }
+      ],
+      "notes": [
+        "The no_value rule is an explicit human decision at seq 1; idle/starvation does not itself create a memory."
+      ]
+    },
+    {
+      "id": "clean-large-thin",
+      "expectedStatus": "completed",
+      "labels": [
+        {
+          "class": "decision",
+          "sourceSeq": 1,
+          "canonical": "run-migration-plan-and-use-produced-logs"
+        }
+      ],
+      "notes": [
+        "The later “继续” at seq 7 adds no fact; the synthetic tail label is not a gold memory."
+      ]
+    },
+    {
+      "id": "clean-half-step",
+      "expectedStatus": "deferred",
+      "guardReason": "half-step",
+      "labels": [],
+      "notes": [
+        "The prefix contains an unpaired tool call and snapshot.pendingCheck=true; hard guard prevents scoring, writes, and cursor advance."
+      ]
+    },
+    {
+      "id": "clean-duplicate-reread",
+      "expectedStatus": "completed",
+      "labels": [
+        {
+          "class": "decision",
+          "sourceSeq": 1,
+          "canonical": "do-not-use-windowed-seed"
+        },
+        {
+          "class": "decision",
+          "sourceSeq": 8,
+          "canonical": "receipts-bind-snapshot-digest-and-scope-generation"
+        }
+      ],
+      "notes": [
+        "The credential requirement is stated by the human at seq 8; seq 7 is turn/start and cannot be the source."
+      ]
+    },
+    {
+      "id": "clean-recent-recall",
+      "expectedStatus": "completed",
+      "labels": [
+        {
+          "class": "decision",
+          "sourceSeq": 1,
+          "canonical": "suppress-checks-within-recall-cooldown"
+        }
+      ],
+      "notes": [
+        "The suppression rule is an explicit human instruction at seq 1."
+      ]
+    },
+    {
+      "id": "global-relevant",
+      "expectedStatus": "completed",
+      "labels": [
+        {
+          "class": "preference",
+          "sourceSeq": 1,
+          "canonical": "worker-writes-private-only-and-global-is-read-only"
+        }
+      ],
+      "notes": [
+        "Relevant global entries are read-only context and must not be copied into private writes."
+      ]
+    },
+    {
+      "id": "global-irrelevant-conflict",
+      "expectedStatus": "completed",
+      "labels": [
+        {
+          "class": "decision",
+          "sourceSeq": 1,
+          "canonical": "retain-only-one-backup-after-successful-switch",
+          "disposition": "held-conflict"
+        },
+        {
+          "class": "preference",
+          "sourceSeq": 6,
+          "canonical": "web-gui-port-is-9032",
+          "disposition": "covered"
+        }
+      ],
+      "notes": [
+        "The backup decision conflicts with the global three-backup entry, so it is held and does not count as covered; the port preference is independent."
+      ]
+    },
+    {
+      "id": "no-human-turn",
+      "expectedStatus": "skipped",
+      "guardReason": "no-human-turn",
+      "labels": [],
+      "notes": [
+        "The user-shaped message is plugin-generated (source.kind=plugin:dsh-memu-memory), so this case is not eligible for human-memory scoring."
+      ]
+    }
+  ],
+  "metrics": {
+    "cases": 10,
+    "completed": 7,
+    "deferred": 1,
+    "skipped": 1,
+    "normalNoValue": 1,
+    "labels": 13,
+    "heldLabels": 1,
+    "coveredLabels": 12
+  },
+  "caveats": [
+    "This lead-AI-reviewed reference is an independent review of local fixture evidence, not a gold set and not a claim that the live model produced these labels.",
+    "The 13 labels are non-exhaustive reference annotations; the live run produced no parseable candidates, so model effect and A/B accuracy remain unmeasured.",
+    "Raw prompts, responses, transcripts, and credentials are not stored."
+  ]
+}

@@ -68,7 +68,7 @@ ctx.inject([sidebarRightTabs], ...) + ctx.slots.register({ name: sidebar.right.p
 
 - 标准会话 `session-<redacted-standard-a>`（`agentPreset: "standard"`，21 个非 session 事件）：模型请求头 `request/header` 的工具表为 **82 个工具**，首尾两次一致；其中 `memu_*` 共 **10 个**：`memu_private_list`、`memu_private_recall`、`memu_private_remember`、`memu_private_update`、`memu_private_archive`、`memu_private_link`、`memu_private_unpin`、`memu_global_list`、`memu_global_recall`、`memu_status`。同一会话中 `===== memory anchor =====` 出现 1 次，锚点内是真实私有 id。
 - 标准会话 `session-<redacted-standard-b>`（`agentPreset: "standard"`，本轮扫描时 1737 个非 session 事件）：`<memory-guide>` 只对应 **1 个** plugin 消息 id（`<redacted-plugin-message-id>`），锚点 1 次。该 id 在多个快照/工具记录里重复出现是日志回放，不是重复投放。
-- 因此“标准会话的工具表里有 `memu_*`”“标准会话 anchor/guide 只投放一次”是**已证实**；标准会话的 guide 走 system prompt 段，不必然出现 `<memory-guide>` 消息。
+- 因此“标准会话的工具表里有 `memu_*`”“标准会话 anchor/guide 只投放一次”是**已证实**。注意这是 2026-10-29 的历史快照：当前版本标准和预设都走 `<memory-guide rules="…">` 插件消息，system prompt 不再有本插件段。
 
 #### 仅机制 + mock：独立人格预设 `yuike`
 
@@ -87,6 +87,6 @@ ctx.inject([sidebarRightTabs], ...) + ctx.slots.register({ name: sidebar.right.p
 - **工具已注册 ≠ 已向当前模型暴露。** 上文的工具名单取自 `request/header.data.header.tools`；没有该字段或只有标题请求的会话，不能拿插件侧注册表冒充模型可见工具。
 - **guide 有 `<memory-guide>` ≠ 有 `memu_*`。** 正文自带“若本会话的工具列表里没有 `memu_*` 工具，请忽略本段”，它只声明规则可用性，不证明工具存在。
 
-复核方法：用 `zlib.zstdDecompressSync` 逐 frame 解压 `~/.dsh/sessions/<bucket>/<id>/session.v4.jsonl.zstd`；只统计 `request/header` 的工具名、`session.v4` 消息 id 和 `<memory-guide>`/`===== memory anchor =====` 标签。不要打印会话正文，不要把同一消息在快照中的重复出现计成多次投放。
+复核方法：用 `zlib.zstdDecompressSync` 逐 frame 解压 `~/.dsh/sessions/<bucket>/<id>/session.v4.jsonl.zstd`；只统计 `request/header` 的工具名、`session.v4` 消息 id 和 `<memory-guide`/`===== memory anchor =====` 标签。不要打印会话正文，不要把同一消息在快照中的重复出现计成多次投放。
 
 ---

@@ -59,7 +59,10 @@ function fakeCtx({ live = [], forkable = null, gone = [], transcript = null, par
                 session: childSession,
                 followup: (message) => {
                   forkFollowups.push({ child: spec.sessionId, message })
+                  const proof = { version: 1, jobId: state.getSessionBinding(spec.sessionId).jobId, snapshotHash: state.getSessionBinding(spec.sessionId).snapshotHash, status: 'completed', outcome: 'no_value', checkedRange: { fromSeq: 0, throughSeq: events.at(-1).seq }, createdIds: [], updatedIds: [], heldIds: [] }
+                  const tick = String.fromCharCode(96).repeat(3)
                   for (const handler of sessionHandlers) {
+                    handler(childSession, { type: 'assistant/message', seq: 99, data: { message: { content: [{ type: 'text', text: tick + 'memu-consolidation-receipt\n' + JSON.stringify(proof) + '\n' + tick }] } } })
                     handler(childSession, { type: 'turn/end', seq: 100, data: { turn: 1, reason: turnReason } })
                   }
                 },
@@ -121,7 +124,7 @@ test('an idle live session is consolidated in a fork, never in its own chat', as
   assert.equal(ctx.created[0].meta.origin, 'subagent', 'a subagent fork stays out of the window list and the injection path')
   assert.equal(ctx.created[0].meta.parentSession, 'cycle-idle')
   assert.equal(ctx.seeds[0].lastSeq, 1, 'the seed is the parent transcript')
-  assert.equal(state.getSessionBinding(child).libraryId, binding.libraryId, 'the fork writes into the parent library')
+  assert.equal(state.getSessionBinding(child), null, 'worker binding is removed after disposal')
 
   const second = await cycle.runSleepPass(fakeCtx({ live: ['cycle-idle'] }))
   assert.equal(second.ran, 0)
@@ -224,7 +227,7 @@ test('a conversation the host says is gone is marked once and never retried', as
   assert.equal(quiet.considered, 0, 'the next sweep does not even read the transcript')
 })
 
-test('a session with nothing but greetings is marked asleep without a fork', async () => {
+test('a policy greeting skip does not claim a completed worker check', async () => {
   state.updateSettings({ sleepConsolidation: true, sleepAfterIdleMinutes: 5 })
   state.ensureSession('cycle-smalltalk', { cwd: path.join(home, 'p-small'), agentPreset: 'rp' })
   touchAgo('cycle-smalltalk', 20)
@@ -233,9 +236,9 @@ test('a session with nothing but greetings is marked asleep without a fork', asy
     { seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '不客气' }] } } },
   ] })
   const out = await cycle.runSleepPass(ctx)
-  assert.equal(out.ran, 1, 'handled, so the same session is not re-read every sweep')
+  assert.equal(out.ran, 0, 'a policy skip is not a verified worker receipt')
   assert.equal(ctx.created.length, 0, 'no fork for small talk')
-  assert.ok(state.getLastSleepAt('cycle-smalltalk'))
+  assert.equal(state.getLastSleepAt('cycle-smalltalk'), null)
 })
 
 test('auto curation stays off unless an interval is set', async () => {
@@ -330,4 +333,79 @@ test('auto curation is not due yet', async () => {
   state.setCycleState({ lastCurateAt: new Date().toISOString() })
   const out = await cycle.runCurationPass(fakeCtx({ live: ['cycle-curate'] }))
   assert.equal(out.skipped, 'not-due')
+})
+test('a thin turn shortly after a consolidation waits for real evidence', async () => {
+  state.updateSettings({ sleepConsolidation: true, sleepAfterIdleMinutes: 3 })
+  state.ensureSession('cycle-cooldown', { cwd: path.join(home, 'p-cooldown'), agentPreset: 'rp' })
+  // 刚整理过（20 分钟前），5 分钟前只补了一句很短的话：再 fork 一次要把整段转录
+  // 重新种进去，纯粹浪费 token。评分门槛会把它压到饥饿阈值之后。
+  state.setSessionBinding('cycle-cooldown', { lastTurnAt: new Date(Date.now() - 5 * 60_000).toISOString() })
+  state.setLastSleepAt('cycle-cooldown', new Date(Date.now() - 20 * 60_000).toISOString())
+  const ctx = fakeCtx({ live: ['cycle-cooldown'] })
+  const out = await cycle.runSleepPass(ctx)
+  assert.equal(out.ran, 0)
+  assert.equal(ctx.created.length, 0, 'a thin follow-up must not buy another full-transcript fork')
+  // 收尾：把它标记为已睡，避免候选泄漏到后续用例。
+  state.setLastSleepAt('cycle-cooldown', new Date().toISOString())
+})
+
+test('a session that just injected memory is left alone by the idle sweep', async () => {
+  state.updateSettings({ sleepConsolidation: true, sleepAfterIdleMinutes: 3 })
+  state.ensureSession('cycle-recall', { cwd: path.join(home, 'p-recall'), agentPreset: 'rp' })
+  state.setSessionBinding('cycle-recall', {
+    // 空闲已过饥饿阈值，按评分本会 fork；但 5 分钟前刚注入了记忆，抑制优先。
+    lastTurnAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+    lastInjectedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+  })
+  const ctx = fakeCtx({ live: ['cycle-recall'] })
+  const out = await cycle.runSleepPass(ctx)
+  assert.equal(out.ran, 0)
+  assert.equal(ctx.created.length, 0, 'a session with fresh memory context does not need a fork')
+  state.setLastSleepAt('cycle-recall', new Date().toISOString())
+})
+
+// H5: a missing file is not the host saying the conversation was deleted.
+// captureSessionSnapshot marks a failed read retryable on purpose ("读失败，可重试"),
+// but the bare word ENOENT in isGoneSessionError used to turn that into sessionGone —
+// and the sweep skips a marked session until some later human message clears it.
+test('a transcript that cannot be read is retried, not marked as a deleted conversation', async () => {
+  state.updateSettings({ sleepConsolidation: true, sleepAfterIdleMinutes: 5 })
+  state.ensureSession('cycle-enoent', { cwd: path.join(home, 'p-enoent'), agentPreset: 'rp' })
+  // 6 minutes: still idle under the 5-minute threshold, but the sweep takes the two
+  // newest candidates and this file shares one state directory across its tests.
+  touchAgo('cycle-enoent', 6)
+  const logs = []
+  const ctx = {
+    get: (name) => {
+      if (name === 'sessionQuery') {
+        return {
+          readSession: async () => {
+            const error = new Error("ENOENT: no such file or directory, open 'D:/home/sessions/cycle-enoent/log.jsonl'")
+            error.code = 'ENOENT'
+            throw error
+          },
+        }
+      }
+      if (name === 'agents') {
+        return { get: () => ({}), create: async () => { throw new Error('a session that cannot be read must not be forked') } }
+      }
+      return undefined
+    },
+  }
+  await cycle.runSleepPass(ctx, { log: (message) => logs.push(message), limit: 10 })
+  const binding = state.getSessionBinding('cycle-enoent')
+  assert.ok(!binding.sessionGone, 'a transient read failure is not the host reporting a deletion')
+  assert.equal(binding.sleepAttempts, 1, 'it backs off like any other failure')
+  assert.ok(Date.parse(binding.sleepRetryAt) > Date.now(), 'it is retried later')
+  assert.match(binding.lastSleepError, /ENOENT/)
+  assert.ok(logs.some((message) => /consolidation skipped for cycle-enoent/.test(message)), 'stated once: ' + logs.join(' | '))
+  assert.equal(state.getLastSleepAt('cycle-enoent'), null, 'nothing was consolidated, so nothing is marked asleep')
+})
+
+test('only the host saying the conversation is gone counts as deleted', () => {
+  assert.equal(cycle.isGoneSessionError('session "abc" not found'), true)
+  assert.equal(cycle.isGoneSessionError('no such session: abc'), true)
+  assert.equal(cycle.isGoneSessionError('this session does not exist any more'), true)
+  assert.equal(cycle.isGoneSessionError("ENOENT: no such file or directory, open 'D:/x/log.jsonl'"), false)
+  assert.equal(cycle.isGoneSessionError('EACCES: permission denied, open D:/x'), false)
 })

@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "kind": "active-memory-ab-case",
+  "id": "global-irrelevant-conflict",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "annotationSource": "synthetic-proxy",
+  "interference": "irrelevant-conflict",
+  "title": "全局干扰（无关且冲突）：冲突条目只进 held，不进可召回覆盖",
+  "annotationNotes": "合成代理标注：冲突来自合成全局条目，用来验证“矛盾新写 pending_review 记 held”的管线规则。",
+  "snapshot": {
+    "domain": "coding",
+    "idleAtSnapshotEndMinutes": 20,
+    "lastInjectedAt": null,
+    "events": [
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:00:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "缓存那件事更新一下：不再保留三份备份，只留最新一份，其余在切换成功后清理。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "好，改成只留最新一份。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:00:00.000Z",
+        "step": 1
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:00:30.000Z"
+      },
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:01:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:01:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "另外端口固定用 9032，不要再用 8080。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:01:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "记下了，端口 9032。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:01:00.000Z",
+        "step": 2
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:03:00.000Z"
+      }
+    ],
+    "globalEntries": [
+      {
+        "id": "mem-gb-conflict-backup",
+        "relevant": false,
+        "title": "备份保留三份",
+        "content": "备份目录固定保留最新三份，旧的不要自动清理。",
+        "tags": [
+          "备份"
+        ]
+      },
+      {
+        "id": "mem-gb-irrelevant-port",
+        "relevant": false,
+        "title": "旧端口",
+        "content": "Web GUI 默认监听 8080。",
+        "tags": [
+          "端口"
+        ]
+      }
+    ],
+    "conflicts": [
+      {
+        "globalId": "mem-gb-conflict-backup",
+        "labelId": "mem-ab-global-backup-change"
+      }
+    ]
+  },
+  "labels": {
+    "expected": [
+      {
+        "id": "mem-ab-global-backup-change",
+        "class": "decision",
+        "sourceSeq": 1,
+        "note": "备份只留最新一份，与合成全局条目冲突 → held"
+      },
+      {
+        "id": "mem-ab-global-port",
+        "class": "preference",
+        "sourceSeq": 6,
+        "note": "端口固定 9032"
+      }
+    ],
+    "mainProactive": [],
+    "userReminders": []
+  },
+  "expect": {
+    "minBackgroundChecks": 1,
+    "heldAtLeast": 1,
+    "coveredLabelIds": [
+      "mem-ab-global-port"
+    ],
+    "uncoveredLabelIds": [
+      "mem-ab-global-backup-change"
+    ]
+  }
+}

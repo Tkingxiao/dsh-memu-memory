@@ -858,8 +858,14 @@ test('the log page renders rows with copy, download and locate actions', async (
     scope: 'private', sessionId: 'session-abcdef', libraryId: 'lib-1',
     message: '整理超时：fork 已停止', detail: { timedOut: true, childId: 'memu-consolidate-x' }, refs: [], ok: false,
   }
+  const check = {
+    id: 'act-check', at: '2026-10-30T03:05:00.000Z', kind: 'check', level: 'info',
+    scope: 'private', sessionId: 'session-abcdef', libraryId: 'lib-1',
+    message: '主动检查跳过 · score 0.12 · large-transcript-thin · 空闲 40 分钟 · 会话 5913 事件',
+    detail: { reason: 'large-transcript-thin', score: 0.12, parts: { human: 0.33, content: 0.01, tool: 0 } }, refs: [], ok: false,
+  }
   const ctx = fakeCtx({
-    answers: { getActivityLog: { events: [event], stats: { total: 1, capped: 2000, bytes: 512 } } },
+    answers: { getActivityLog: { events: [event, check], stats: { total: 2, capped: 2000, bytes: 1024 } } },
   })
   globalThis.__dshMemuExports.apply(ctx)
   const settings = registrations.filter((r) => r.slot === 'settings.section').pop()
@@ -881,4 +887,6 @@ test('the log page renders rows with copy, download and locate actions', async (
   assert.match(text, /logDownload/)
   assert.match(text, /logLocate/, 'a row with a library id offers the correction entry point')
   assert.match(text, /pageLogs/)
+  assert.match(text, /logKindCheck/, 'the activity log labels wake-up checks')
+  assert.match(text, /large-transcript-thin/, 'the check row keeps its reason and score visible')
 })

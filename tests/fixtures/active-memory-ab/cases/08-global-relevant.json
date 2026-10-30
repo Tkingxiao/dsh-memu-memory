@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "kind": "active-memory-ab-case",
+  "id": "global-relevant",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "annotationSource": "synthetic-proxy",
+  "interference": "relevant",
+  "title": "全局干扰（相关）：相关全局条目可以进上下文，但不许被复制进私有写",
+  "annotationNotes": "合成代理标注：全局条目是合成数据，只用来量预算与泄漏，不代表真实全局库内容。",
+  "snapshot": {
+    "domain": "coding",
+    "idleAtSnapshotEndMinutes": 20,
+    "lastInjectedAt": null,
+    "events": [
+      {
+        "type": "turn/start",
+        "at": "2026-10-30T02:00:00.000Z"
+      },
+      {
+        "type": "user/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "source": {
+            "kind": "user"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "这个项目里，全局记忆只由 curator 写，主 agent 只读，别让检查 worker 去动全局层。"
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant/message",
+        "at": "2026-10-30T02:00:00.000Z",
+        "data": {
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "明白，worker 只写私有层，全局只读。"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "step/end",
+        "at": "2026-10-30T02:00:00.000Z",
+        "step": 1
+      },
+      {
+        "type": "turn/end",
+        "at": "2026-10-30T02:03:00.000Z"
+      }
+    ],
+    "globalEntries": [
+      {
+        "id": "mem-gb-relevant-curator",
+        "relevant": true,
+        "title": "全局只由 curator 写",
+        "content": "全局记忆写入只走 curator；主 agent 与检查 worker 都只读，不要复制全局正文进私有条目。",
+        "tags": [
+          "全局",
+          "curator"
+        ]
+      },
+      {
+        "id": "mem-gb-relevant-scope",
+        "relevant": true,
+        "title": "文件夹 clamp",
+        "content": "文件夹 clamp 落在四处：ensureSession、setSessionScope、注入准入、记忆读写。",
+        "tags": [
+          "clamp"
+        ]
+      },
+      {
+        "id": "mem-gb-irrelevant-weather",
+        "relevant": false,
+        "title": "天气",
+        "content": "明天有雨，记得带伞。",
+        "tags": [
+          "天气"
+        ]
+      }
+    ],
+    "conflicts": []
+  },
+  "labels": {
+    "expected": [
+      {
+        "id": "mem-ab-global-readonly",
+        "class": "preference",
+        "sourceSeq": 1,
+        "note": "worker 只写私有层，全局只读"
+      }
+    ],
+    "mainProactive": [],
+    "userReminders": []
+  },
+  "expect": {
+    "minBackgroundChecks": 1,
+    "coveredLabelIds": [
+      "mem-ab-global-readonly"
+    ]
+  }
+}

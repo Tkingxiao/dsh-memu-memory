@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 1,
+  "kind": "active-memory-ab-manifest",
+  "name": "active-memory 金标 A/B 候选集（合成代理草稿，未人审）",
+  "status": "synthetic-proxy-not-gold",
+  "draft": true,
+  "notGold": true,
+  "gold": false,
+  "review": "pending",
+  "annotationPolicy": "所有标签都是合成代理（annotationSource=synthetic-proxy），按 seq 指向“若由人来标也应记”的事件；没有人工逐条确认，因此不是 gold set。人审候选与 gold gating 分开：只有 review 改为 human-reviewed 之后才可能进入金标。",
+  "axes": [
+    "off",
+    "relevant",
+    "irrelevant-conflict"
+  ],
+  "conditions": [
+    "legacy",
+    "guide",
+    "guide-weighted"
+  ],
+  "rows": [
+    "legacy",
+    "guide",
+    "guide-weighted:oracle",
+    "guide-weighted:no-value"
+  ],
+  "paddingGenerator": "ab-polling-padding-v1",
+  "realModelCalls": 0,
+  "cases": [
+    {
+      "id": "clean-dense-turn",
+      "file": "cases/01-clean-dense-turn.json",
+      "throughSeq": 22,
+      "eventCount": 23,
+      "snapshotSha256": "01b63a470444c849c93239c9b717f3b6049497398c05daaab193d6781093838c",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "密集回合：分数达标就检查，不等空闲"
+    },
+    {
+      "id": "clean-thin-turn",
+      "file": "cases/02-clean-thin-turn.json",
+      "throughSeq": 9,
+      "eventCount": 10,
+      "snapshotSha256": "73cfdd46eb46233ac5129a1a73e5a2a77be34a4bdf3e6d27dc5e182cc39495b7",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "薄回合：没有空闲窗口，也不该唤醒"
+    },
+    {
+      "id": "clean-starved-small",
+      "file": "cases/03-clean-starved-small.json",
+      "throughSeq": 9,
+      "eventCount": 10,
+      "snapshotSha256": "49145876868c032e291dd7964d63ceea6afd8481158bcaf81617561aded8cd82",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "小会话饥饿：空闲到阈值就无条件检查一次"
+    },
+    {
+      "id": "clean-large-thin",
+      "file": "cases/04-clean-large-thin.json",
+      "throughSeq": 2089,
+      "eventCount": 2090,
+      "snapshotSha256": "e828cde9d7ee4242a507c9af294dd0acd0a38df0fd087d42f65351dabb9c5cf1",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "大 transcript 薄回合：不吃饥饿豁免"
+    },
+    {
+      "id": "clean-half-step",
+      "file": "cases/05-clean-half-step.json",
+      "throughSeq": 3,
+      "eventCount": 4,
+      "snapshotSha256": "c6eb87ef676716ddad2e4f5fa32d985bd1c151f70516f72e91e38bd698358b96",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "半步边界：tool/call 没有结果就 deferred，不推进游标"
+    },
+    {
+      "id": "clean-duplicate-reread",
+      "file": "cases/06-clean-duplicate-reread.json",
+      "throughSeq": 13,
+      "eventCount": 14,
+      "snapshotSha256": "d48163e0314151f7ed6e57e267e3f2c4bdf2c7f9879b35e9f5d14d0deab401d0",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "重复读与已写条目：整段前缀重放会再次提议同一条"
+    },
+    {
+      "id": "clean-recent-recall",
+      "file": "cases/07-clean-recent-recall.json",
+      "throughSeq": 9,
+      "eventCount": 10,
+      "snapshotSha256": "2ea689efcda46021415affa143fe55e167b11ed6784dabadce18c27e1cf26e50",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "刚注入过记忆：抑制而不是检查"
+    },
+    {
+      "id": "global-relevant",
+      "file": "cases/08-global-relevant.json",
+      "throughSeq": 4,
+      "eventCount": 5,
+      "snapshotSha256": "0f4d97adf48488f69f3228a1fc7a746472fed18221f3502186e5e086f9934fb9",
+      "interference": "relevant",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "全局干扰（相关）：相关全局条目可以进上下文，但不许被复制进私有写"
+    },
+    {
+      "id": "global-irrelevant-conflict",
+      "file": "cases/09-global-irrelevant-conflict.json",
+      "throughSeq": 9,
+      "eventCount": 10,
+      "snapshotSha256": "0a1d5e3a73965d5efb523e967995036d5693be9afaf22bef9c03721bd6a73963",
+      "interference": "irrelevant-conflict",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "全局干扰（无关且冲突）：冲突条目只进 held，不进可召回覆盖"
+    },
+    {
+      "id": "no-human-turn",
+      "file": "cases/10-no-human-turn.json",
+      "throughSeq": 5,
+      "eventCount": 6,
+      "snapshotSha256": "851fa7965cbe2bb477c2e1c062cf5c13ba198c911cd1f85cb0885cee3d8e0899",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "没有真人回合：纯工具轮询不构成检查理由"
+    },
+    {
+      "id": "clean-scale-100",
+      "file": "cases/11-clean-scale-100.json",
+      "throughSeq": 97,
+      "eventCount": 98,
+      "snapshotSha256": "ec6180fcd444ab6f71345ff571da9ca79c8168f0a036d2e8902b6673e4ee34ce",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "规模梯度 100 事件：低于 largeTranscriptEvents，饥饿豁免仍然生效"
+    },
+    {
+      "id": "clean-scale-1000",
+      "file": "cases/12-clean-scale-1000.json",
+      "throughSeq": 997,
+      "eventCount": 998,
+      "snapshotSha256": "04510b40d08eb03e3b1d04715cff1554324b5f1769bb97c95f78b22e82496f1a",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "规模梯度 1000 事件：仍在阈值下，饥饿豁免生效"
+    },
+    {
+      "id": "clean-scale-5000",
+      "file": "cases/13-clean-scale-5000.json",
+      "throughSeq": 4997,
+      "eventCount": 4998,
+      "snapshotSha256": "dc9095796c6cc122d7b314f59db2efa1963d86226837b7b5234c57ebb671e68f",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "规模梯度 5000 事件：越过 largeTranscriptEvents，薄回合不再吃饥饿豁免"
+    },
+    {
+      "id": "clean-scale-20000",
+      "file": "cases/14-clean-scale-20000.json",
+      "throughSeq": 19997,
+      "eventCount": 19998,
+      "snapshotSha256": "400e916841df1318ea6819bd73b840039b91157b955c9968d08e660c32fc85e4",
+      "interference": "off",
+      "annotationSource": "synthetic-proxy",
+      "review": "pending",
+      "gold": false,
+      "title": "规模梯度 20000 事件：上限区，薄回合被拦且完整前缀种子成本最高"
+    }
+  ]
+}

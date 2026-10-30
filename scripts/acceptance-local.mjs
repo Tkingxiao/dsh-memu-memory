@@ -699,7 +699,8 @@ await auto('G-1', 'the kept docs exist and nothing points at a retired one', asy
   for (const rel of ['assets/icon.png', 'assets/icon-256.png', 'assets/icon.svg']) {
     assert.ok(fs.existsSync(path.join(ROOT, rel)), rel + ' exists')
   }
-  assert.ok(!fs.existsSync(path.join(ROOT, 'CHANGELOG' + '.md')), 'the retired changelog is gone')
+  // Since 1.1.3 the changelog is the source for release notes (release.yml), so it is kept.
+  assert.ok(fs.existsSync(path.join(ROOT, 'CHANGELOG' + '.md')), 'CHANGELOG.md carries release notes')
   // 细节从 AGENTS.md 搬进了 docs/：索引必须短，指针必须都能落地
   const agents = fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8')
   assert.ok(agents.includes('plugin:dsh-memu-memory'), 'the notes carry the real source kind, not the old one')

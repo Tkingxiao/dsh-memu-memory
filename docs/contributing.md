@@ -125,7 +125,7 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 - [ ] `injectedIds` 记的是**真正进入文本**的条目？（§8.4）
 - [ ] token 预算走 `lib/budget.js`，没有 `tokens * 3`？（§8.4）
 - [ ] `pending_review` 被挡在注入与召回之外？（§3.9）
-- [ ] 没有每步注入、动态记忆没进 system prompt？（§1.3、§1.4）
+- [ ] 没有每步注入、记忆规则与动态记忆都没进 system prompt？
 
 **数据安全**
 - [ ] 读失败没被当成空数据（改名 `*.corrupt-<ts>` + 拒绝写入）？（§2.3 铁律一）
