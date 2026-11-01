@@ -231,7 +231,7 @@ test('the deep link #/settings/help lands on the help page when standalone', asy
   window.location.hash = ''
 })
 
-test('the help page shows five steps, ten FAQ details and the feedback actions', async () => {
+test('the help page shows five steps, eleven FAQ details and the feedback actions', async () => {
   const component = settingsComponent()
   const props = { ctx: fakeCtx(), t: (key) => key }
   await mountAndSettle(component, props)
@@ -240,7 +240,7 @@ test('the help page shows five steps, ten FAQ details and the feedback actions',
   const { tree } = renderAt(component, props, 12)
   const text = treeText(tree)
   for (const step of [1, 2, 3, 4, 5]) assert.ok(text.includes(`helpStep${step}`), `quick start step ${step} is missing`)
-  for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+  for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) {
     assert.ok(text.includes(`helpFaq${n}`), `FAQ item ${n} is missing`)
     assert.ok(text.includes(`helpFaq${n}A`), `FAQ answer ${n} is missing`)
   }
@@ -248,13 +248,13 @@ test('the help page shows five steps, ten FAQ details and the feedback actions',
   assert.ok(text.includes('helpOpenIssue'), 'the issue button is missing')
   assert.ok(text.includes('helpCopyDiagnostics'), 'the copy-diagnostics button is missing')
   assert.ok(text.includes('helpDocs'), 'the docs link is missing')
-  // FAQ 用 10 个 <details> 折叠；quick start 的每一步都带「前往 →」跳转按钮
+  // FAQ 用 11 个 <details> 折叠；quick start 的每一步都带「前往 →」跳转按钮
   //（第 2 步是会话侧动作，只给文案，不带跳转 → 4 个按钮）。
   const details = []
   walkNodes(tree, (node) => {
     if (node.type === 'details') details.push(node)
   })
-  assert.equal(details.length, 10, `expected ten FAQ details, found ${details.length}`)
+  assert.equal(details.length, 11, `expected eleven FAQ details, found ${details.length}`)
   assert.equal((text.match(/helpGoTo/g) || []).length, 4, 'four of the five steps jump, the bind step cannot')
   // 不新增 RPC：复制诊断只序列化 getSettingsState 的既有快照（state 优先，缺了才补拉）。
   const src = clientSource

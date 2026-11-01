@@ -73,4 +73,24 @@ node scripts/local-runtime-install.mjs --target <dir> --platform win32-x64 --id 
 
 状态 `installed / absent / unsupported / downloading / verifying / installing / failed / cancelled`；`unsupported` = catalog 没 pin 该平台原生库（如 `darwin-x64`）。装失败只 `warn` + 回词法召回，不会自动改用云端 embedding。
 
+### 9.6 注入实测台（1.2.3 工单 B，仅评测用）
+
+**目的**：注入「发了什么」不等于「模型收到了什么」。这两个脚本只量最后一环——宿主真正发给模型的请求体里出现了哪些记忆块、出现几次。它们**不是运行时依赖**，`lib/` 永不 import，日志只记长度/哈希与标记计数（不记正文）。
+
+```bash
+node scripts/mock-llm.mjs --port 8123 --log ./mock-llm-<日期>.jsonl      # 伪 OpenAI 端点，只监听 127.0.0.1，无鉴权
+node scripts/mock-llm.mjs --reply-file ./tests/fixtures/mock-llm/reply.txt --port 8123 --log ./mock.jsonl
+node scripts/mock-llm.mjs --report ./mock-llm-<日期>.jsonl > mock-llm-report-<日期>.md
+node scripts/drive-session.mjs --session <id> --turns 50 --dry-run       # 只打印将要发的请求，不发
+node scripts/drive-session.mjs --session <id> --turns 50 \
+  --base http://127.0.0.1:<gateway 端口> --allow-api-route --requests-out ./requests.jsonl
+```
+
+- 用法：DSH 的 provider profile 把 `baseURL` 指到 `http://127.0.0.1:8123/v1`（apiKey 随意），测试会话绑定一个手写播种库，再用 `drive-session.mjs` 灌轮数；`--report` 出「每轮 × 标记矩阵 + 汇总」。
+- 标记表 pin 在 `scripts/mock-llm.mjs` 的 `MARKERS`（`MARKER_SET_VERSION` 记插件版本）。**改 `lib/inject.js` 的块标记必须同处更新并 bump 版本**，否则报告把新块记成 0。
+- `drive-session.mjs` 走宿主公开的 `sessionController.prompt`（`POST <base>/api/session/prompt` 的 Connection carrier 形状），并且**默认拒绝发送**：没有 `--allow-api-route` 就打印等价的手工请求并退出码 3。轮结束只认持久 session log 里本轮 `turn/end` 的 `reason.kind === 'completed'`。
+- 退出码：`0` 全部完成 / `1` 某轮或传输失败 / `2` 用法错 / `3` 未授权传输（手工降级）/ `4` 观察不到 session log。
+- 数据是**要丢弃的**：报告文件名带日期，别把捕获的对话提交进仓库，也别把伪端点当日常后端。
+- **1.2.3 只交付了这套量具，还没跑过基线**：仓库里没有 `mock-llm-report-*.md`，所以任何「注入次数变化」的说法都还没有数据支撑。C/D 合入后的对照数据是待做项，跑法就是上面四条命令；报告里每个 0 注入的轮都要能解释（去重 / 预算 / 太短 / 无库），解释不了的轮次视为数据不可用。
+
 ---

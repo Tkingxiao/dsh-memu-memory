@@ -41,6 +41,25 @@
 
 `ctx.schedule`（`@deepseek-ai/dsh-schedule`：create/list/catalog/history/delete/update，`every_seconds | daily | weekly | cron`，最小 60s）**绑定单个 sessionId、往该会话投递 prompt**、需要 sessionPersistence、且拒绝 subagent 会话——**不适合插件级全局清扫**。插件自己的清扫用 `ctx.interval`（cordis 随作用域回收），没有才退回 unref 的 `setInterval`。
 
+**一次性到点任务（1.2.3 工单 E 用到的形状，2026-11-01 对照宿主源码核实）：**
+
+```js
+schedule.create({
+  title,                                   // ≤120 字，非空
+  prompt,                                  // 每次触发发送的正文
+  timing: { kind: 'at', at: { date: 'YYYY-MM-DD', time: 'HH:mm', time_zone: 'IANA|UTC' } },
+  target: { kind: 'session', sessionId },  // 省略则首次投递时新建会话
+})
+schedule.list({ limit: 500 })              // -> { items, shown, total, limit, offset }，不是数组
+schedule.edit({ id, action: 'delete' })    // 已结束的任务同样可以删
+```
+
+- `ScheduleTiming` 另有 `after/at/every/daily/weekly/cron/rrule`；`at` 是 `AtInput = string | {date,time,time_zone}`，结构化形式三个字段都必填。
+- 投递是 `agent.followup(...)`，**会新开一整回合**，冷会话由 `sessionController.resolveAgent` 自动 resume；`source.kind === 'schedule'`，所以本插件的注入管线（只认真实 `user` 消息）不会在那一回合跑召回——prompt 必须自带全部上下文。
+- `ctx.get('schedule')` 是**可选服务**：desktop 组合里有，别的宿主可能是 `undefined` 或抛错，必须 warn 后降级，不能让周期失败。
+- 投递是 at-least-once，receipt 只证明进了 inbox；任务持久化在宿主的 `storages/schedule.json`，用户在宿主 schedule UI 里看得见、也能手删。
+- subagent 会话被 `validateTarget` 拒绝（错误码 `subagent_session`），已归档会话是 `invalid_rule`。
+
 事件：`ctx.on("agent/status", { agent, status })`，`AgentStatus = idle | running`；另有 `session/created`、`session/disposed`、`session/flush`；事件类型含 `turn/start`、`turn/end`（`step/*`、`user/message…`）与 `compaction/*`。**`turn/end` 不 await flush，不要在那里读存储；判 fork 成败只读事件对象本身。**
 
 

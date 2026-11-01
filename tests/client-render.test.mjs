@@ -267,6 +267,15 @@ test('the sidebar context-scope card cannot be flex-shrunk and keeps a two-colum
   assert.match(src, /\.dshm-scope-form\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/, 'four scope fields must wrap into two readable columns')
 })
 
+test('the memory UI renders the read-only arousal/dominance/emotionSource line', () => {
+  const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  for (const key of ['arousalLabel', 'dominanceLabel', 'emotionSourceLabel', 'emotionSourceModel', 'emotionSourceSession', 'emotionSourceContent', 'emotionSourceUnknown']) {
+    assert.ok(src.includes(key), `missing ${key}`)
+  }
+  assert.match(src, /emotionMetaText\(f, t\)/, 'the card tag must expose affect metadata in its title')
+  assert.match(src, /emotionMetaText\(shown, t\)/, 'the drawer must render the read-only affect line')
+})
+
 test('the sidebar run log keeps five rows and links its header to the WebUI logs page', () => {
   const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   assert.match(src, /runLog\.slice\(0, 5\)/, 'the sidebar shows the five newest runs, not an unbounded list')
@@ -318,7 +327,10 @@ test('the memory browser badges what a memory is allowed to say', async () => {
         disclosure: 'never_say',
         visibility: 'secret',
         owner: 'about_user',
-        expiresAt: '2026-11-01T09:30:00.000Z',
+        // 相对时间，不写死当天某一刻：短条目一旦过期就变成 inactive，行内编辑器不再渲染，
+        // 这条测试就会在下午闪红（曾经 pin 在 2026-11-01T09:30Z）。它要断言的是「草稿看得到
+        // 自己什么时候死」，所以留出 6 小时余量即可。
+        expiresAt: new Date(Date.now() + 6 * 3600 * 1000).toISOString(),
       },
       { id: 'mem-loud', title: 'shared fact', content: 'anything', layer: 'long_term', status: 'active', decay: 0.9, disclosure: 'can_tell', visibility: 'shared', owner: 'me' },
     ],

@@ -521,6 +521,10 @@ const matrixRows = [
   { endpoint: 'getMemory', operation: 'read', payload: (lib) => ({ libraryId: lib.id, id: 'mem-matrix-scratch' }) },
   { endpoint: 'browseWall', operation: 'read', payload: (lib) => ({ libraryId: lib.id }) },
   { endpoint: 'getStats', operation: 'read', payload: (lib) => ({ libraryId: lib.id }) },
+  // 工单 F：实体合并的读写面。合并矩阵只验证路由授权：不存在的实体在 200
+  // 业务信封里报 unknown entity，403 必须在 dispatch 之前发生。
+  { endpoint: 'suggestEntityMerges', operation: 'read', payload: (lib) => ({ libraryId: lib.id }) },
+  { endpoint: 'mergeEntities', operation: 'write', payload: (lib) => ({ libraryId: lib.id, targetId: 'ent-matrix-target', sourceIds: ['ent-matrix-source'] }) },
   { endpoint: 'addMemory', operation: 'write', payload: (lib) => ({ libraryId: lib.id, content: 'matrix write body' }) },
   { endpoint: 'updateMemory', operation: 'write', payload: (lib) => ({ libraryId: lib.id, id: 'mem-matrix-scratch', patch: { title: 'matrix retitled' } }) },
   { endpoint: 'archiveMemory', operation: 'archive', payload: (lib) => ({ libraryId: lib.id, id: 'mem-matrix-scratch' }) },

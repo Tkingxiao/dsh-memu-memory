@@ -23,6 +23,7 @@
 - 动作按钮 = `Button`（`.dshm-btn`，**必须透传 `title`**，漏掉整个界面的悬浮提示静默失效）；开关 = `Toggle`；行内删除/关闭 = `.dshm-x`。
 - `<button>` 里**不许**再嵌 `role="button"`（键盘够不到）。
 - 破坏性操作 = **二次点击**（文案变「确认…？」，2.5s 复原），不用 `globalThis.confirm`、不用 modal。
+- **算法给的候选（实体合并、关联建议）只显示、永不自动执行**：列表来自只读 RPC，逐条二次点击确认才写；操作后用一行回执说清影响面（`S.muted` + `V.accent`，自清），数字取 RPC 返回值，**不估算**。参考节点图页的合并候选（`docs/memory-semantics.md` §8.14）。
 - 设置项 = 即时保存 + 250ms trailing debounce，一次重试 + `console.warn`，`pagehide` 时 flush。反馈用 toast（2.6s），不用常驻 error/notice 字符串。
 
 ### 7.4 数据与刷新

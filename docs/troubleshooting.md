@@ -247,6 +247,34 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **守卫**：`tests/webui-auth.test.mjs`（两前缀各自 handler、401/403/放行、正文零拉取、home 读写探针、快照与附件池绊线）。手工排查时先确认 `requestRejection` 的调用计数为 1，再看拒绝响应体是否只有 `unauthorized`/`forbidden`；不要靠「页面能打开」判断鉴权通过。
 
+### 3.21 日期到点没唤醒会话（S6 注入 → 宿主 schedule）
+
+**症状**：开了 `salientWake='schedule'`，条目明天到期，第二天会话里什么都没发生；或者宿主的定时任务界面里根本没有 `memu:due:` 任务。
+
+**落点**：`lib/salient-wake.js` 是整理周期里的一个 pass（`lib/cycle.js`），所以先看周期有没有跑。按顺序排：① 设置真的存下了吗（`setSettings` 的 allowlist 漏 key 会静默丢弃，`state.json` 里应出现 `salientWake: 'schedule'`）；② 宿主有没有 schedule 服务（`ctx.get('schedule')` 可能是 undefined，此时只 warn 一次并降级为被动注入）；③ 时区（`salientWakeTimeZone` 留空跟随系统，填了无效 IANA 区就整轮跳过并记一条）；④ 时刻（`HH:mm`，早于该时刻的当天槽位不补建，只排明天）；⑤ 会话状态（`useLibrary=false`、归档会话、subagent 会话会被宿主拒或本插件主动跳过）。活动日志 `kind='wake'` 的 `detail.stage`（`service / timezone / index / list / cleanup / create / pass`）就是这条排查线。
+
+**已经建了任务但没开口**：投递是 `agent.followup`，宿主进程必须活着；那一回合的 `source.kind==='schedule'`，本插件的召回/纪念日块**不会**运行，能看到的只有唤醒 prompt 自带的内容（这是设计，见 `docs/host-api.md` §6.6）。用户手删的任务会在下一轮 sweep 重建——同一天已 `ended` 的才清理。
+
+**守卫**：`tests/salient-wake.test.mjs`（默认 off 不问宿主、无服务只 warn 一次、今天/明天各一条且 prompt 自包含、二次 sweep 幂等、ended 清理、paused 不动、subagent/归档/其它错误只跳过该会话、年度 `MM-DD` 不提前、无效时区不抛错）。真机验收项单独记录：造一条明天到期的条目 → 宿主 schedule UI 出现 `memu:due:` → 到点会话被唤醒 → 次日 sweep 清理。
+
+### 3.22 时效提示没出现（S6 注入）
+
+**症状**：明明召回了一条写于半年前、标题带「最新」的记忆，块尾却没有 `<memory-freshness>`。
+
+**落点**：这条提示是**追加**在已生成的召回块之后的，前置条件少一个就不出：本回合真的有召回（`autoInject` 不是 `anchor-only`、用户文本过 `minUserChars`、命中非空）、`freshnessHint !== false`、至少一条**进入文本的**条目带信号、`turnTokens` 预算还剩得下这一行。三个信号里年龄那条最容易被误判：`owner=about_project` 的工程事实不按年龄算陈旧，年度 `MM-DD` 日期永不过期。计算异常只 `warn`，召回照常（fail-open）。
+
+**守卫**：`tests/freshness.test.mjs`（三信号真值表、缺字段/NaN 不命中、一次性过期 vs 年度日期）+ `tests/injection-chain.test.mjs`（命中出、全基线不出、`anchor-only` 不出、开关关不出）。
+
+### 3.23 实体合并的疑问与风险（S9 图谱）
+
+**症状**：节点图里两个人名指同一个人；或者合并后担心「链接改了、记忆是不是丢了」。
+
+**落点**：候选来自 `suggestEntityMerges`（纯读，同 `kind` + 包含/编辑距离，上限 20），UI 只列建议，两次点击确认才调 `mergeEntities`。合并改的是**指向**：来源实体的名字进别名（cap 30，超出在回执里明说）、私有索引里 `links[].to` 改指主节点（同 `(to,kind)` 去重）、关系快照按端点对重键（与主节点侧冲突时保留主节点侧），最后删除来源实体并 prune 孤立实体。**记忆正文与条数不变**，`docs/memory-semantics.md` §8.14 是口径。回执数字（改指多少链接、并入多少别名）来自返回值，不是估算。
+
+想回退只能靠备份：`lib/backup.js` 的既有导出/备份路径，合并本身没有 undo。
+
+**守卫**：`tests/entity-merge.test.mjs`（链接全改指、别名并集与 cap、快照重键与冲突取舍、kind 不同/自指/未知 id 拒绝且不写、prune、suggest 真值表与纯读、RPC payload 形状）；授权矩阵见 `tests/webui-auth.test.mjs`。
+
 ---
 
 
@@ -277,12 +305,15 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.18 | 聊很久一条记忆都没写 | `tests/cycle.test.mjs`（阈值 / 启动补偿 / `sessionGone` 只标一次 / 寒暄不 fork / fork 失败必须退避）+ `tests/consolidation-value.test.mjs`（评估边界）+ `tests/consolidation-fork.test.mjs`（继承父模型路由 / 失败 turn 不推进 `lastSleepSeq`）；手工看 `state.json` 的 `lastSleepAt`/`lastSleepSeq`/`sessionGone`/`sleepAttempts`/`lastSleepError`/`sleepRetryAt`。 |
 | §3.19 | 人格预设会话里完全没有记忆 | `tests/preset-scope.test.mjs`（同树跳过 / 兄弟树挂上 / 只挂一次 / agent 消失就卸载 / 子 agent 跳过）；日志 `attached memory injection to preset conversation`；`state.json` 里该会话出现 binding。 |
 | §3.20 | 鉴权矩阵 / 401/403 副作用 | `tests/webui-auth.test.mjs`：两前缀各自 handler、401/403/放行、正文零拉取、`DSH_MEMU_HOME` 读写探针为 0、库/附件快照不变；真机凭据与宿主路由层未验证。 |
+| §3.21 | 日期到点没唤醒 | `tests/salient-wake.test.mjs`；活动日志 `kind:'wake'` 的 `detail.stage`（service/timezone/index/list/cleanup/create/pass）就是排查线，`state.json` 里先确认 `salientWake` 真的存下了。 |
+| §3.22 | 时效提示没出现 | `tests/freshness.test.mjs` + `tests/injection-chain.test.mjs`；前置条件（真有召回、开关、预算装得下）少一个就不出，不是 bug。 |
+| §3.23 | 实体合并 / 担心丢记忆 | `tests/entity-merge.test.mjs`（链接改指、别名 cap、快照冲突取舍、拒绝形状）；合并只改指向，正文与条数不变。 |
 
 ## 附录 A · 模块地图（原 §2.1）
 
 ### 2.1 模块地图
 
-<!-- rpc-method-count: 93 -->
+<!-- rpc-method-count: 95 -->
 
 | 文件 | 职责 / 什么时候碰它 |
 |---|---|
@@ -292,15 +323,17 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | `lib/memory.js` | 分层、`decayStrength`、`recallScore`、边缘化、领域过滤、`privateRemember/Recall/Update`（改语义最需小心） |
 | `lib/state.js` | `state.json` 与 `index/*.json` 原子读写、合并写、`memoryRevision`/`memoryStamp`、`syncActivity`、`DEFAULT_SETTINGS` |
 | `lib/paths.js` | 读失败隔离：`readJsonStrict`、`*.corrupt-*`、写屏障 |
-| `lib/tools.js` | 10 个 `defineTool` 工具、输出格式化 |
+| `lib/tools.js` | 13 个 `memu_*` 工具、输出格式化 |
 | `lib/private.js` | 私有整理：当前对话、历史 fork、notice 消息 |
 | `lib/curator.js` / `lib/cycle.js` | 全局 curator 与 `pending_review`；空闲整理 pass（过期/降级/晋升/自动整理） |
 | `lib/mood.js` / `lib/budget.js` / `lib/snippet.js` | 情绪价与峰值；token 换算（中文≈1 字符/token、英文≈3.4，任何 token 都走它）；注入片段裁剪 |
-| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 93 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
+| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 95 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
 | `lib/graph.js` / `lib/context.js` / `lib/media.js` | 关系边与实体；说话人/频道/角色/世界线/知情边界；附件采集、缩略图、受保护路由、ZIP |
 | `lib/prompts.js` + `lib/prompts/` | 提示词加载/覆盖/恢复/domain 变体解析 |
 | `lib/engine.js` / `lib/memu.js` / `lib/memu-config.js` | Python 引擎安装探测切换回滚；MemU CLI 适配（**所有 CLI 字符串只在这里**）；`~/.memu/config.env` 的 embedding |
 | `lib/stats.js` | 私有库旁路计数（`written/injected/recalled/archived`，90 天滚动）；读失败只降级页面，不碰记忆 |
+| `lib/lexicon.js` / `lib/private-links.js` | 词典条目与 `active/archived` 生命周期、注入行渲染；整理后的本地自动关联候选与枢纽 |
+| `lib/freshness.js` / `lib/salient-wake.js` | 时间敏感信号的只读判定（喂 `<memory-freshness>` 提示）；用宿主 `ctx.schedule` 排「到点唤醒」一次性任务（默认关闭） |
 | `lib/remote-summary.js` | 远程摘要 |
 
 

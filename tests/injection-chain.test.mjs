@@ -11,6 +11,7 @@ process.env.DSH_MEMU_HOME = home
 const state = await import('../lib/state.js')
 const memory = await import('../lib/memory.js')
 const inject = await import('../lib/inject.js')
+const budget = await import('../lib/budget.js')
 
 test.after(() => {
   try { state.flushState() } catch {}
@@ -188,4 +189,179 @@ test('the remember tool tells the model to resolve a relative day', () => {
   const source = fs.readFileSync(fileURLToPath(new URL('../lib/tools.js', import.meta.url)), 'utf8')
   assert.ok(source.includes('A relative day'), 'the tool description must mention relative days')
   assert.ok(source.includes('turns one appointment into a yearly reminder'), 'and why it matters')
+})
+
+// ------------------------------------- D: freshness hint is conditional and bounded
+// The hint is a footnote to a recall that already succeeded: it must appear once,
+// after every closed <memory-context> block, and must never turn a normal turn into
+// a hint-only or failed turn.
+
+const DAY_MS = 86_400_000
+
+function seedRecallEntry(binding, id, patch = {}) {
+  const now = new Date().toISOString()
+  const index = state.loadPrivateIndex(binding.libraryId)
+  index.entries[id] = {
+    track: 'memory',
+    layer: 'long_term',
+    title: '部署脚本的位置',
+    content: '部署脚本放在 tools/deploy.ps1，先跑 staging smoke。',
+    status: 'active',
+    confidence: 0.9,
+    createdAt: now,
+    updatedAt: now,
+    ...patch,
+  }
+  state.savePrivateIndex(binding.libraryId, index)
+}
+
+async function recallFor(sessionId, binding, query, patch = {}) {
+  const exec = { agent: { session: { header: { id: sessionId, agentPreset: 'coding' } } } }
+  return inject.buildRecall(binding, query, 1, {
+    ...state.getSettings(),
+    relevanceThreshold: 0,
+    ...patch,
+  }, exec, sessionId)
+}
+
+test('a stale recalled memory appends exactly one freshness hint after the closed blocks', async () => {
+  const cwd = path.join(home, 'project-freshness-stale')
+  const binding = state.ensureSession('chain-freshness-stale', { cwd, agentPreset: 'coding' })
+  const old = new Date(Date.now() - 45 * DAY_MS).toISOString()
+  seedRecallEntry(binding, 'mem-fresh-deploy', { updatedAt: old })
+  seedRecallEntry(binding, 'mem-fresh-release', {
+    title: '发布流程的审批',
+    content: '发布流程需要提前一天审批。',
+    updatedAt: old,
+  })
+
+  const recall = await recallFor('chain-freshness-stale', binding, '部署脚本和发布流程')
+  assert.deepEqual(recall.errors, [])
+  assert.ok(recall.ids.includes('mem-fresh-deploy'))
+  assert.ok(recall.ids.includes('mem-fresh-release'))
+  assert.equal((recall.text.match(/<memory-freshness>/g) || []).length, 1, 'the hint appears exactly once')
+  assert.ok(recall.text.includes('上面有 2 条记忆带时间敏感信号'), 'N counts the unique stale entries')
+  assert.ok(recall.text.indexOf('<memory-freshness>') > recall.text.lastIndexOf('</memory-context>'),
+    'the hint follows the last closed context block')
+  assert.equal((recall.text.match(/<memory-context\b/g) || []).length, 1, 'recall still has one context block')
+  assert.equal((recall.text.match(/<\/memory-context>/g) || []).length, 1)
+  assert.ok(recall.text.endsWith('</memory-freshness>'))
+
+  // The age leg obeys freshnessDays: 45-day-old entries are fresh at 100 days.
+  const lenient = await recallFor('chain-freshness-stale', binding, '部署脚本和发布流程', { freshnessDays: 100 })
+  assert.ok(lenient.text.includes('</memory-context>'))
+  assert.equal(lenient.text.includes('<memory-freshness>'), false)
+})
+
+test('a fresh recalled memory adds no freshness hint', async () => {
+  const cwd = path.join(home, 'project-freshness-fresh')
+  const binding = state.ensureSession('chain-freshness-fresh', { cwd, agentPreset: 'coding' })
+  seedRecallEntry(binding, 'mem-fresh-now')
+
+  const recall = await recallFor('chain-freshness-fresh', binding, '部署脚本放在哪里')
+  assert.ok(recall.ids.includes('mem-fresh-now'))
+  assert.ok(recall.text.includes('</memory-context>'))
+  assert.equal(recall.text.includes('<memory-freshness>'), false)
+})
+
+test('the hint ships in the same plugin message as the recall block', async () => {
+  state.updateSettings({ randomCueChance: 0 })
+  const cwd = path.join(home, 'project-freshness-message')
+  const binding = state.ensureSession('chain-freshness-message', { cwd, agentPreset: 'coding' })
+  seedRecallEntry(binding, 'mem-fresh-message', { updatedAt: new Date(Date.now() - 45 * DAY_MS).toISOString() })
+
+  const user = {
+    id: 'u-freshness', role: 'user', source: { kind: 'user' },
+    content: [{ type: 'text', text: '部署脚本放在哪里' }],
+  }
+  const agent = { session: { header: { id: 'chain-freshness-message', cwd, agentPreset: 'coding', origin: 'user' } } }
+  const out = await inject.injectForStep({ agent, decision: { kind: 'enter', messages: [user] }, turn: 1, step: 1, signal: { aborted: false } })
+
+  assert.equal(out.messages.length, 2)
+  assert.equal(out.messages[0].source.kind, 'plugin:dsh-memu-memory')
+  const text = out.messages[0].content[0].text
+  assert.ok(text.includes('[mem-fresh-message]'))
+  assert.equal((text.match(/<memory-freshness>/g) || []).length, 1)
+  assert.ok(text.indexOf('<memory-freshness>') > text.lastIndexOf('</memory-context>'))
+  assert.equal(state.getSessionBinding('chain-freshness-message').lastRecallError, undefined)
+})
+
+test('anchor-only and autoInject off never append the freshness hint', async () => {
+  const cwd = path.join(home, 'project-freshness-modes')
+  const binding = state.ensureSession('chain-freshness-modes', { cwd, agentPreset: 'coding' })
+  seedRecallEntry(binding, 'mem-fresh-modes', { updatedAt: new Date(Date.now() - 90 * DAY_MS).toISOString() })
+
+  const anchorOnly = await recallFor('chain-freshness-modes', binding, '部署脚本放在哪里', { autoInject: 'anchor-only' })
+  assert.ok(anchorOnly.text.includes('</memory-context>'))
+  assert.equal(anchorOnly.text.includes('<memory-freshness>'), false)
+
+  // buildRecall itself is not the off switch; the caller is. The hint still must
+  // not appear if a future caller forgets that.
+  const off = await recallFor('chain-freshness-modes', binding, '部署脚本放在哪里', { autoInject: 'off' })
+  assert.ok(off.text.includes('</memory-context>'))
+  assert.equal(off.text.includes('<memory-freshness>'), false)
+})
+
+test('a query shorter than minUserChars gets the recall but no freshness hint', async () => {
+  const cwd = path.join(home, 'project-freshness-short')
+  const binding = state.ensureSession('chain-freshness-short', { cwd, agentPreset: 'coding' })
+  seedRecallEntry(binding, 'mem-fresh-short', {
+    title: '最新的部署方式',
+    content: '最新的部署方式放在 tools/deploy.ps1。',
+  })
+
+  const recall = await recallFor('chain-freshness-short', binding, '最新')
+  assert.ok(recall.ids.includes('mem-fresh-short'))
+  assert.ok(recall.text.includes('</memory-context>'))
+  assert.equal(recall.text.includes('<memory-freshness>'), false)
+})
+
+test('freshnessHint false suppresses the freshness hint', async () => {
+  const cwd = path.join(home, 'project-freshness-switch')
+  const binding = state.ensureSession('chain-freshness-switch', { cwd, agentPreset: 'coding' })
+  seedRecallEntry(binding, 'mem-fresh-switch', { updatedAt: new Date(Date.now() - 45 * DAY_MS).toISOString() })
+
+  const recall = await recallFor('chain-freshness-switch', binding, '部署脚本放在哪里', { freshnessHint: false })
+  assert.ok(recall.ids.includes('mem-fresh-switch'))
+  assert.ok(recall.text.includes('</memory-context>'))
+  assert.equal(recall.text.includes('<memory-freshness>'), false)
+})
+
+test('the hint is dropped when turnTokens cannot fit it, and the recall still succeeds', async () => {
+  const cwd = path.join(home, 'project-freshness-budget')
+  const binding = state.ensureSession('chain-freshness-budget', { cwd, agentPreset: 'coding' })
+  seedRecallEntry(binding, 'mem-fresh-budget', { updatedAt: new Date(Date.now() - 45 * DAY_MS).toISOString() })
+
+  const full = await recallFor('chain-freshness-budget', binding, '部署脚本放在哪里', { turnTokens: 800 })
+  const marker = '\n\n<memory-freshness>'
+  const at = full.text.indexOf(marker)
+  assert.ok(at > 0, 'with room the hint appears')
+  const hint = full.text.slice(at)
+  const base = full.text.slice(0, at)
+  const needed = budget.estTokens(base)
+  assert.ok(budget.estTokens(base + hint) > needed, 'the hint itself costs something')
+
+  // The smallest budget that still fits the card cannot also fit the footnote.
+  let squeezed = null
+  for (let extra = 0; extra <= 12 && !squeezed; extra += 1) {
+    const turnTokens = needed + extra
+    const attempt = await recallFor('chain-freshness-budget', binding, '部署脚本放在哪里', { turnTokens })
+    if (attempt.text) squeezed = { attempt, turnTokens }
+  }
+  assert.ok(squeezed, 'a budget near the base size still fits one card')
+  assert.ok(squeezed.attempt.text.includes('[mem-fresh-budget]'))
+  assert.ok(squeezed.attempt.text.includes('</memory-context>'))
+  assert.equal(squeezed.attempt.text.includes('<memory-freshness>'), false)
+  assert.ok(budget.estTokens(squeezed.attempt.text) <= squeezed.turnTokens)
+})
+
+test('no recall means no freshness hint', async () => {
+  const cwd = path.join(home, 'project-freshness-none')
+  const binding = state.ensureSession('chain-freshness-none', { cwd, agentPreset: 'coding' })
+  seedRecallEntry(binding, 'mem-fresh-none', { updatedAt: new Date(Date.now() - 45 * DAY_MS).toISOString() })
+
+  const recall = await recallFor('chain-freshness-none', binding, 'zzz-unrelated-token-zzz')
+  assert.equal(recall.text, '')
+  assert.deepEqual(recall.ids, [])
+  assert.equal(recall.text.includes('<memory-freshness>'), false)
 })

@@ -1,5 +1,59 @@
 # 更新日志 / Changelog
 
+## [1.2.3] - 2026-11-01
+
+> `todolist.txt` 六条设想的施工版本（工单 A–F）。行为变化集中在注入与整理两侧，都不删记忆；工单 E 默认关闭，等真机验收。
+
+### 情绪四轴上卡片（工单 A）
+
+- 记忆卡片与详情抽屉现在显示 `arousal`（激活）与 `dominance`（掌控）以及情绪来源（模型标注 / 会话心情 / 正文识别 / 未知）；旧条目缺这两个字段就整行不出现，**不从 valence 反推**。
+- 卡片的情绪 Tag 加悬停提示，展开四轴构成与来源。仍是只读：情绪不是编辑项（`docs/emotion-model-spec.md` §1.2 边界不变），全局条目不带情绪（§1.1 非目标）。
+
+### 未了之事与日期联动（工单 C）
+
+- **过期即复提**：带 `YYYY-MM-DD` 且已过期的 `open_loop` 条目不再受「静置 3 天」门槛限制，进入 `[open loop]` 候选并标注 `date=… 已经过了`，让模型说得清晚了多久。
+- **节奏由自己的提醒时钟决定**：binding 记 `openLoopRemindedAt`，同一条每隔 `openLoopRemindDays`（默认 7 天，`[1,365]`）复提一次，同日不重复；90 天未命中的记录自动清理。常规腿（无日期承诺）行为完全不变：3 天门槛 + 提过即静默。每回合仍最多 1 条。
+- **同回合不重复念**：纪念日块（`<memory-anniversary>` / `<memory-due>`）真正进入文本时，同一条目从两条腿都剔除；预算不够没注入时不会连带沉默未了之事。到期当天的措辞在 `<memory-due>` 内升级，不新开块。
+- 闭环仍只有用户能做：不自动检测承诺、不自动关闭，关闭走 `memu_private_update`。
+
+### 条件式时效提示（工单 D）
+
+- 召回块尾部按需追加一条 `<memory-freshness>`：当至少一条**进入文本**的条目带时间敏感信号——已过期的 `YYYY-MM-DD`、标题/正文命中固定词表（最新/最近/现在/目前/今年/版本/价格/天气/新闻/比分/汇率）、或条目年龄 ≥ `freshnessDays`（默认 30 天）——提示模型「若会话里有可用的搜索工具，回答当前状态前先核实；没有就如实说明可能过时」。
+- 判定是新增 `lib/freshness.js` 的**只读纯函数**，不加字段、不改存储；`owner=about_project` 的工程事实不按年龄算陈旧；年度 `MM-DD` 永不过期。
+- 与召回共用 `turnTokens` 预算，装不下就丢提示、召回照常（fail-open，异常只 `warn`）；`anchor-only` 模式与 `autoInject=off` 不出。措辞刻意是条件式：插件无法确知本会话的工具面（`docs/host-api.md` §6.8）。
+- 设置：`freshnessHint`（默认开）、`freshnessDays`（默认 30，`[1,3650]`）。不改 4 份 system-guide，不动 `rulesKey`。
+
+### 纪念日到点唤醒（工单 E，实验特性，默认关闭）
+
+- `salientWake='schedule'` 时，整理周期新增 `lib/salient-wake.js` pass：按**投递时区**扫今天/明天命中的 salient date，用宿主公开的 `ctx.schedule` 给绑定会话排一次性任务（`timing.at = {date,time,time_zone}`，`target={kind:'session',sessionId}`，时刻 `salientWakeHour` 默认 `09:00`，`salientWakeTimeZone` 留空跟随系统）。
+- 到点是 `agent.followup`，**新开一整回合**；而本插件的注入只认真实用户消息，所以那一回合拿不到锚点/召回/纪念日块——唤醒 prompt 自带日期、措辞与 `memu_private_recall` 指引，并声明「已说过不要重复」。
+- 幂等靠 `schedule.list` 对账：同名 active 跳过、paused 不动、已 `ended` 删除、过期槽位不补建；subagent 与归档会话只跳过并记信号；宿主没有 schedule 服务时 warn 一次并降级为被动注入。失败留 `kind:'wake'` 活动日志，不让周期失败。日历日与「这一刻是否已过」按**投递时区**计算（`dayInZone` / `instantInZone`）：早先按机器墙钟算，配置时区与系统时区不一致时会排错一天，或把那个时区里还没到的时刻当成已过而静默不排。
+- 边界（写进 `docs/`）：宿主进程必须活着；at-least-once 可能重复投递；用户手删任务下轮重建；任务在宿主 schedule UI 可见。**真机验收前默认 off。**
+
+### 实体主节点合并（工单 F）
+
+- `lib/graph.js` 新增 `mergeEntities({libraryId,targetId,sourceIds})`：实体文件锁内一次完成——别名取并集（含来源名字）cap 30 并报告丢弃项、私有索引 `links[].to` 全量改指主节点（同 `(to,kind)` 去重）、关系快照按端点对重键（与主节点侧冲突时保留主节点侧并计入回执）、删除来源实体并 prune 孤立项。**只改指向，不删记忆**；活动日志记 `op:'entity-merge'`。kind 不同、自指、未知 id 一律拒绝且不留半成品。
+- `suggestEntityMerges({libraryId})` 是纯读候选：同 kind 且「归一化后互相包含（短方 ≥2 字）」或「编辑距离 ≤2（短方 ≥3 字）」，稳定排序、上限 20，**永不自动合并**。
+- WebUI 节点图页新增「合并候选」区：显示双方名字与理由，两次点击确认，合并后回执写明改指多少条链接、并入多少别名、丢了多少。RPC 新增 `mergeEntities` / `suggestEntityMerges`（方法数 93 → 95，走同一库级授权）。
+- 不做跨库与全局↔私有归并；没有 undo，回退走既有备份。
+
+### 注入实测台（工单 B，仅评测用）
+
+- 新增 `scripts/mock-llm.mjs`：只监听 127.0.0.1 的伪 OpenAI 兼容端点，把每次模型请求的**块标记命中**（guide / anchor / due / anniversary / cue / texture / media / lexicon / context / open loop / freshness / replay）记成 JSONL，`--report` 输出「每轮 × 标记矩阵 + 汇总」。日志只有长度、哈希与计数，永不落正文。
+- 新增 `scripts/drive-session.mjs`：走宿主公开的 `sessionController.prompt` 灌轮数，只认持久 session log 里本轮 `turn/end` 的 `reason.kind==='completed'`；没有 `--allow-api-route` 明确授权时**拒绝发送**并打印等价手工请求（退出码 3）。
+- 标记表 pin 到本版本（`MARKER_SET_VERSION='1.2.3'`），改 `lib/inject.js` 的块标记必须同处更新。两个脚本都不被 `lib/` import，属测量工具而非运行时能力。
+- 用法与退出码见 `docs/env-and-commands.md` §9.6；50 轮基线对比留给后续调参（C/D/E 的行为变化以它作度量）。
+
+### 验证与迁移
+
+- 帮助页 FAQ 从 10 条增至 **11 条**（中英同步）：新增「对话里为什么会主动提『那个日子已经过了』『这条可能过时了』」，把 C/D/E 三处会话侧可见行为写成人能读懂的原因，并说明三者都只是提示、不自动写入或删除；`docs/client-conventions.md` §7.3 记下「候选只显示 + 二次确认 + 回执数字取实值」的约定。
+- 全量 `npm test`（2026-11-01 实测）：**1277 tests / 1275 pass / 0 fail / 2 skipped**（两条按设计跳过：curator 真实引擎用例、备份 venv/WAL 用例，均需 opt-in 真机环境）；`scripts/acceptance-local.mjs` **50/50**；`npm run check` 的 i18n / package / rpc-method-count(95) / test-tracking / loader-stubs 全部通过。
+- 新增 `tests/entity-merge.test.mjs`、`tests/open-loop-date.test.mjs`、`tests/freshness.test.mjs`、`tests/salient-wake.test.mjs`、`tests/mock-llm.test.mjs`、`tests/settings-plumbing.test.mjs` 与 `tests/stubs/dsh-schedule.js`；扩展 inject / injection-chain / prompts / emotion / client-render / webui-auth / activity-log 等套件。
+- 顺手修掉两处会在别人机器上闪红的地方：`tests/sidebar.test.mjs` 的大库首屏预算 500ms → 1500ms（守的是秒级病理形状，空载实测 378–448ms、并行整包曾到 1808ms）；`tests/client-render.test.mjs` 的短条目过期时刻改为相对时间（曾 pin 在当天 09:30Z，下午必红）。
+- 修复一处静默失败面：`openLoopRemindDays` / `freshnessHint` / `freshnessDays` / `salientWake` / `salientWakeHour` / `salientWakeTimeZone` 必须进 `setSettings` allowlist 与 `resetSettings` key 表，否则设置页写了不生效（`tests/settings-plumbing.test.mjs` 拦回归）。
+- 活动日志新增 `wake` kind；词典生命周期等处的过期计数表述改为引用 rpc-method-count 标记，不再散写数字。
+- 无数据迁移：新设置项走默认值，唤醒默认关闭。依赖、构建步骤与网络要求均未增加。
+
 ## [1.2.2] - 2026-11-01
 
 > 本版本把此前未单独发布的内部变更合并为正式版 1.2.2；下方「同版基线」保留原详细记录。

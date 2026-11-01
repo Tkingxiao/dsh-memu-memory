@@ -20,7 +20,7 @@ node scripts/acceptance-local.mjs    # 50/50；视觉证据只证明本次已审
 npm run check                        # node --check + i18n 键对齐 + package.json 可解析
 ```
 
-**结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。文档里出现的测试数字一律当作**带日期的快照**：2026-11-01 实测 1210 tests / 1208 pass / 0 fail / 2 skipped（curator 真实引擎与备份 venv/WAL 两条为 opt-in，按设计跳过）；更早的 505 / 392 / 321 / 327 / 333 等是历史快照或转述，不能当作当前保证。
+**结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。文档里出现的测试数字一律当作**带日期的快照**：2026-11-01 实测 1277 tests / 1275 pass / 0 fail / 2 skipped（curator 真实引擎与备份 venv/WAL 两条为 opt-in，按设计跳过）；更早的 1273 / 1210 / 505 / 392 / 321 / 327 / 333 等是历史快照或转述，不能当作当前保证。**计时与日期敏感的断言要按「整包并行 + 一天中的任何时刻」写**：`tests/sidebar.test.mjs` 的大库首屏用 1500ms（空载 378–448ms，整包并行曾到 1808ms，500ms 测的是机器的空闲程度），`tests/client-render.test.mjs` 的短条目过期时刻用相对时间（曾 pin 在当天 09:30Z，下午必红）。
 
 ### 4.3 每类改动的连带清单
 
@@ -75,9 +75,9 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 
 ### 5.3 新增一个 RPC 方法
 
-<!-- rpc-method-count: 93 -->
+<!-- rpc-method-count: 95 -->
 
-1. `lib/rpc.js` 的 `switch` 加 case（共 93 个方法，按功能分组，别乱插）。
+1. `lib/rpc.js` 的 `switch` 加 case（共 95 个方法，按功能分组，别乱插）。
 2. 返回**形状稳定**：客户端 `call()` 直接解构，列表类给 `{items, total}` 而不是裸数组。
 3. `revisionOnly` 分支只回 `{revision, stamp}`、**不要求 sessionId**（三端轮询，设置页与独立页没会话）、**不塞业务数据**（每 2.5 秒一次）；顺带 `noteMemoryBeat()`，`memu_status` 靠它分「没写」与「没人轮询」。
 4. 写成功后 `bumpMemoryRevision()`/`notifyMemoryWrite()`（§7）；能让 `state.json` 或索引落盘的写，`state.js` 自动记写事件供 `memu_status` 展示。
@@ -85,7 +85,7 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 
 ### 5.4 新增一个设置项 / 设置页
 
-1. `lib/state.js` 的 `DEFAULT_SETTINGS` 加键（**唯一权威**），`setSettings` 白名单 + 类型校验，需要 clamp 的在这里。
+1. `lib/state.js` 的 `DEFAULT_SETTINGS` 加键（**唯一权威**），`updateSettings` 里加 range/enum/类型校验，**并且**把键同时登记进 `lib/rpc.js` 的 `setSettings` 白名单与 `resetSettings` key 表——没进白名单的 patch 会被静默丢弃，设置页就成了死控件（回归由 `tests/settings-plumbing.test.mjs` 拦）。设置页里的 `settings.x ?? N` 回落值必须等于 `DEFAULT_SETTINGS.x`（`tests/ui-defaults.test.mjs` 守）。
 2. 设置页：`lib/client.js` 的 `pageDefs`/`pageBlocks`/`PAGE` 三处一致；每页拆 `xxxBlock` + `renderXxxItem`。
 3. 文案 zh/en 两字典都加，跑 `node scripts/check-i18n.mjs`；反面语义 → WebUI `settingRow(..., { invert: true })`。
 4. 独立页（`lib/webui/`）要同步显示就走 `BroadcastChannel` 的 `memory-write`，并让 WebUI `settingRow` 读同一份 `getSettingsState`。
@@ -189,12 +189,13 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 
 ### 新增设置
 
-`curatorReviewMode`（`auto`/`review-all`，默认 auto）——全局提炼审核模式；conflict 恒人审。三处注册：DEFAULT_SETTINGS / updateSettings.enums / rpc setSettings+resetSettings。
+三处注册缺一不可：`DEFAULT_SETTINGS` / `updateSettings`（range·enum·类型校验）/ `lib/rpc.js` 的 `setSettings` **与** `resetSettings`。1.2.3 新增的六个键：`openLoopRemindDays`（7，`[1,365]`）、`freshnessHint`（默认开）、`freshnessDays`（30，`[1,3650]`）、`salientWake`（`off`/`schedule`，默认 off）、`salientWakeHour`（`HH:mm`）、`salientWakeTimeZone`（空=跟随系统，非空必须有效 IANA）。另有 `curatorReviewMode`（`auto`/`review-all`，默认 auto）——全局提炼审核模式；conflict 恒人审。
 
 ### 锁顺序不变式
 
 插件有多个文件锁（库索引、entities、词典、整理账本、向量代际闸）。当前唯一允许的嵌套方向是
-`entity(file) → index(file)`（`deleteEntity` 先拿 entities 锁，再在锁内清入边并写索引），以及
+`entity(file) → index(file)`（`deleteEntity` 先拿 entities 锁，再在锁内清入边并写索引；1.2.3 的
+`mergeEntities` 同向——实体锁内嵌套索引锁，且**先写索引改指、后删来源实体行**，中途崩溃最多留下可回收的实体，绝不会留下指向已消失实体的边），以及
 `curator(vector) → index/lexicon(file)`（`curator.js` 的 managed 写闸先于索引/词典锁）。**不要**
 在持有索引锁时回头拿 entities 锁，也不要在词典锁内拿向量闸——AB-BA 死锁不会在单会话测试里
 稳定复现，但会在大库并发删除/改名时出现。`pruneOrphanEntities` 在 entities 锁内只读索引，不取

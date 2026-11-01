@@ -30,7 +30,7 @@ It is **local-first by default**. The default `agent` backend stores full text i
 > [!WARNING]
 > **Early-stage software.** This plugin is still early and may contain unforeseen errors, bugs or breaking changes. Back up your data, and please [report an issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) or send a pull request — feedback helps the project improve.
 
-> **Status:** 1.2.2. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
+> **Status:** 1.2.3. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
 
 ## Screenshots
 
@@ -107,13 +107,13 @@ The sidebar has exactly **one** entry: **MemU WebUI**. The memory wall and all s
 
 **Graph and list together.** The **Relations** tab renders the graph canvas and the adjacency list side by side (stacked on narrow screens), with the focus selector above them and link/entity/relationship tools below. There is no mode switch to forget.
 
-The locally bundled D3 force layout preserves positions and the camera across background data refreshes. Drag nodes, pan the background, zoom with the wheel or pinch, fit the graph, and highlight neighbors. Labels avoid collisions; graph settings adjust repulsion, link distance, labels and live layout. Layout only visualizes recorded links: it never infers or writes relationships.
+The locally bundled D3 force layout preserves positions and the camera across background data refreshes. Drag nodes, pan the background, zoom with the wheel or pinch, fit the graph, and highlight neighbors. Labels avoid collisions; graph settings adjust repulsion, link distance, labels and live layout. Layout only visualizes recorded links: it never infers or writes relationships. The graph page also lists **entity merge candidates** (same kind, contained or near-identical spellings) — suggestions only, confirmed by two clicks, and merging redirects links and folds aliases into the main node without deleting any memory.
 
 | Page | What it is for |
 |---|---|
-| Memories | Private/global grouped wall, source/status/library/preview, in-place drawer, multi-select bulk ops, Relations tab |
+| Memories | Private/global grouped wall, source/status/library/preview, in-place drawer, multi-select bulk ops, node graph tab |
 | Engine & connection | Optional MemU engine install/switch, embedding endpoint, backups and restore |
-| Memory settings | Injection mode, token budgets, topK, relevance threshold, retention, automation |
+| Memory settings | Injection mode, token budgets, topK, relevance threshold, retention, open-loop cadence, freshness hint, date wake-up, automation |
 | Folders | Folder-level private/global ceiling, expandable conversations and their own switches |
 | Libraries | Create, rename, archive, restore, explicitly delete libraries |
 | Memory browser | Full-text editing, attachments, review queue, graph and bounded canvas, JSON/ZIP import/export |
@@ -126,6 +126,12 @@ Settings save as you change them (250 ms debounce), with about 2.5 s cross-windo
 ### Injection token budgets
 
 `anchorTokens` and `turnTokens` bound anchor and recall content independently (default 800 each). `injectionTotalTokens` caps the whole plugin message (default 2000); it does not replace the recall budget. Title cards spend far fewer tokens per entry than full text, so the same budget exposes more memories; the budget itself was deliberately not increased in 1.2.2.
+
+### Time-sensitive memory (1.2.3)
+
+- **Stale recall says so.** When recalled entries carry a time signal (a one-off date already in the past, wording like "latest / current / price / version", or an entry older than `freshnessDays`), one conditional line is appended after the recall block telling the model to verify with a search tool *if the conversation has one*. It never claims a tool exists, and it is dropped rather than pushing recall over budget.
+- **Dated promises keep asking.** An `open_loop` memory whose `YYYY-MM-DD` has passed is re-raised every `openLoopRemindDays` (default 7) with its date and how late it is — undated promises keep the old "quiet after one mention" behaviour. Closing a loop is always the user's action.
+- **Optional wake-up call.** `salientWake` (default **off**) schedules a one-shot host task per bound conversation so a salient date is spoken about on the day, even if the conversation went cold. The delivered turn carries its own text — recall and anniversary blocks do not run there — and the tasks are visible in the host's schedule UI. Requires the host process to be running; experimental until verified on a real install.
 
 ### Domain Prompts
 
@@ -355,6 +361,8 @@ With the preview running, use `npm run test:graph-browser -- http://127.0.0.1:77
 The suite includes two optional real-engine integration cases: curator writing requires `DSH_MEMU_TEST_ENGINE_PYTHON`, and the backup venv/WAL case requires `DSH_MEMU_BACKUP_REAL_ENGINE=1`; both are skipped by default. The 50 automated acceptance checks pass. The optional engine was installed and smoke-tested in an isolated directory with the pinned wheel; embedding tests use a local deterministic server, which proves the protocol, not semantic quality.
 
 ## Changelog
+
+**1.2.3 (2026-11-01)**: the six todolist work orders. Emotion now shows on the card (arousal / dominance / source, read-only); dated open loops re-raise every `openLoopRemindDays` instead of going quiet after one mention, and never repeat in a turn that already named them; recalled memory that looks time-sensitive gets one conditional `<memory-freshness>` line nudging the model to verify with a search tool *if* the conversation has one; optional `salientWake` (off by default, experimental) asks the host scheduler to wake the bound conversation on the day; entity merge candidates with two-click confirmation in the graph page (RPC methods 93 → 95). Also a loopback-only injection measurement harness (`scripts/mock-llm.mjs` + `scripts/drive-session.mjs`) so later tuning can be counted instead of argued about. No new dependencies, no build step, no data migration.
 
 **1.2.2 (2026-11-01)**: title-card anchor/recall (id + title + semantic tags, body behind recall), automatic lexicon lifecycle and card management, private auto-links/entity hubs, help page v2, and WebUI layout/selector polish; together with the previously unreleased curator three-stage pipeline, global links, absorb/undo, review modes and lexicon store baseline. Prompt contracts are unified (remote curation stays tool-free, title 8–40 characters), the PTC worker mounts 5 write + 3 read tools, and no new dependencies or build steps were added.
 

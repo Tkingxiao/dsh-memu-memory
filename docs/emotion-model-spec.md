@@ -268,7 +268,7 @@ visibility 只允许当前代码支持的 shared 或 secret；不得再使用已
 | P1 | `lib/memory.js` 召回：overlap 路径 + 旧 valence 回落、dominance 乘数、三腿门控、`arousalBias` 的强度代理纳入 `maxShare` | 完成；`moodBias` 实测边界 0.7 / 1.3 |
 | P2 | `state.js` / `tools.js` / `prompts.js` / `remote-summary.js` / `rpc.js` / `client.js` | 完成；remember → list → update → recall 往返通过 |
 | P3 | `private.js` fork 显式 `mood: null`；四份整理提示词按回合还原情绪 | 完成 |
-| P4 | 文档与只读展示 | 完成；WebUI 编辑控件按 §1.2 不做 |
+| P4 | 文档与只读展示 | 完成；卡片/抽屉显示 arousal、dominance、emotionSource，编辑控件按 §1.2 不做 |
 
 实现期间发现并修正的三处偏差，记在这里避免重犯：
 
@@ -276,6 +276,6 @@ visibility 只允许当前代码支持的 shared 或 secret；不得再使用已
 2. **`emotion: null` 曾在工具层被 `?? null` 与"省略"合并**，导致"明确中性"被会话心情覆盖。现在三态分开：`undefined` = 继承，`null` = 明确中性，全零对象 = 规范化为 null。
 3. **`dominanceBias(null, x)` 曾因 `Number(null) === 0` 返回 1.05**。现在缺失或非法一律返回 1。
 
-验收：`tests/emotion-contract.test.mjs`（17 条，由独立验收者按 §8 编写，不迁就实现）+ 全量 `npm test` 944 / 942 pass / 0 fail / exit 0。
+验收：`tests/emotion-contract.test.mjs`（17 条，由独立验收者按 §8 编写，不迁就实现）+ 展示侧 `tests/client-render.test.mjs`（卡片/抽屉的 arousal/dominance/emotionSource 行）；全量门禁的实测数字只看 `AGENTS.md` §3 的带日期快照，本文件不复制份数（复制的那份一定会在下个版本过时）。
 
 端到端链路验证覆盖 8 条：读取、写入四态来源、持久化、更新三态、召回、旧条目降级、展示与协议、远程清洗；36 项断言全通过。
