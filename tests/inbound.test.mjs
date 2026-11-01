@@ -85,7 +85,8 @@ test('a library switch during first-step recall discards the whole pre-switch me
   const marker = 'OLD-LIBRARY-UNIQUE-MARKER-7c1e'
   await memory.privateRemember({ exec: f.exec, title: '旧库唯一标记', content: marker })
   const stale = inject.buildAnchor(f.binding, state.getSettings(), f.id)
-  assert.ok(stale.text.includes(marker), 'the pre-switch anchor must contain the marker for this test to be meaningful')
+  assert.ok(stale.text.includes('旧库唯一标记'), 'the pre-switch anchor must carry the title for this test to be meaningful')
+  assert.ok(!stale.text.includes(marker), 'title cards do not carry bodies')
   const other = state.createLibrary({ name: 'other', scopeKey: path.join(home, 'other-lib') })
   const user = { id: 'first-user', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '旧库唯一标记在哪里' }] }
   const decision = { kind: 'enter', messages: [user] }
@@ -239,9 +240,11 @@ test('retrieval errors stay fail-open, preserve the batch and use a retry delay'
     state.updateSettings({ memoryBackend: 'agent' })
     const current = state.getSessionBinding(f.id)
     state.setSessionBinding(f.id, { inbound: { ...current.inbound, retryAt: null } })
-    await saved(f)
+    const entry = await saved(f)
     const out = await continueStep(f, 3)
-    assert.ok(textOf(out).includes('tools/deploy.ps1'))
+    assert.ok(textOf(out).includes(`[${entry.id}]`), 'the retried recall lands as a title card')
+    assert.ok(textOf(out).includes('部署脚本'), 'the title is what the block carries')
+    assert.ok(!textOf(out).includes('tools/deploy.ps1'), 'the body stays behind memu_private_recall')
     assert.equal(state.getSessionBinding(f.id).inbound.pending.length, 0)
   } finally { state.updateSettings({ memoryBackend: 'agent' }) }
 })

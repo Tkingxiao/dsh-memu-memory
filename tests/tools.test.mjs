@@ -39,22 +39,25 @@ test('all v1 tools register', () => {
   const names = tools.map((t) => t.name)
   for (const name of [
     'memu_private_link',
+    'memu_private_link_suggest',
     'memu_private_remember',
     'memu_private_recall',
     'memu_private_list',
     'memu_private_update',
     'memu_private_archive',
     'memu_private_unpin',
+    'memu_lexicon_search',
+    'memu_lexicon_propose',
     'memu_global_recall',
     'memu_global_list',
     'memu_status',
   ]) {
     assert.ok(names.includes(name), `missing ${name}`)
   }
-  // Exactly ten, not "at least these nine": a schema the host DSL refuses used to
+  // Exactly thirteen, not "at least these twelve": a schema the host DSL refuses used to
   // abort registerTools() before any register() ran, so counting is the assertion
   // that actually catches a total registration failure.
-  assert.equal(names.length, 10, `expected 10 tools, got ${names.length}: ${names.join(', ')}`)
+  assert.equal(names.length, 13, `expected 13 tools, got ${names.length}: ${names.join(', ')}`)
   dispose()
 })
 
@@ -65,7 +68,113 @@ test('status works without an engine', async () => {
   assert.match(status, /library:/)
   // The registration count is the visible signal for a refused schema: without it
   // a host that rejects the tool and a plugin that never had it look identical.
-  assert.match(status, /tools: 10\/10 registered/)
+  assert.match(status, /tools: 13\/13 registered/)
+  dispose()
+})
+
+test('title descriptions explain the permanent index rule', () => {
+  const { tools, dispose } = fakeCtx()
+  const remember = tools.find((t) => t.name === 'memu_private_remember')
+  const update = tools.find((t) => t.name === 'memu_private_update')
+  for (const tool of [remember, update]) {
+    const title = tool.parameters.title.description
+    assert.match(title, /8-40/, `${tool.name} title carries the 8-40 rule`)
+    assert.match(title, /name the concrete fact|title is a permanent index|anchor shows only titles/, `${tool.name} title says it is an index`)
+    assert.match(title, /empty label/, `${tool.name} title forbids empty labels`)
+  }
+  assert.match(remember.parameters.title.description, /WITHOUT the body/, 'the anchor shows titles without bodies')
+  const link = tools.find((t) => t.name === 'memu_private_link')
+  assert.match(link.description, /memu_private_link_suggest/, 'link is named as the adjudication tool for candidates')
+  assert.match(link.parameters.entity.description, /reused/, 'a named entity can be reused instead of duplicated')
+  const search = tools.find((t) => t.name === 'memu_lexicon_search')
+  assert.match(search.description, /ACTIVE/)
+  assert.match(search.description, /archived entries are excluded/)
+  const propose = tools.find((t) => t.name === 'memu_lexicon_propose')
+  assert.match(propose.description, /ACTIVE immediately/)
+  assert.doesNotMatch(propose.description, /stored as pending|needs human review before/, 'a model proposal is no longer pending')
+  assert.match(propose.parameters.term.description, /index key/)
+  assert.match(propose.parameters.meaning.description, /explanation/)
+  assert.match(tools.find((t) => t.name === 'memu_private_link_suggest').parameters.ids.description, /Required/)
+  dispose()
+})
+
+test('lexicon propose writes an active entry immediately; search only sees active terms', async () => {
+  const { tools, dispose } = fakeCtx()
+  const cwd = path.join(home, 'project-lex')
+  const execLex = { agent: { session: { header: { id: 'tools-lex', cwd, agentPreset: 'coding' } } } }
+  const binding = state.ensureSession('tools-lex', { cwd, agentPreset: 'coding' })
+  const lexicon = await import('../lib/lexicon.js')
+  const propose = tools.find((t) => t.name === 'memu_lexicon_propose')
+  const search = tools.find((t) => t.name === 'memu_lexicon_search')
+
+  const written = await propose.execute({ term: '糖刀', kind: 'slang', meaning: '又甜又扎人的说话方式。' }, execLex)
+  assert.match(written, /status=active/)
+  assert.doesNotMatch(written, /pending|待审/)
+  const storedPair = Object.entries(lexicon.loadLexicon(binding.libraryId).terms).find(([, entry]) => entry.term === '糖刀')
+  const stored = storedPair[1]
+  assert.equal(stored.status, 'active', 'model-proposal lands as active, no review step')
+  assert.equal(stored.source, 'model-proposal')
+
+  // Writing the same normalized term again updates the active entry, it does not fork it.
+  const again = await propose.execute({ term: '糖刀', kind: 'slang', meaning: '又甜又扎人的说话方式。', usage: '撒娇时用。' }, execLex)
+  assert.match(again, /已更新现有生效词条/)
+  assert.equal(Object.values(lexicon.loadLexicon(binding.libraryId).terms).filter((entry) => entry.term === '糖刀').length, 1)
+
+  const hit = await search.execute({ query: '糖刀' }, execLex)
+  assert.match(hit, /糖刀/)
+
+  // Archived terms leave both the search surface and injection.
+  lexicon.archiveLexiconTerm({ libraryId: binding.libraryId, termId: storedPair[0] })
+  const archived = await search.execute({ query: '糖刀' }, execLex)
+  assert.match(archived, /没有命中/)
+  // Writing the archived term again is not the model's call: it reports the entry was not changed.
+  const notOwned = await propose.execute({ term: '糖刀', kind: 'slang', meaning: '再次写入。' }, execLex)
+  assert.match(notOwned, /未改动/)
+  assert.match(notOwned, /已归档或归用户管理/)
+  assert.equal(Object.values(lexicon.loadLexicon(binding.libraryId).terms).find((entry) => entry.term === '糖刀').status, 'archived')
+
+  const refused = await propose.execute({ term: '别离开我', kind: 'trigger', meaning: '离别场景的触发词。' }, execLex)
+  assert.match(refused, /sensitive trigger/, 'a sensitive trigger stays user-managed')
+  dispose()
+})
+
+test('link suggest applies high-confidence links and returns only uncertain candidates', async () => {
+  const { tools, dispose } = fakeCtx()
+  const cwd = path.join(home, 'project-links')
+  const execLinks = { agent: { session: { header: { id: 'tools-links', cwd, agentPreset: 'rp' } } } }
+  const binding = state.ensureSession('tools-links', { cwd, agentPreset: 'rp' })
+  state.savePrivateIndex(binding.libraryId, { version: 1, entries: {
+    'mem-a': { title: '猫娘yuike', content: 'yuike 是一只住在窗台的猫娘，喜欢晒太阳。', status: 'active', visibility: 'shared', layer: 'long_term' },
+    'mem-b': { title: 'yuike名字的由来', content: '这个名字来自小时候养过的一只白猫。', status: 'active', visibility: 'shared', layer: 'long_term' },
+  } })
+  const suggest = tools.find((t) => t.name === 'memu_private_link_suggest')
+  assert.equal(suggest.isConcurrencySafe(), false, 'suggest writes links, so it is not a concurrent read')
+
+  const unbound = await suggest.execute({ ids: ['mem-a'] }, {
+    agent: { session: { header: { id: 'tools-links-unbound', cwd: path.join(home, 'project-links-unbound') } } },
+  })
+  assert.match(unbound, /没有绑定记忆库/)
+  const empty = await suggest.execute({ ids: [] }, execLinks)
+  assert.match(empty, /1-20/)
+
+  const payload = JSON.parse(await suggest.execute({ ids: ['mem-a'] }, execLinks))
+  assert.deepEqual(Object.keys(payload).sort(), ['autoLinked', 'candidates'], 'the tool answers with the two-field contract only')
+  assert.deepEqual(payload.candidates, [], 'the yuike pair is high confidence, so nothing is handed over')
+  assert.equal(payload.autoLinked.length, 3, 'relation link plus one hub link per memory')
+  for (const edge of payload.autoLinked) {
+    assert.deepEqual(Object.keys(edge).sort(), ['from', 'kind', 'to'], 'no bodies or notes in the compact payload')
+  }
+  assert.ok(payload.autoLinked.some((edge) => edge.from === 'mem-a' && edge.to === 'mem-b' && edge.kind === 'relation'))
+  assert.ok(payload.autoLinked.some((edge) => edge.from === 'mem-a' && edge.kind === 'person'))
+  // The auto source survives into the graph the UI reads.
+  const graph = await import('../lib/graph.js')
+  const view = graph.getGraph({ libraryId: binding.libraryId, focusId: 'mem-a', depth: 1 })
+  assert.ok(view.edges.some((edge) => edge.from === 'mem-a' && edge.to === 'mem-b' && edge.source === 'auto'))
+
+  // Running it again is idempotent: no new links, same empty candidate list.
+  const rerun = JSON.parse(await suggest.execute({ ids: ['mem-a', 'mem-b'] }, execLinks))
+  assert.deepEqual(rerun.autoLinked, [])
+  assert.deepEqual(rerun.candidates, [])
   dispose()
 })
 

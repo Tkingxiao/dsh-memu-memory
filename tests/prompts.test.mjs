@@ -199,6 +199,41 @@ test('domain defaults distinguish engineering evidence, character continuity and
   assert.match(curator, /前置条件、适用版本与验证边界/)
 })
 
+test('title guidance ships in every consolidation page; tool workflow lives in the worker brief and the remote contract stays tool-free', async () => {
+  for (const domain of ['general', 'coding', 'rp', 'mixed']) {
+    const key = domain === 'general' ? 'private-consolidation' : `private-consolidation.${domain}`
+    const text = prompts.getPromptState(key).defaultText
+    assert.match(text, /8–40 字/, `${key}: title length rule`)
+    assert.match(text, /目录项/, `${key}: the title is the directory entry`)
+    assert.match(text, /覆盖来源的关键词/, `${key}: a merged title covers every source`)
+    assert.match(text, /没有正文|不显示正文/, `${key}: the anchor omits bodies`)
+    assert.match(text, /可抽词典词/, `${key}: the shared body still says what vocabulary is worth extracting`)
+    assert.doesNotMatch(text, /召唤/, `${key}: the typo must not return`)
+    // The domain body is shared with the remote JSON path, which has no tools at
+    // all. Tool calls belong in the local worker brief, not here.
+    assert.doesNotMatch(text, /memu_lexicon|memu_private_link|memu_private_remember|memu_private_update/, `${key}: no tool workflow in the shared body`)
+  }
+  const curator = prompts.getPromptState('global-curator').defaultText
+  assert.match(curator, /标题即目录/)
+  assert.match(curator, /8–40 字/)
+  assert.match(curator, /覆盖所有来源的关键词/)
+  // The JSON schema is unchanged: title is still a plain optional string field.
+  assert.match(curator, /"title":"\.\.\."/)
+
+  const { buildWorkerBrief } = await import('../lib/consolidation-worker.js')
+  const brief = buildWorkerBrief({ snapshot: { fromSeq: 1, throughSeq: 2, eventCount: 2, hash: 'prompt-test' }, probe: null, contract: '' })
+  for (const rule of [/memu_lexicon_search/, /memu_lexicon_propose/, /term 是索引键/, /sensitive trigger/, /memu_private_link_suggest/, /noop/, /conflict/, /最多确认 5 条/]) {
+    assert.match(brief, rule, 'the local worker brief owns the tool workflow')
+  }
+  assert.match(prompts.CONSOLIDATION_CONTRACTS.remote, /8-40字/, 'the remote JSON contract uses the same title length')
+  assert.doesNotMatch(prompts.CONSOLIDATION_CONTRACTS.remote, /memu_lexicon|memu_private_link/, 'the remote contract promises no tools')
+  for (const domain of ['general', 'coding', 'rp', 'mixed']) {
+    const assembled = prompts.loadPromptForDomain('private-consolidation', { libraryName: 'x', domain, mustRememberCap: 16 }, domain).text
+      + '\n' + prompts.CONSOLIDATION_CONTRACTS.remote
+    assert.doesNotMatch(assembled, /memu_/, `${domain}: the remote prompt must not mention tools`)
+  }
+})
+
 test('all shipped template variables are declared and fully rendered, with bounded resident guidance', () => {
   const vars = { mustRememberCap: 16, unpinBudget: 2, shortTermTtlHours: 48, anchorTokens: 700, turnTokens: 500,
     libraryName: 'test-library', domain: 'coding', input: '{"sessions":[]}' }

@@ -205,9 +205,9 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 - **新回合被评估为「不值得整理」。** `assessConsolidationValue` 只拒绝两种：`lastSleepSeq` 之后没有任何人类消息；或只有一条纯应答（「谢谢」「好的」「ok」，无工具调用）。其余都会进 fork，由整理提示词决定写不写——**写 0 条是合法结果**，不是故障。
 - **整理失败一直退避。** 看 binding 的 `lastSleepError` / `sleepRetryAt` / `sleepAttempts`。会话被删会得到 `session "…" not found`，现在会标 `sessionGone: true` 并停止重试（以前会每小时重来）。
 - **fork 失败被当成成功。** 旧版只等 `whenIdle()`；turn error 也会 resolve，于是 `lastSleepSeq` 被推进。现在 fork 必须继承父 `provider` / `model`（活跃会话取最近一轮 `requestHeader().config`，关闭会话取最后一条 `request/header` 的 `data.header.config`）；没有路由就拒绝创建，报 `cannot inherit the parent model/provider`。`whenIdle` 后还要检查 `turn/end.data.reason.kind === 'completed'`，`error` / `aborted` / 没有 `turn/end` 都返回 `ok:false`，不推进游标，由 `runSleepPass` 记 `lastSleepError`、`sleepRetryAt`、`sleepAttempts` 退避重试。
-- **PTC 会话（`run_code` 预设）曾被一刀切拒绝（2026-10-31 已修）。** 旧 probe 看到 header 工具表里没有 `memu_private_remember/update` 就判 `worker-tools-ptc-only` 不建 fork——但 PTC 模式下 header 本来就只有 `run_code`，其余工具走 run_code 程序里的 SDK 绑定，header 名单不承载"能不能写"。现在的口径：PTC 不构成否证（probe 返回 `source: 'ptc-header'`），fork 创建后把读写四件（`memu_private_remember/update/recall/list`）挂进 worker 自己的 agent ctx scope（注册表按 scope 链取可见面，只对这个一次性 worker 可见，整理结束即卸载）；任务书写明 `await tools.memu_private_remember({...})` 的调用形态。宿主不暴露 agent ctx（记录上没有 `ctx.tools`）时挂载失败只 warn，worker 会按任务书如实回执 `tools-unavailable`，空闲扫描照常退避。证据看活动日志"整理已开始"行的 `detail.probe` 与 `detail.workerToolsAttached`。
+- **PTC 会话（`run_code` 预设）曾被一刀切拒绝（2026-10-31 已修）。** 旧 probe 看到 header 工具表里没有 `memu_private_remember/update` 就判 `worker-tools-ptc-only` 不建 fork——但 PTC 模式下 header 本来就只有 `run_code`，其余工具走 run_code 程序里的 SDK 绑定，header 名单不承载"能不能写"。现在的口径：PTC 不构成否证（probe 返回 `source: 'ptc-header'`），fork 创建后把 worker 的 5 个写工具（remember/update/link/link_suggest/lexicon_propose）与 3 个读工具（recall/list/lexicon_search）挂进 worker 自己的 agent ctx scope（注册表按 scope 链取可见面，只对这个一次性 worker 可见，整理结束即卸载）；任务书写明 `await tools.memu_private_remember({...})` 的调用形态。写能力探测仍只认 remember/update，不会被 link/lexicon 工具误判。宿主不暴露 agent ctx（记录上没有 `ctx.tools`）时挂载失败只 warn，worker 会按任务书如实回执 `tools-unavailable`，空闲扫描照常退避。证据看活动日志"整理已开始"行的 `detail.probe` 与 `detail.workerToolsAttached`。
 
-**守卫**：`tests/cycle.test.mjs`（空闲阈值、启动补偿、`sessionGone` 只标记一次、寒暄不 fork、失败 fork 必须退避）+ `tests/consolidation-value.test.mjs`（评估边界：插件通知不算人类消息、纯应答跳过、「我不吃香菜」这种五个字的偏好必须留下、`lastSleepSeq` 之后的尾巴才算）+ `tests/consolidation-fork.test.mjs`（继承父模型、失败 turn 不推进 `lastSleepSeq`、PTC 会话照常 fork 且只挂读写四件、非 PTC 名单缺写工具仍然拒绝）。手工核对：`state.json` 里 `lastSleepAt` / `lastSleepSeq` / `sessionGone` / `sleepAttempts` / `lastSleepError` / `sleepRetryAt` 六个字段。
+**守卫**：`tests/cycle.test.mjs`（空闲阈值、启动补偿、`sessionGone` 只标记一次、寒暄不 fork、失败 fork 必须退避）+ `tests/consolidation-value.test.mjs`（评估边界：插件通知不算人类消息、纯应答跳过、「我不吃香菜」这种五个字的偏好必须留下、`lastSleepSeq` 之后的尾巴才算）+ `tests/consolidation-fork.test.mjs`（继承父模型、失败 turn 不推进 `lastSleepSeq`、PTC 会话照常 fork 且只挂 worker 读写工具、非 PTC 名单缺写工具仍然拒绝）。手工核对：`state.json` 里 `lastSleepAt` / `lastSleepSeq` / `sessionGone` / `sleepAttempts` / `lastSleepError` / `sleepRetryAt` 六个字段。
 
 ### 3.19 人格预设（agent preset）的会话里完全没有记忆（S1 绑定 → S4 注入）
 
@@ -282,7 +282,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 ### 2.1 模块地图
 
-<!-- rpc-method-count: 86 -->
+<!-- rpc-method-count: 93 -->
 
 | 文件 | 职责 / 什么时候碰它 |
 |---|---|
@@ -296,7 +296,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | `lib/private.js` | 私有整理：当前对话、历史 fork、notice 消息 |
 | `lib/curator.js` / `lib/cycle.js` | 全局 curator 与 `pending_review`；空闲整理 pass（过期/降级/晋升/自动整理） |
 | `lib/mood.js` / `lib/budget.js` / `lib/snippet.js` | 情绪价与峰值；token 换算（中文≈1 字符/token、英文≈3.4，任何 token 都走它）；注入片段裁剪 |
-| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 86 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
+| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 93 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
 | `lib/graph.js` / `lib/context.js` / `lib/media.js` | 关系边与实体；说话人/频道/角色/世界线/知情边界；附件采集、缩略图、受保护路由、ZIP |
 | `lib/prompts.js` + `lib/prompts/` | 提示词加载/覆盖/恢复/domain 变体解析 |
 | `lib/engine.js` / `lib/memu.js` / `lib/memu-config.js` | Python 引擎安装探测切换回滚；MemU CLI 适配（**所有 CLI 字符串只在这里**）；`~/.memu/config.env` 的 embedding |
@@ -394,3 +394,41 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 10. **注入失败 fail-open，但必须留可观测信号。** 抛错不许改变宿主的 turn 错误语义（吞掉是允许的），代价是真实故障一起被吞：`inject.js` 若把 pre-step 的 `agent` 当 `exec` 传给 `buildRecall`（正确形状 `{ agent }`，§6.3），`no bound session` 就只被空 catch 吃掉——**每回合召回静默失效、只剩锚点、日志一个字都没有**。所以 fail-open 必配 `logger.warn` + binding 上的 `lastRecallError`（侧边栏可见），单测断言**召回到的 id**，不能只断言「消息插进去了」。**不能靠「没报错就是好了」。**
 
 ---
+
+
+## WebUI 403 错误族（2026-11-01）
+
+三个长得不一样、根因同源的错误，都发生在 standalone WebUI 或侧边栏向插件 HTTP 端点发请求时：
+
+| 报错 | 阶段 | 含义 |
+|---|---|---|
+| `Unexpected token 'o', "forbidden" is not valid JSON` | standalone fetch 拿到 403 裸文本后 `response.json()` 崩溃 | 1.2.2 之前的 403 响应体是裸文本；已改 JSON 信封 |
+| `Invalid RPC response: 403` | 信封解析成功但无 `result`，客户端只报状态码不报原因 | 已透传服务端 `error.message`，不再只报状态码 |
+| 请求返回 JSON 信封 `dsh-memu-memory/forbidden` | 库级路由授权拒绝（当前态） | 见下方授权模型 |
+
+**库级授权模型（`authorizeLibraryRoute`）**：
+- 带 `sessionId` 的请求：持久绑定必须与目标 `libraryId` 完全一致——session A 不能操作库 B；带 sessionId 但解析不出库（空/悬空/非字符串）一律 403（坏凭据 ≠ 无凭据）。
+- 不带 sessionId（standalone 管理面）：宿主实现了 `connection.authorizeLibrary(req, { libraryId, operation })` 时严格 `=== true` 才放行（fail-closed）；**未实现时回退放行**（HTTP 边界的 requestRejection 仍是门）——fail-closed 会在真实宿主上把 standalone WebUI 全部 403（本条目的来源）。
+- 无 libraryId 的 `browseWall`（"全部记忆库"视图）走同一回退模型；实现了 capability 的宿主可拒绝多库枚举。
+- 全局复核队列：嵌入式会话可读、写需活绑定；standalone 需要 `review.manage` grant（capability 缺席时同样回退放行）。
+- 授权拒绝的 403 是 JSON 信封：`{"ok":false,"error":{"code":"dsh-memu-memory/forbidden",...}}`。
+
+## 提炼与词典排错（1.2.2）
+
+- **absorb 一直停在待复核**：三种原因——`curatorReviewMode=review-all`、覆盖率不足（sourceCoverage<0.45 或 unionCoverage<0.60）、簇外重复 ≥0.90。复核队列接受前会校验 target/sources 状态与 updatedAt；并发变化会生成 held pending clone（原提案保留、已提交向量行补偿删除，活动日志可见）。
+- **全局 link 没出现**：link 需要落地证据（note 含转录逐字引用），无证据不落边（活动日志 `link rejected`）；每端 20 条上限、跨域只允许 related、rp↔coding 禁止；有向边防环 ≤3。
+- **撤销合并失败**：撤销要求合并稿仍 active 且有 `absorbSnapshot`；条目被人工改动过（updatedAt > absorbedAt）会拒绝并给出可读错误——先人工恢复到吸收时状态，或放弃撤销。
+- **词典词条没注入**：1.2.2 起见下节「标题卡、词典自动与私有自动关联排错」；旧版本的 pending 词条会在迁移后转 active/archived，不再需要人审。
+- **词典提案被拒**：rejected fingerprint 只作为 legacy 墓碑拦截同规范词的重复提案（防每轮重放）；新版本不再由人审产生 rejected。
+
+## 标题卡、词典自动与私有自动关联排错（1.2.2）
+
+- **锚点里为什么只有标题、没有正文**：这是 1.2.2 的设计，不是截断。锚点与本回合召回只放 `[id] + 标题 + 语义标签`，正文在记忆抽屉与 `memu_private_recall` / `memu_global_recall` 工具里。模型需要原文时按标题关键词或方括号里的 id 调工具。标题为空会回退正文前 40 字；如果连回退都没有，才显示 `(untitled)`。
+- **同样预算下锚点条数变了**：core≤5 / global≤8 的固定切片已删除，条数由 pin 40% / core 30% / global 30% 的打包预算决定；标题卡比正文短，所以可见条数增加，但 `anchorTokens` 没有被调大。预算仍以 `lib/budget.js` 的模型 token 口径计算，inbound 路径仍减半。
+- **词典词条没注入**：按顺序查——是否 `archived`（不注入、不检索，可恢复）；是否 `secret`（不进锚点摘要，但用户点名时 B 通道可解释）；context/knownBy 是否匹配；是否在 30 分钟冷却内；是否被锚点摘要 top8/敏感词单列的名额挤掉。词典没有 pending 人审状态；新词条直接 active。
+- **模型说写了词典但没生效**：`memu_lexicon_propose` 命中 archived 词条会返回 notOwned（不复活）；修改敏感字段会被 typed 拒绝；sensitive trigger 只能由用户在词典页管理。检查活动日志/工具回执，不要假设 pending。
+- **旧库里的 pending 词条去哪了**：周期巡检（`runVisibilityMigrationPass` → `migrateLexiconLibraries`）把 pending 新提案转 active、敏感转 archived、pending revision 转 archived；rejected 保留为内部墓碑。迁移只写有变化的文件；损坏的词典文件不会被当空库覆盖，报 `LEXICON_CORRUPT` 并保持只读。
+- **私有自动关联没出现**：算法宁漏勿错。检查两条记忆是否同库、同 context/track、都可见且非 secret；标题是否共享稀有 name-like token（英文 ≥3 字母，或低频 CJK 名称；通用词被停用词表挡掉）；pairScore 是否 ≥0.82（重复应走 update/合并）、是否有冲突、是否已有同向 link；每轮还有 2 条/entry、5 条/轮、2 个实体/轮的上限。边上的「自动」Tag 与 `source:'auto'` 是算法写的，可在关系图移除。
+- **实体枢纽名称重复（Yuike / yuike）**：算法按 NFKC/大小写/空白/标点归一化复用实体；`memu_private_link` 的 `entity` 参数也按同一规则复用同名实体。若已存在但 kind 冲突，会拒绝并提示改用既有 kind，而不是静默建第二个。
+- **worker 没裁决不确定候选**：`memu_private_link_suggest` 只返回候选卡，不自动连；worker 未调用或证据不足就保持不连（宁漏勿错）。`lib/private.js` 的结算兜底只重跑高置信算法，不会把不确定候选偷偷连上。自动关联失败只写 warn，不影响整理成功。
+- **要不要数据库/向量重算**：自动关联只是 `links[]` 元数据，不改正文、不写向量；移除边不会触发重建。实体删除仍按既有规则（有引用时需显式 force，避免悬空）。

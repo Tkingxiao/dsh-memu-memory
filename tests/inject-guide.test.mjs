@@ -14,6 +14,7 @@ process.env.DSH_MEMU_HOME = home
 const state = await import('../lib/state.js')
 const inject = await import('../lib/inject.js')
 const prompts = await import('../lib/prompts.js')
+const budget = await import('../lib/budget.js')
 
 test.after(() => {
   try { fs.rmSync(home, { recursive: true, force: true }) } catch {}
@@ -88,6 +89,13 @@ function seedPinned(binding, id, title) {
     updatedAt: new Date().toISOString(),
   }
   state.savePrivateIndex(binding.libraryId, index)
+}
+
+function messageTextOf(message) {
+  const content = message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content.filter((block) => block?.type === 'text').map((block) => block.text || '').join('\n')
 }
 
 function pluginMessages(messages) {
@@ -361,4 +369,24 @@ test('standard and preset mounts render the same rules body', async () => {
   const textB = guideText(outB.messages)
   assert.equal(textA, textB, 'both paths use the same system-guide body')
   assert.equal(guideKey(guideMessages(outA.messages)[0]), guideKey(guideMessages(outB.messages)[0]))
+})
+
+test('the guide is included in injectionTotalTokens, not added on top of it', async () => {
+  state.updateSettings({ injectionTotalTokens: 900, turnTokens: 800, randomCueChance: 0, habitsInjection: false })
+  const sessionId = 'guide-budget'
+  const cwd = path.join(home, 'project-guide-budget')
+  const binding = state.ensureSession(sessionId, { cwd, agentPreset: 'coding' })
+  state.setSessionBinding(sessionId, { useLibrary: true, useGlobal: false })
+  seedPinned(binding, 'mem-guide-budget', '预算里的规则')
+  const index = state.loadPrivateIndex(binding.libraryId)
+  index.entries['mem-guide-budget'].content = '这是一条很长的固定记忆，用来占据锚点预算。'.repeat(12)
+  state.savePrivateIndex(binding.libraryId, index)
+  const harness = mountGuide()
+  const turn = makeTurn(sessionId, { cwd, agentPreset: 'coding' })
+  const out = await harness.run(turn.payload, turn.decision)
+  const guides = guideMessages(out.messages)
+  assert.equal(guides.length, 1, 'the guide still lands')
+  const used = pluginMessages(out.messages).reduce((sum, message) => sum + budget.estTokens(messageTextOf(message)), 0)
+  assert.ok(used <= 900, `guide + anchor must stay inside injectionTotalTokens, got ${used}`)
+  assert.ok(used < 900 + 200, 'sanity: the anchor was clipped rather than the guide silently dropped')
 })

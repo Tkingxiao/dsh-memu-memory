@@ -6,6 +6,7 @@
 // only runs when its page is selected.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 
 const registrations = []
 
@@ -211,14 +212,14 @@ test('the settings page renders every page instead of a blank panel', async () =
   await new Promise((resolve) => setTimeout(resolve, 0))
   await new Promise((resolve) => setTimeout(resolve, 0))
 
-  for (let page = 0; page < 11; page++) {
+  for (let page = 0; page < 12; page++) {
     const { tree } = await renderPage(settings.component, { ctx, t: (key) => key }, page)
     const text = treeText(tree)
     assert.match(String(tree.props?.className), /dshm-root/, `page ${page} did not render the shell`)
     // The rail is the nav: every page label has to be there. Counting the shared
     // dshm-nav-item class instead would also pick up the in-page tab strips (memory
     // backend, prompt scope, browser view), which use the same widget on purpose.
-    const NAV = ['pageOverview', 'pageConnection', 'pageSettings', 'pageFolders', 'pageLibraries', 'pageBrowser', 'pageGlobal', 'pagePrompts', 'pageStats', 'pageMemories', 'pageLogs']
+    const NAV = ['pageOverview', 'pageConnection', 'pageSettings', 'pageFolders', 'pageLibraries', 'pageBrowser', 'pageGlobal', 'pagePrompts', 'pageStats', 'pageMemories', 'pageLogs', 'pageLexicon']
     assert.ok(NAV.every((key) => text.includes(key)), `page ${page} lost a nav entry`)
     assert.equal((text.match(/dshm-nav-ind/g) || []).length, 1, `page ${page} lost or duplicated its rail indicator`)
     assert.match(text, /dshm-page/, `page ${page} lost the content pane`)
@@ -256,6 +257,21 @@ test('the sidebar tab renders with the two-layer header', async () => {
   assert.ok(!text.includes('[object Object]'), 'sidebar rendered an object as text')
   // The domain picker lists ids, translated through the label map.
   assert.match(text, /dmCoding/, 'domain picker did not render its options')
+})
+
+test('the sidebar context-scope card cannot be flex-shrunk and keeps a two-column field grid', () => {
+  const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(src, /className: 'dshm-tab-body'/, 'the sidebar body needs its non-shrinking class')
+  assert.match(src, /\.dshm-tab-body>\*\{flex-shrink:0\}/, 'sidebar sections must scroll instead of shrinking')
+  assert.match(src, /\.dshm-scope\{width:100%;margin:0 0 10px;[^}]*flex-shrink:0/, 'the scope card must span the sidebar content width and not collapse')
+  assert.match(src, /\.dshm-scope-form\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/, 'four scope fields must wrap into two readable columns')
+})
+
+test('the sidebar run log keeps five rows and links its header to the WebUI logs page', () => {
+  const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(src, /runLog\.slice\(0, 5\)/, 'the sidebar shows the five newest runs, not an unbounded list')
+  assert.match(src, /openWebUiPage\('logs'\)/, 'the run-log header must open the WebUI logs page')
+  assert.match(src, /runLogOpen/, 'the jump needs a visible label')
 })
 
 // The browser row is the only place a human can see that a memory is marked
@@ -484,7 +500,7 @@ test('every pick-one-of-these control uses the same tab strip', async () => {
   await new Promise((resolve) => setTimeout(resolve, 0))
 
   const orphans = []
-  for (let page = 0; page < 11; page++) {
+  for (let page = 0; page < 12; page++) {
     const { tree } = await renderPage(settings.component, { ctx, t: (key) => key }, page)
     walkNodes(tree, (node) => {
       if (node.type !== 'button') return

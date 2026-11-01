@@ -20,7 +20,7 @@ node scripts/acceptance-local.mjs    # 50/50；视觉证据只证明本次已审
 npm run check                        # node --check + i18n 键对齐 + package.json 可解析
 ```
 
-**结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。文档里出现的测试数字一律当作**带日期的快照**：2026-10-29 实测 392 tests / 391 pass / 0 fail / 1 skipped（真实引擎用例按设计跳过）；更早的 321 / 327 / 333 等是历史转述，原报告已缺失、不可复核，不能当作当前保证。
+**结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。文档里出现的测试数字一律当作**带日期的快照**：2026-11-01 实测 1210 tests / 1208 pass / 0 fail / 2 skipped（curator 真实引擎与备份 venv/WAL 两条为 opt-in，按设计跳过）；更早的 505 / 392 / 321 / 327 / 333 等是历史快照或转述，不能当作当前保证。
 
 ### 4.3 每类改动的连带清单
 
@@ -75,9 +75,9 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 
 ### 5.3 新增一个 RPC 方法
 
-<!-- rpc-method-count: 86 -->
+<!-- rpc-method-count: 93 -->
 
-1. `lib/rpc.js` 的 `switch` 加 case（共 86 个方法，按功能分组，别乱插）。
+1. `lib/rpc.js` 的 `switch` 加 case（共 93 个方法，按功能分组，别乱插）。
 2. 返回**形状稳定**：客户端 `call()` 直接解构，列表类给 `{items, total}` 而不是裸数组。
 3. `revisionOnly` 分支只回 `{revision, stamp}`、**不要求 sessionId**（三端轮询，设置页与独立页没会话）、**不塞业务数据**（每 2.5 秒一次）；顺带 `noteMemoryBeat()`，`memu_status` 靠它分「没写」与「没人轮询」。
 4. 写成功后 `bumpMemoryRevision()`/`notifyMemoryWrite()`（§7）；能让 `state.json` 或索引落盘的写，`state.js` 自动记写事件供 `memu_status` 展示。
@@ -186,3 +186,16 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 - [ ] `npm run check` 输出 `all checks passed`？
 - [ ] 新文案同时进了 `zh` / `en`？
 - [ ] `README.md` 能力/限制段同步了？「会坏在哪」补进了 §3 对应段？
+
+### 新增设置
+
+`curatorReviewMode`（`auto`/`review-all`，默认 auto）——全局提炼审核模式；conflict 恒人审。三处注册：DEFAULT_SETTINGS / updateSettings.enums / rpc setSettings+resetSettings。
+
+### 锁顺序不变式
+
+插件有多个文件锁（库索引、entities、词典、整理账本、向量代际闸）。当前唯一允许的嵌套方向是
+`entity(file) → index(file)`（`deleteEntity` 先拿 entities 锁，再在锁内清入边并写索引），以及
+`curator(vector) → index/lexicon(file)`（`curator.js` 的 managed 写闸先于索引/词典锁）。**不要**
+在持有索引锁时回头拿 entities 锁，也不要在词典锁内拿向量闸——AB-BA 死锁不会在单会话测试里
+稳定复现，但会在大库并发删除/改名时出现。`pruneOrphanEntities` 在 entities 锁内只读索引，不取
+索引写锁；新增路径若需要写索引，先释放 entities 锁或明确记录新的方向。

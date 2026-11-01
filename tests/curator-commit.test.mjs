@@ -194,7 +194,7 @@ test('a clean create still carries the current-generation stamp and is counted b
       title: '独立的全新事实',
       content: '用户倾向于在正式汇报里先给结论再给细节。',
       confidence: 0.9,
-      evidence: [{ session_id: 's2', quote: '先说结论' }],
+      evidence: [{ session_id: 's2', quote: '汇报时先给结论再讲细节' }],
     }],
   }
   const result = await curator.commitCuratorOutput(output, { job: { step: 'committing' } })
@@ -213,8 +213,8 @@ test('a global-index write failure after the batch commit is compensated name by
   await activateVectorGeneration()
   const output = {
     memories: [
-      { op: 'create', domain: 'general', track: 'memory', title: '第一条', content: '第一条全新事实的内容，足够长以通过校验。', confidence: 0.9, evidence: [{ session_id: 's3', quote: '一' }] },
-      { op: 'create', domain: 'general', track: 'memory', title: '第二条', content: '第二条全新事实的内容，与第一条没有关系。', confidence: 0.9, evidence: [{ session_id: 's4', quote: '二' }] },
+      { op: 'create', domain: 'general', track: 'memory', title: '第一条', content: '第一条全新事实的内容，足够长以通过校验。', confidence: 0.9, evidence: [{ session_id: 's3', quote: '第一条内容的原话记录' }] },
+      { op: 'create', domain: 'general', track: 'memory', title: '第二条', content: '第二条全新事实的内容，与第一条没有关系。', confidence: 0.9, evidence: [{ session_id: 's4', quote: '第二条内容的原话记录' }] },
     ],
   }
   indexHook.failNext = 1
@@ -257,8 +257,8 @@ test('a compensation failure is reported per name and never hides the original e
   }
   const output = {
     memories: [
-      { op: 'create', domain: 'general', track: 'memory', title: '甲', content: '甲事实的内容，与乙无关。', confidence: 0.9, evidence: [{ session_id: 's5', quote: '甲' }] },
-      { op: 'create', domain: 'general', track: 'memory', title: '乙', content: '乙事实的内容，与甲无关。', confidence: 0.9, evidence: [{ session_id: 's6', quote: '乙' }] },
+      { op: 'create', domain: 'general', track: 'memory', title: '甲', content: '甲事实的内容，与乙无关。', confidence: 0.9, evidence: [{ session_id: 's5', quote: '甲条内容的原话记录' }] },
+      { op: 'create', domain: 'general', track: 'memory', title: '乙', content: '乙事实的内容，与甲无关。', confidence: 0.9, evidence: [{ session_id: 's6', quote: '乙条内容的原话记录' }] },
     ],
   }
   indexHook.failNext = 1
@@ -274,4 +274,51 @@ test('a compensation failure is reported per name and never hides the original e
   assert.equal(event.detail.failed.length, 1, 'the name whose forget failed is recorded with its reason')
   assert.match(event.detail.failed[0].error, /engine db is locked/)
   assert.match(event.message, /残留孤儿行/)
+})
+
+// Package A (spec §4.10): the risk score is an audit trail, so it must survive
+// the two paths that rewrite an entry after the decision was made: the held
+// clone (target changed mid-run) and the activity-log summary.
+test('a held clone from a target-changed conflict keeps the decision risk score for audit', async () => {
+  seedGlobalIndex({ [TARGET]: TARGET_ENTRY })
+  await activateVectorGeneration()
+  // mergeOutput is a clean risky-rewrite candidate: merge 0.20 + single evidence
+  // 0.10 → risk 0.30 < 0.70, so auto commits it and the concurrent writer turns
+  // the committed row into a held clone.
+  backend.onCommit = async () => {
+    state.updateGlobalIndex((fresh) => {
+      fresh.entries[TARGET] = { ...fresh.entries[TARGET], content: '内容已被并发修改', updatedAt: '2026-02-02T00:00:00.000Z' }
+    })
+  }
+  await curator.commitCuratorOutput(structuredClone(mergeOutput), { job: { step: 'committing' } })
+  backend.onCommit = null
+  const index = state.loadGlobalIndex()
+  const heldId = Object.keys(index.entries).find((id) => index.entries[id]?.reviewReason === 'target changed while curator was running')
+  assert.ok(heldId, 'the target-changed merge must be held for review')
+  const held = index.entries[heldId]
+  assert.equal(held.reviewRisk, 0.3, 'merge 0.20 + single evidence 0.10 survives the clone')
+  assert.deepEqual(held.reviewRiskReasons, ['merge', 'single evidence'])
+  assert.equal(held.status, 'pending_review')
+})
+
+test('the curate activity record carries the batch review-risk summary', async () => {
+  seedGlobalIndex({})
+  await activateVectorGeneration()
+  const output = {
+    memories: [
+      { op: 'create', domain: 'general', track: 'memory', title: '低风险条目', content: '低风险条目的内容，与另一条无关。', confidence: 0.9, evidence: [{ session_id: 's7', quote: '低风险条目的原话记录' }] },
+      { op: 'create', domain: 'general', track: 'memory', title: '高风险条目', content: '高风险条目的内容，模型自己标了待复核。', confidence: 0.9, needs_review: true, evidence: [{ session_id: 's8', quote: '高风险条目的原话记录' }] },
+    ],
+  }
+  const result = await curator.commitCuratorOutput(structuredClone(output), { job: { step: 'committing' } })
+  assert.equal(result.created, 2)
+  assert.deepEqual(result.reviewRisk, { max: 0.8, flagged: 1, reasons: { 'needs_review': 1, 'single evidence': 2 } })
+  // listEvents is newest-first; this run is the only successful curation with
+  // exactly two created entries, so match on that instead of list position.
+  const event = activity.listEvents({ kind: 'curate' })
+    .find((item) => item.ok === true && item.detail?.reviewRisk && item.detail?.created === 2)
+  assert.ok(event, 'the successful curation must be recorded')
+  assert.equal(event.detail.reviewRisk.max, 0.8)
+  assert.equal(event.detail.reviewRisk.flagged, 1)
+  assert.equal(event.detail.reviewRisk.reasons.needs_review, 1)
 })

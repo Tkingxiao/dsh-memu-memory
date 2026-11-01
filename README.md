@@ -30,7 +30,7 @@ It is **local-first by default**. The default `agent` backend stores full text i
 > [!WARNING]
 > **Early-stage software.** This plugin is still early and may contain unforeseen errors, bugs or breaking changes. Back up your data, and please [report an issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) or send a pull request — feedback helps the project improve.
 
-> **Status:** 1.2.1. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
+> **Status:** 1.2.2. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
 
 ## Screenshots
 
@@ -57,7 +57,9 @@ All screenshots are the real WebUI on isolated example data, not anyone's memori
 ## What it remembers
 
 - **Three layers, one timeline.** `short_term` drafts expire after 72 hours by default; `long_term` is the body of ordinary memory; `must_remember` needs a reason and a source, decays over 365 days with a 0.35 strength floor, and can be *marginalized* but never auto-deleted to make room.
-- **Recall is a moment, not a dump.** The first turn after a session starts (or after compaction) gets an anchor block with budgets for pinned, core and global memory. After that, each user turn gets at most one recall. Deduplication and a token budget are enforced in code, not left to the prompt.
+- **Recall is a moment, not a dump.** The first turn after a session starts (or after compaction) gets an anchor block with budgets for pinned, core and global memory. After that, each user turn gets at most one recall. Deduplication and a token budget are enforced in code, not left to the prompt. Anchor and recall entries are **title cards**: title, id and semantic tags only. The body stays in the drawer and behind `memu_private_recall` / `memu_global_recall`, so the same budget exposes far more memories without pasting text the model never asked for.
+- **A private lexicon writes itself.** The consolidation worker extracts stable, evidenced slang, memes and project terms with one term per entry. Ordinary entries become active immediately (no human review queue), while sensitive triggers and sensitive edits stay user-only. The lexicon page is a card flow with active/archived tabs, edit, archive/restore and two-step permanent delete.
+- **Private links are algorithm-first.** After consolidation, a zero-token pass connects memories that share a rare name or alias in the same context/track and creates/reuses an entity hub (for example `yuike`). Uncertain pairs are handed to the consolidation worker for an evidence-based decision. Links are metadata (`source: 'auto'`), shown with an “Auto” badge in the graph and removable; they never rewrite a body, write a vector or delete anything.
 - **A date is either an anniversary or one day.** `MM-DD` recurs every year (a birthday); `YYYY-MM-DD` fires the day before and the day itself, then is spent. A memory that says "tomorrow" is stored as the dated form, so an appointment does not come back every year.
 - **Memory fades unevenly.** Recency, access count, peak and end effects, primacy, habituation and flashbulb accuracy feed one strength score. Mood is described by four components (joy / anger / sorrow / fear, summing to 1) plus arousal (intensity) and dominance (sense of control); a compound mood such as jealousy is a named mix of the four, not a new axis. Mood only reorders recall: it never enters the injected text and never rewrites a memory body. Gating is the OR of three independent conditions — the dominant share is >= 0.35, |arousal - 0.35| >= 0.1, or |dominance| >= 0.25; when none holds, both multipliers are exactly 1. Older entries carry no emotion and keep the old valence path; the four axes are never inferred back from valence. A vivid memory can be more confident than it is accurate, and the UI says so.
 - **Provenance is a fact, not a style.** Every entry carries `source` (`user_said` / `inferred` / `imagined` / `told`), `confidence`, `accuracy`, and disclosure rules. A vague recollection cannot impersonate a quote.
@@ -123,7 +125,7 @@ Settings save as you change them (250 ms debounce), with about 2.5 s cross-windo
 
 ### Injection token budgets
 
-`anchorTokens` and `turnTokens` bound anchor and recall content independently (default 800 each). `injectionTotalTokens` caps the whole plugin message (default 2000); it does not replace the recall budget.
+`anchorTokens` and `turnTokens` bound anchor and recall content independently (default 800 each). `injectionTotalTokens` caps the whole plugin message (default 2000); it does not replace the recall budget. Title cards spend far fewer tokens per entry than full text, so the same budget exposes more memories; the budget itself was deliberately not increased in 1.2.2.
 
 ### Domain Prompts
 
@@ -236,7 +238,10 @@ Folder policy is a **ceiling, not an initial value**: turning a folder switch of
 | `memu_private_update` | Edit, without bypassing pin admission, review or visibility rules |
 | `memu_private_archive` | Archive; never delete |
 | `memu_private_unpin` | Marginalize a permanent memory with a first-person reason, quota and cooldown |
-| `memu_private_link` | Link memories/entities with evidence, or update a relationship snapshot; cannot delete edges |
+| `memu_private_link` | Link memories/entities with evidence, or update a relationship snapshot; also adjudicates `memu_private_link_suggest` candidates; cannot delete edges |
+| `memu_private_link_suggest` | Run the local high-confidence linking/entity-hub pass for ids written this consolidation and return only uncertain candidate pairs |
+| `memu_lexicon_search` | Search active private-lexicon terms; archived and tombstoned terms stay hidden |
+| `memu_lexicon_propose` | Add or update a lexicon term; ordinary entries become active immediately, sensitive triggers remain user-only |
 | `memu_global_recall` / `memu_global_list` | Read the global layer by domain |
 | `memu_status` | Storage health, sync heartbeat, recall state and image-turn status |
 
@@ -347,9 +352,11 @@ The preview serves the real WebUI against isolated example data at `http://127.0
 
 With the preview running, use `npm run test:graph-browser -- http://127.0.0.1:7789/dsh-memu-memory/ui#/settings/memories` in another terminal to check 200 nodes, desktop/narrow layouts, dragging, refresh stability, themes and load retries. Run `npx playwright install chromium` once, or set `GRAPH_BROWSER_CHANNEL=msedge` on Windows to use installed Edge. Stress data is intercepted only in the test browser and never written to memory. No CDN is needed at runtime; bundled D3 licenses are in `lib/webui/graph-LICENSE.txt`.
 
-The suite includes one real-engine integration case that is skipped unless `DSH_MEMU_TEST_ENGINE_PYTHON` is set; the 50 automated acceptance checks pass. The optional engine was installed and smoke-tested in an isolated directory with the pinned wheel; embedding tests use a local deterministic server, which proves the protocol, not semantic quality.
+The suite includes two optional real-engine integration cases: curator writing requires `DSH_MEMU_TEST_ENGINE_PYTHON`, and the backup venv/WAL case requires `DSH_MEMU_BACKUP_REAL_ENGINE=1`; both are skipped by default. The 50 automated acceptance checks pass. The optional engine was installed and smoke-tested in an isolated directory with the pinned wheel; embedding tests use a local deterministic server, which proves the protocol, not semantic quality.
 
 ## Changelog
+
+**1.2.2 (2026-11-01)**: title-card anchor/recall (id + title + semantic tags, body behind recall), automatic lexicon lifecycle and card management, private auto-links/entity hubs, help page v2, and WebUI layout/selector polish; together with the previously unreleased curator three-stage pipeline, global links, absorb/undo, review modes and lexicon store baseline. Prompt contracts are unified (remote curation stays tool-free, title 8–40 characters), the PTC worker mounts 5 write + 3 read tools, and no new dependencies or build steps were added.
 
 **1.2.1 (2026-10-31)**: fact-level dedup (write-side gate + recall-side cluster folding); consolidation now works in PTC (run_code) sessions; sidebar consolidation-failure alerts (cross-session, clearable, jump-to-library); the "currently in vector store" count follows real additions and deletions; private/global groups and multi-select bulk ops on the memory wall; one-click view from the global page; graph delete cascades with orphan-entity cleanup; remote consolidation counts only what actually landed.
 

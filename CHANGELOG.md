@@ -1,5 +1,81 @@
 # 更新日志 / Changelog
 
+## [1.2.2] - 2026-11-01
+
+> 本版本把此前未单独发布的内部变更合并为正式版 1.2.2；下方「同版基线」保留原详细记录。
+
+### 注入标题卡与标题提示词
+
+- **锚点/召回改为标题卡**：`formatPrivateTitle` / `formatGlobalTitle` 只输出 `[id]`、标题、来源、owner、layer、日期/年龄、marginalized/open_loop、accuracy/uncertainty/disclosure 与附件计数；正文和附件 caption 不再进入 prompt。完整标签保留，`imagined` 不会被当成事实，`never_say` 不会丢失。
+- **标题就是目录**：rule 移到锚点头部、所有记忆之前，并追加「标题即目录：要原文用 `memu_private_recall` 按标题关键词查，或直接引用方括号里的 id」。工具与抽屉仍返回全文。
+- **预算不变，容量自然扩增**：anchorTokens/turnTokens/injectionTotalTokens 默认值不动，inbound 的 `floor(turnBudget/2)` 保留；移除 core≤5 / global≤8 的预先切片，由 packToBudget 决定条数。标题缺失回退正文前 40 字。
+- **提示词**：`memu_private_remember` / `memu_private_update` 的 title、global curator 与四份私有整理稿统一要求 8–40 字、具体人名/物名/事件/结论关键词、禁止空标题；吸收/合并稿标题覆盖全部来源关键词。远程整理 JSON 契约的 title 上限同步为 8–40；四份领域正文不再包含 `memu_*` 工具工作流（远程整理没有工具），词典/关联的工具调用流程只留在本地 worker 任务书，领域稿仅保留“可抽什么词”的差异；修正“锚点/召唤”错字并在 `<memory-context>` 开头补“条目是标题卡，正文用 recall 取”。
+
+### 词典自动入库与卡片管理
+
+- **公开生命周期改为 active / archived**：模型提案与 curator 抽取普通词条直接 active，不再进人工审核；sensitive trigger 的新建/修改仍被硬拒，只有用户能管理敏感词；模型修改敏感字段不再生成 pending revision，而是 typed 拒绝。
+- **legacy 迁移**：启动/周期巡检把 legacy pending 新提案转 active（敏感转 archived）、pending revision 转 archived；rejected 只保留内部墓碑与 fingerprint，UI/注入/计数均隐藏。迁移只写有变化的文件。
+- **RPC**：删除 `lexiconReview`，新增 `lexiconArchive` / `lexiconRestore`；`lexiconList` 默认 active、支持 archived 页签与稳定 `statusCounts`，`lexiconSearch` 支持 `includeArchived`；方法计数 92 → 93。
+- **词典页改为卡片流**：`使用中/已归档` 两页签、kind 筛选、搜索、新建、多选；卡片含 term 大字标题、kind/sensitive Tag、120 字释义、usage/aliases、hitCount 与 strength Bar、来源记忆跳转，以及编辑/归档或恢复/两段删除。批量归档/恢复/删除，部分成功分开显示。
+- **词典注入仍保留 term + 短义**：`lexiconTurnLine` 短义从 120 字收紧到 80 字；锚点摘要仍只收 active top8，敏感词单列。模型提案工具描述与回执去掉 pending/人审，worker 增加 `memu_lexicon_search` / `memu_lexicon_propose`。
+
+### 私有自动关联与实体枢纽
+
+- **算法先筛，0 token**：整理结算后，对 created/updated 条目做同库、同 context/track、可见非 secret 的候选；共享稀有 name-like token、pairScore < 0.82 且无冲突时直接建立 memory↔memory `relation`，写 `source:'auto'`。
+- **实体枢纽**：≥2 条记忆共享稀有 name-like token 时复用/创建实体；人物信号明确建 `person`，拉丁名无人物信号保守建 `thing`；归一化名称比较避免 `Yuike`/`yuike` 双实体。类型拿不准或已有实体 kind 冲突时转不确定候选。
+- **不确定候选交本次 worker**：新增工具 `memu_private_link_suggest({ids})`，本地先落高置信链接/枢纽，只返回 ≤8 对候选卡；worker 用 `memu_private_link` 带证据裁决，不另起整理、不重读转录；每轮最多确认 5 条。`lib/private.js` 结算后兜底调用同一算法，失败只 warn，不影响整理成功。
+- **图元数据**：`linkEntries` 持久化 `source:'auto'`，`getGraph` 边带 source；关系图显示「自动」Tag 与移除按钮。自动关联不改正文、不写向量、不删除。worker 写工具由 2 件扩到 5 件（remember/update/link/link_suggest/lexicon_propose），读工具 3 件；探测仍要求 remember/update 才算有写能力。
+
+### 帮助页 v2
+
+- 快速开始 5 步补「在哪里 / 成功的样子」；新增私有与全局判断链、标题卡与召回、归档/删除/撤回、向量库、私有自动关联/实体枢纽、侧边栏地图、九行标注速查表。
+- FAQ 从 6 条扩到 10 条：标题卡正文、词典自动生效/归档、自动关联撤销、备份 vs 导出 ZIP、删除对话不再整理、向量未激活回退等；中英同步。
+
+### WebUI 布局与选择器优化
+
+- 记忆页：记忆库选择并入「范围」行，搜索独占一行，多选/批量操作独占一行；多选按钮点击后原地变为「退出多选」，批量按钮排列在右侧。
+- 库选择器显示「库名 · 文件夹名」，同名库才追加短 id，完整路径放入悬停提示；所有 select 统一箭头、高度、圆角与焦点样式，修复 standalone 主题覆盖导致箭头消失。
+- 侧栏作用域卡改为全宽、两列等宽、不可被 flex 压缩；整理记录默认显示最新 5 条，点击标题打开 WebUI 日志页。
+
+### 验证与迁移
+
+- 全量 `npm test`：1210 tests / 1208 pass / 2 skipped；`scripts/acceptance-local.mjs` 50/50；`npm run check` 静态/i18n/RPC 计数与 test-tracking 全部通过。
+- 新增 `tests/private-links.test.mjs`；inject/lexicon/worker/RPC/UI/help 套件同步改写；B-4/H-5 验收改为标题卡口径。
+- 依赖、构建步骤与网络要求均未增加。
+
+### 同版基线：curator 三段式、全局关联与词典库
+
+#### curator 三段式流水线（主动关联 · 综合整理 · 集合记忆）
+
+- **候选检索**：倒排阻塞 + BM25 + 字符 Dice + token/entity Jaccard + 加权 RRF（k=60，权重 0.5/0.3/0.2）；N>300 走倒排、>2000 截断最近并标记；候选 ≤20/提案，簇 ≤12。
+- **候选簇**：全对贪心团（禁传递闭包）、medoid 代表、簇 <3 条不建议 absorb、medoid 平均 <0.55 丢簇；候选簇随 prompt 给模型（索引 4000 + 候选 2000 token 预算，超预算丢低分）。
+- **全局关联 link**：curator 可输出 `related/refines/supports` 三种边（对称双写同 opId、有向 DFS 防环 ≤3、每端 ≤20、跨域只 related 且 rp↔coding 禁止）；note 必须含会话转录逐字引用（证据落地校验，伪造/未落地不落边）；幂等 opId；移除只删边不删记忆。
+- **absorb 集合记忆**：多条碎片合成一条集合记忆——target superseded、sources archived（**不删除**，可还原）、absorbSnapshot 支持一键撤销；合并稿句级去重 + 抽取/摘要双模 + 覆盖率三段（不足 skip/pending）；opId 幂等；簇外重复 ≥0.90 转 pending。
+- **审核模式**：`curatorReviewMode` 设置（默认 auto=提炼自动通过，review-all=全部进人审）；硬门恒人审（conflict/无证据）；rewrite 操作风险 ≥0.70 在 auto 下也暂扣；风险分与原因写到全部条目供审计。
+- **证据落地**：quote 必须是所策划会话转录的规范化子串（省略号分段校验、先脱敏）；无证据/未落地恒 pending 或不落库；修复"非法 merge target 继续创建"与"未知 op 默认 create"两个输入 bug。
+- **全局页/复核队列 UI**：关联 Tag + 跳转 + 移除；「集合记忆 · N 条来源」Tag + 一键撤销合并；复核队列显示风险分与原因、pendingAbsorb 来源清单。
+
+#### 词典库（Lexicon）
+
+- 独立存储（`data/lexicon/<libraryId>.json`，CAS + 原子写 + withFileLock，容量 5000）与第 12 页卡片流管理界面（active/archived 两页签、搜索、编辑、归档/恢复、两段删除、来源记忆跳转）。
+- 注入：首轮锚点词典摘要（top 8 + 敏感触发词单列警示）+ 用户消息词面命中 B 通道（30 分钟冷却、单回合 2 条）；fail-open 不阻断记忆召回。
+- 生命周期：模型/curator 普通词条直接 active；sensitive trigger 仅用户可管；归档可恢复，rejected 只作内部墓碑；legacy pending 自动迁移。
+- 备份/导出/导入含词典；RPC 方法 93 个（archive/restore），模型工具 13 个（含 lexicon search/propose 与 link_suggest）；Wilson 频率先验参与排序（0.85–1.00 因子不压过匹配层级）。
+
+#### 修复
+
+- 事实级去重：写入近似门（≥0.90 拒绝 / 0.55–0.90 打标 / allow_duplicate 逃生口）+ 召回按簇折叠 + duplicateOf 降权；update 与评审接受走同一道门；长度剪枝带补探针防绕过。
+- 库级 HTTP 路由授权：31 个库寻址端点按 session 绑定精确比较或宿主 capability 回调（fail-closed），ZIP 导入先授权后读 body；修复悬空 sessionId 可写全局审核队列的真实洞。
+- 「当前已入向量库」计数跟随真实增减；四条漏戳写入路径补齐。
+- PTC（run_code）会话整理可用；挂载子集结构化上报；远程整理写入计数只数真实落库。
+- 修复"非法 merge target 继续创建"、"未知 op 默认 create"、register disposer 泄漏三个输入 bug。
+
+#### 界面与可观测性
+
+- 帮助页（第 13 页）：快速上手 5 步、分区详解、FAQ 10 条、反馈三入口；无库时记忆总览页显示首次安装卡。
+- 实体删除文字化 + 孤立实体折叠区（启动扫描自动回收老版本孤立节点）。
+- 成功提示全通道补齐（保存/归档/恢复/删除/批量/导出）。
+
 ## [1.2.1] - 2026-10-31
 
 ### 事实级去重

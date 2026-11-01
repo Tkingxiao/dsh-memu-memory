@@ -61,7 +61,7 @@ node scripts/acceptance-local.mjs    # 50/50
 npm run check                        # node --check + i18n + package.json + 文档预算
 ```
 
-**结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。测试数字只作**带日期快照**引用（2026-10-29 W7/W8 集成后实测 505 tests / 504 pass / 1 skipped；同日更早的 W7 为 493/492/1、W3–W9 为 463/462/1、W1/W2 为 409/408/1 与 392/391/1，321/327/333 原报告缺失、不可复核），不当成当前保证。提交前逐条对 `docs/contributing.md` §10。
+**结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。测试数字只作**带日期快照**引用（2026-11-01 实测 1210 tests / 1208 pass / 0 fail / 2 skipped；两条真实引擎用例按设计跳过，历史 505/493/463/409/392 等不再代表当前），不当成当前保证。提交前逐条对 `docs/contributing.md` §10。
 
 ---
 

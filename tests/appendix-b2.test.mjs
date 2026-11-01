@@ -70,7 +70,7 @@ test('tip-of-tongue is about reachability, not importance', () => {
   assert.equal(memory.isTipOfTongue({ layer: 'long_term', confidence: 0.9, strength: 1, createdAt: daysAgo(1) }), false)
 })
 
-test('injection gives the gist, not the wording, when a memory is half-remembered', async () => {
+test('recall shows the title of a half-remembered memory, never its wording', async () => {
   const { sessionId, binding, exec } = setup('tongue')
   const content = '周四晚上在厨房，他一边擦杯子一边说那句关于不要再改需求的话，说完就把杯子放回架子上，转身去阳台抽了一支烟，很久都没有再开口，客厅的电视一直在放同一档节目。'
   const saved = await memory.privateRemember({ exec, content, title: '厨房里那句话', confidence: 0.3 })
@@ -79,7 +79,7 @@ test('injection gives the gist, not the wording, when a memory is half-remembere
   state.savePrivateIndex(binding.libraryId, index)
 
   const out = await inject.buildRecall(binding, '厨房 那句话', 1, { ...state.getSettings(), privateTopK: 3, relevanceThreshold: 0 }, exec, sessionId)
-  assert.ok(out.text.includes('只记得大概'), 'the model is told it only remembers the gist')
+  assert.ok(out.text.includes('厨房里那句话'), 'the title is the directory entry')
   assert.ok(!out.text.includes('客厅的电视一直在放同一档节目'), 'the exact wording must not be handed over as if quoted')
   assert.ok(out.text.includes(saved.id), 'the id and the tool are how the original is still reachable')
 })

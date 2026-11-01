@@ -15,7 +15,7 @@ test.after(() => {
   try { fs.rmSync(home, { recursive: true, force: true }) } catch {}
 })
 
-test('anchor includes pinned private memory', () => {
+test('anchor shows a pinned memory as a title card, without its body', () => {
   const cwd = path.join(home, 'project-anchor')
   const binding = state.ensureSession('inject-anchor', { cwd, agentPreset: 'rp' })
   const index = state.loadPrivateIndex(binding.libraryId)
@@ -32,9 +32,129 @@ test('anchor includes pinned private memory', () => {
   }
   state.savePrivateIndex(binding.libraryId, index)
   const anchor = inject.buildAnchor(binding, { ...state.getSettings(), anchorTokens: 700 })
+  assert.ok(anchor.text.includes('[mem-test]'), 'the id is the handle the model quotes back')
   assert.ok(anchor.text.includes('凉茶'))
-  assert.ok(anchor.text.includes('今天他走的时候没看我'))
+  assert.equal(anchor.text.includes('今天他走的时候没看我'), false, 'the anchor is a directory; the body stays out')
   assert.ok(anchor.ids.includes('mem-test'))
+})
+
+test('the rule is a preface: before the private header, and it names the recall path', () => {
+  const cwd = path.join(home, 'project-rule')
+  const binding = state.ensureSession('inject-rule', { cwd, agentPreset: 'rp' })
+  const index = state.loadPrivateIndex(binding.libraryId)
+  index.entries['mem-rule'] = {
+    track: 'memory',
+    layer: 'must_remember',
+    title: '规则之下的记忆',
+    content: '这段正文不该出现在锚点里。',
+    status: 'active',
+    pinSource: 'user_explicit',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }
+  state.savePrivateIndex(binding.libraryId, index)
+  const anchor = inject.buildAnchor(binding, { ...state.getSettings(), anchorTokens: 700 })
+  const headerAt = anchor.text.indexOf('===== memory anchor =====')
+  const ruleAt = anchor.text.indexOf('[rule]')
+  const privateAt = anchor.text.indexOf('[private ·')
+  assert.ok(headerAt >= 0, 'the anchor starts with its header')
+  assert.ok(anchor.text.startsWith('===== memory anchor =====\n\n[rule]'), 'the header and rule are separated by a blank line')
+  assert.ok(ruleAt > headerAt && privateAt > ruleAt, 'the rule is read before the memories it governs')
+  assert.match(anchor.text, /\[rule\][^\n]*\n\n\[private ·/, 'the rule and the private section are separated by a blank line')
+  assert.ok(anchor.text.indexOf('[mem-rule]') > privateAt)
+  assert.ok(anchor.text.includes('标题即目录'), 'the rule says the anchor is a table of contents')
+  assert.ok(anchor.text.includes('memu_private_recall 按标题关键词查'), 'and how to get the original text back')
+})
+
+test('an empty title falls back to the first 40 characters of the content', () => {
+  const cwd = path.join(home, 'project-fallback')
+  const binding = state.ensureSession('inject-fallback', { cwd, agentPreset: 'rp' })
+  const content = '他答应过要在雨停之前回来，可是到了第二天早上门口还是空的，只有那把伞靠在墙边。'
+  const now = new Date().toISOString()
+  const index = state.loadPrivateIndex(binding.libraryId)
+  index.entries['mem-fallback'] = {
+    track: 'memory',
+    layer: 'long_term',
+    content,
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+  }
+  state.savePrivateIndex(binding.libraryId, index)
+  const anchor = inject.buildAnchor(binding, { ...state.getSettings(), anchorTokens: 700 })
+  assert.ok(anchor.text.includes('[mem-fallback]'), 'the core segment is a title card too')
+  assert.ok(anchor.text.includes(content.slice(0, 40)), 'a card with no title is still searchable by its opening words')
+  assert.equal(anchor.text.includes('(untitled)'), false, 'content exists, so the row is never anonymous')
+})
+
+test('title-card lines keep source, disclosure, accuracy and the attachment count', () => {
+  const cwd = path.join(home, 'project-labels')
+  const binding = state.ensureSession('inject-labels', { cwd, agentPreset: 'rp' })
+  const now = new Date().toISOString()
+  const index = state.loadPrivateIndex(binding.libraryId)
+  index.entries['mem-labels'] = {
+    track: 'memory',
+    layer: 'must_remember',
+    title: '他编的那个故事',
+    content: '他说那是真的，但那只是他想出来的。',
+    source: 'imagined',
+    disclosure: 'never_say',
+    accuracy: 0.3,
+    confidence: 0.9,
+    attachments: [
+      { sha256: 'a'.repeat(64) },
+      { sha256: 'b'.repeat(64), caption: 'CAPTION-MUST-NOT-EXPAND' },
+    ],
+    status: 'active',
+    pinSource: 'self',
+    createdAt: now,
+    updatedAt: now,
+  }
+  state.savePrivateIndex(binding.libraryId, index)
+  const anchor = inject.buildAnchor(binding, { ...state.getSettings(), anchorTokens: 700 })
+  const line = anchor.text.split('\n').find((row) => row.includes('[mem-labels]'))
+  assert.ok(line, 'the title card exists')
+  assert.ok(line.includes('source=imagined'), 'an imagined memory must not read as a fact')
+  assert.ok(line.includes('记得，但别直接说出口'), 'never_say survives on a title card')
+  assert.ok(line.includes('细节未必准'), 'accuracy still rides on the line')
+  assert.ok(line.includes('附件2'), 'attachments are counted')
+  assert.equal(anchor.text.includes('CAPTION-MUST-NOT-EXPAND'), false, 'captions are expanded only by the full renderer')
+})
+
+test('with the same anchorTokens, title cards expose at least as many ids as full text', () => {
+  const cwd = path.join(home, 'project-compare')
+  const binding = state.ensureSession('inject-compare', { cwd, agentPreset: 'rp' })
+  const now = new Date().toISOString()
+  const index = state.loadPrivateIndex(binding.libraryId)
+  const items = []
+  const body = '这是一段用来占满预算的中文记忆正文，重复几遍让长度足够触发截断。'.repeat(3)
+  for (let i = 0; i < 16; i++) {
+    const id = `mem-cmp-${i}`
+    index.entries[id] = {
+      track: 'memory',
+      layer: 'must_remember',
+      title: `对比记忆 ${i}`,
+      content: `${body} BODY-${i}`,
+      status: 'active',
+      pinSource: 'self',
+      strength: 1 - i / 20,
+      createdAt: now,
+      updatedAt: new Date(Date.now() - i * 60000).toISOString(),
+    }
+    items.push([id, index.entries[id]])
+  }
+  state.savePrivateIndex(binding.libraryId, index)
+  const anchorTokens = 600
+  const anchor = inject.buildAnchor(binding, { ...state.getSettings(), anchorTokens })
+  // The old shape was the same head plus the body the card now omits. Pack it into the
+  // *whole* anchor budget (no section headers charged), which is more room than the
+  // full-text anchor ever actually got — so this comparison is deliberately unfair to
+  // the title cards.
+  const legacy = budget.packToBudget(items, anchorTokens, (entry, id) =>
+    `- [${id}] source=${entry.source || 'inferred'} · ${entry.title} · ${entry.layer || 'long_term'}`
+    + (entry.content ? `\n  ${entry.content}` : ''))
+  assert.ok(anchor.ids.length >= legacy.ids.length,
+    `title cards exposed ${anchor.ids.length} ids, full text ${legacy.ids.length}`)
 })
 
 test('pre-step inserts a plugin message before the user message', async () => {
@@ -84,13 +204,44 @@ test('pre-step inserts a plugin message before the user message', async () => {
   assert.equal(out.messages[1].source.kind, 'user')
 
   const injected = out.messages[0].content[0].text
-  assert.ok(injected.includes('mem-recall'), 'per-turn recall must surface the matching entry')
-  assert.ok(injected.includes('tools/deploy.ps1'))
+  assert.ok(injected.includes('[mem-recall]'), 'per-turn recall must surface the matching entry by id')
+  assert.ok(injected.includes('Deploy convention'), 'the title is what reaches the prompt')
+  assert.equal(injected.includes('The deploy script lives in tools/deploy.ps1'), false,
+    'the turn block is a title card; the body stays behind memu_private_recall')
   assert.ok(state.getSessionBinding('inject-step').injectedIds.includes('mem-recall'))
   assert.equal(state.getSessionBinding('inject-step').lastRecallError, undefined)
 
   const skipped = await inject.injectForStep({ agent, decision, turn: 1, step: 2, signal: { aborted: false } })
   assert.equal(skipped, decision)
+})
+
+test('buildRecall injects the title card, not the body', async () => {
+  const cwd = path.join(home, 'project-recall-title')
+  const binding = state.ensureSession('inject-recall-title', { cwd, agentPreset: 'coding' })
+  const now = new Date().toISOString()
+  const index = state.loadPrivateIndex(binding.libraryId)
+  index.entries['mem-recall-title'] = {
+    track: 'memory',
+    layer: 'long_term',
+    title: '部署脚本的位置',
+    content: 'RECALL-BODY-ONLY 部署脚本放在 tools/deploy.ps1，需要 staging token。',
+    status: 'active',
+    confidence: 0.9,
+    createdAt: now,
+    updatedAt: now,
+  }
+  state.savePrivateIndex(binding.libraryId, index)
+  const exec = { agent: { session: { header: { id: 'inject-recall-title', cwd, agentPreset: 'coding' } } } }
+  const recall = await inject.buildRecall(binding, '部署脚本的位置', 1,
+    { ...state.getSettings(), relevanceThreshold: 0 }, exec, 'inject-recall-title')
+  assert.deepEqual(recall.errors, [])
+  assert.ok(recall.ids.includes('mem-recall-title'))
+  assert.ok(recall.text.includes('部署脚本的位置'), 'the title is the card')
+  assert.ok(recall.text.includes('[mem-recall-title]'), 'the id stays quotable')
+  assert.match(recall.text, /条目是标题卡/, 'the block tells the model how to use a title card')
+  assert.ok(recall.text.includes('memu_private_recall'), 'and which tool returns the body')
+  assert.equal(recall.text.includes('RECALL-BODY-ONLY'), false,
+    'memu_private_recall still returns full text; the turn block does not')
 })
 
 test('a failing recall is recorded instead of disappearing', async () => {
@@ -215,7 +366,8 @@ test('per-turn mode reads the global layer every turn instead of on the cadence'
 
   const perTurn2 = await inject.buildRecall(binding, query, 2, { ...base, autoInject: 'per-turn' }, exec)
   assert.ok(perTurn2.ids.includes('mem-global-deploy'), 'per-turn recalls the global layer on a plain turn')
-  assert.ok(perTurn2.text.includes('staging deploy token is rotated'))
+  assert.ok(perTurn2.text.includes('Staging token rotation'), 'the global title card arrives')
+  assert.equal(perTurn2.text.includes('rotated every Monday'), false, 'but not its body')
 
   const perTurn5 = await inject.buildRecall(binding, query, 5, { ...base, autoInject: 'per-turn' }, exec)
   assert.ok(perTurn5.ids.includes('mem-global-deploy'), 'and again on the next turn, not only every Nth turn')

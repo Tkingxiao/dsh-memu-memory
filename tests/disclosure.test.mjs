@@ -90,7 +90,8 @@ test('a secret stays out of the anchor but is still reachable through recall', a
   assert.equal(anchor.text.includes('PINNED-SECRET-BODY'), false, 'pinning does not override secrecy')
   assert.equal(anchor.text.includes(secretId), false)
   assert.equal(anchor.text.includes(pinnedSecretId), false)
-  assert.ok(anchor.text.includes('SHARED-BODY'), 'ordinary memories still show up')
+  assert.ok(anchor.text.includes('deploy window'), 'ordinary memories still show up as title cards')
+  assert.equal(anchor.text.includes('SHARED-BODY'), false, 'the anchor never carries the body')
 
   const recalled = await memory.privateRecall({ exec, query: 'leave company diagnosis deploy window', topK: 5, relevanceThreshold: 0 })
   assert.ok(recalled.files.some((file) => file.name === secretId), 'a secret is a recall target, not a hidden row')

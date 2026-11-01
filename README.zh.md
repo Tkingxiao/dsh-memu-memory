@@ -30,7 +30,7 @@
 > [!WARNING]
 > **早期版本提示。** 本插件仍处于早期阶段，可能存在无法预见的错误、bug 或不兼容变更。请先备份数据；欢迎[提交 Issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) 或 PR 帮助改进。
 
-> **状态：** 1.2.1。首个公开发布版本为 1.0.0。细节文档已迁到 [`docs/`](docs/)，[`AGENTS.md`](AGENTS.md) 只做索引。升级前请备份 `~/.dsh/dsh-memu-memory`；如果要存无法重建的数据，请先读[兼容性与边界](#兼容性与边界)。
+> **状态：** 1.2.2。首个公开发布版本为 1.0.0。细节文档已迁到 [`docs/`](docs/)，[`AGENTS.md`](AGENTS.md) 只做索引。升级前请备份 `~/.dsh/dsh-memu-memory`；如果要存无法重建的数据，请先读[兼容性与边界](#兼容性与边界)。
 
 ## 界面
 
@@ -338,9 +338,11 @@ node --import ./tests/loader-register.mjs scripts/preview.mjs --port 7789
 
 预览运行后，可在另一终端执行 `npm run test:graph-browser -- http://127.0.0.1:7789/dsh-memu-memory/ui#/settings/memories`，验证 200 节点、桌面/窄屏、拖拽、刷新稳定性、主题与加载重试。首次使用需执行 `npx playwright install chromium`；Windows 也可设置 `GRAPH_BROWSER_CHANNEL=msedge` 使用已安装的 Edge。压力数据仅在测试浏览器内拦截，不写入记忆库。图谱运行时不依赖 CDN，D3 许可随资源保存在 `lib/webui/graph-LICENSE.txt`。
 
-测试包含一条真实引擎集成用例，未设置 `DSH_MEMU_TEST_ENGINE_PYTHON` 时按设计跳过；50 条自动验收全部通过。可选引擎已在隔离目录安装并跑通锁定 wheel 的 smoke；embedding 测试使用本机确定性服务，只证明协议可用，不证明语义质量。
+测试包含两条可选真实引擎集成用例：curator 写入需设置 `DSH_MEMU_TEST_ENGINE_PYTHON`，备份 venv/WAL 需设置 `DSH_MEMU_BACKUP_REAL_ENGINE=1`，默认按设计跳过；50 条自动验收全部通过。可选引擎已在隔离目录安装并跑通锁定 wheel 的 smoke；embedding 测试使用本机确定性服务，只证明协议可用，不证明语义质量。
 
 ## 更新日志
+
+**1.2.2（2026-11-01）**：锚点/召回改为标题卡（正文留在 recall 工具与抽屉）；词典自动入库与卡片管理；私有自动关联/实体枢纽；帮助页 v2；WebUI 布局与选择器优化；并合并此前未单独发布的 curator 三段式、全局关联、absorb 撤销、审核模式与词典库基线。远程整理提示词保持无工具、标题统一 8–40 字；PTC worker 挂载 5 写 + 3 读工具；无新增依赖或构建步骤。
 
 **1.2.1（2026-10-31）**：事实级去重（写入近似门 + 召回按簇折叠）；PTC（run_code）会话整理可用；侧边栏整理失败提醒（跨会话、可清除、可跳转）；「当前已入向量库」计数跟随真实增减；记忆墙私有/全局分组与多选批量操作；全局记忆一键查看；关系图删除级联与孤儿回收；整理写入计数说真话。
 

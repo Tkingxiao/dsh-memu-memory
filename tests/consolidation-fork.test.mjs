@@ -370,7 +370,8 @@ test('a large transcript that was never consolidated does fork, because the back
 // probe 曾据此判 unavailable（worker-tools-ptc-only），PTC 会话永远不被整理。宿主的
 // PTC executor 明确 "only run_code is directly callable"，其余工具走 run_code 程序里的
 // SDK 绑定（tools.schemas(agent, toolSet) 枚举可见面）—— header 名单在 PTC 会话里
-// 不承载"能不能写记忆"。修复后：PTC 不构成否证 + fork 时把读写四件挂进 worker 自己的
+// 不承载"能不能写记忆"。修复后：PTC 不构成否证 + fork 时把 worker 的读写面
+// （WORKER_WRITE_TOOLS + WORKER_READ_TOOLS）挂进 worker 自己的
 // scope（注册表按 scope 链取可见面，不扩散到其它会话）。
 
 test('a PTC session (run_code only header) is consolidated and the worker gets write tools on its own scope', async () => {
@@ -397,15 +398,16 @@ test('a PTC session (run_code only header) is consolidated and the worker gets w
   assert.equal(result.ok, true, 'a run_code header must not block consolidation: ' + String(result.error || ''))
   assert.equal(result.settled, true)
   assert.equal(ctx.rec.created.length, 1, 'the fork is created for the PTC conversation')
-  // 只挂读写四件；archive/delete/unpin 这些破坏性工具不得进 worker 的工具面。
-  assert.deepEqual([...registered].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  // 只挂 worker 的读写面（记忆读写 + 关联裁决/候选 + 词典检索/写入）；
+  // archive/delete/unpin 这些破坏性工具不得进 worker 的工具面。
+  assert.deepEqual([...registered].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
   // 整理结束（finally）必须卸载挂载，不能给这条一次性 worker 留常驻注册。
-  assert.deepEqual([...disposals].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.deepEqual([...disposals].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
   // 全量挂载的活动元数据：attached=实际子集（此处=完整 wanted）、requested=完整 wanted、
   // partial=false。三件一起钉住"成功路径不再含糊"。
   const started = startedEntryFor(ctx, 'fork-ptc')
-  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
   assert.equal(started.detail.workerToolsPartial, false, 'a full mount is not partial')
   const followup = ctx.rec.forkFollowups[0]?.message
   const brief = Array.isArray(followup?.content)
@@ -426,7 +428,7 @@ function startedEntryFor(ctx, sessionId) {
 
 test('a host registry refusing one write tool leaves a structured partial mount in the activity log', async () => {
   // 宿主注册表对单件工具说"不"（重名、scope 锁定）是真实的部分挂载路径：registerTools
-  // 逐件 fail-open，其余三件照常挂上。活动日志必须记实际子集 + requested + partial，
+  // 逐件 fail-open，其余工具照常挂上。活动日志必须记实际子集 + requested + partial，
   // 而不是把 wanted 全量误报成已挂载（旧口径的缺陷）。
   const registered = []
   const disposals = []
@@ -447,14 +449,14 @@ test('a host registry refusing one write tool leaves a structured partial mount 
   const result = await requestPrivateConsolidation(ctx, 'fork-ptc-partial')
   assert.equal(result.ok, true, String(result.error || ''))
   assert.equal(result.settled, true)
-  assert.deepEqual([...registered].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_update'],
+  assert.deepEqual([...registered].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update'],
     'exactly the tools that actually registered are mounted')
-  assert.deepEqual([...disposals].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_update'],
+  assert.deepEqual([...disposals].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update'],
     'dispose unmounts exactly what was mounted')
   const started = startedEntryFor(ctx, 'fork-ptc-partial')
-  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_update'],
+  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update'],
     'the log records the actual subset, not the full wanted list')
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
   assert.equal(started.detail.workerToolsPartial, true)
   // 挂载为部分子集时任务书仍带 PTC 调用形态：worker 知道写记忆走 run_code 的 SDK 绑定。
   const followup = ctx.rec.forkFollowups[0]?.message
@@ -475,7 +477,7 @@ test('a fork context without a tools service records a null mount, the request a
   assert.equal(result.ok, true, String(result.error || ''))
   const started = startedEntryFor(ctx, 'fork-ptc-notools')
   assert.equal(started.detail.workerToolsAttached, null, 'no mount completed, so the log must not claim one')
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
   assert.equal(started.detail.workerToolsPartial, true)
 })
 

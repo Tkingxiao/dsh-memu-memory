@@ -294,7 +294,10 @@ await auto('B-4', 'a Chinese anchor lands inside its token budget', async () => 
   const anchor = inject.buildAnchor(binding, settings, null)
   const tokens = budget.estTokens(anchor.text)
   const target = Number(settings.anchorTokens || 700)
-  const low = Math.floor(target * 0.85)
+  // Title cards spend less than the old full-text cards: the invariant is that the
+  // anchor never exceeds its budget and still renders a useful block, not that it
+  // fills the budget to 85%.
+  const low = Math.min(120, target)
   const high = target
   assert.ok(tokens >= low && tokens <= high,
     'estimated ' + tokens + ' tokens, wanted ' + low + '..' + high + ' for a ' + target + ' budget')
@@ -858,16 +861,16 @@ await auto('H-4', 'a contradiction is held back until someone settles it', async
   return 'same-title conflict held, accepted, and rejected'
 })
 
-await auto('H-5', 'a memory on the tip of the tongue arrives without its body', async () => {
+await auto('H-5', 'a memory on the tip of the tongue arrives as a title without its body', async () => {
   const lib = makeLibrary('h5')
   const long = '那年夏天我们在旧办公室最后一晚把所有抽屉清空，有人把钥匙挂在门框上，谁也没说要走，但所有人都知道第二周不会再来。'
   // Not must_remember: a pinned memory is never on the tip of the tongue by design.
   seed(lib.id, 'mem-h5a', { layer: 'long_term', title: 'the last night', content: long, confidence: 0.4 })
   const anchor = inject.buildAnchor({ libraryId: lib.id }, state.getSettings(), null)
-  assert.ok(anchor.text.includes('只记得大概'), 'it says up front that only the gist is left')
+  assert.ok(anchor.text.includes('the last night'), 'the title is the directory entry')
   assert.ok(anchor.text.includes('mem-h5a'), 'and points at the id so a recall can finish the job')
-  assert.ok(!anchor.text.includes('第二周不会再来'), 'while withholding the tail of the text')
-  return 'gist only, id included'
+  assert.ok(!anchor.text.includes('第二周不会再来'), 'while withholding the body')
+  return 'title only, id included'
 })
 await auto('H-6', 'a held claim is visible in the browser, with its library named', async () => {
   const lib = makeLibrary('h6')

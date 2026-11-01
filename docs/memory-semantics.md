@@ -17,7 +17,7 @@
 ### 8.2 私有记忆的写入规则
 
 - 主 agent 自己写；**不做「你是她的记忆」的二次人格**。`must_remember` **满了也不许为腾名额而 unpin**。
-- 移出永久记忆 = **边缘化**：`marginalized=true`、`strength × 0.2`、`recallPenalty + 0.2`，**不删除**；条目仍在库里，`marginalReason` 在侧边栏可见（替代人类闸门的**事后**监督）。
+- 移出永久记忆 = **边缘化**：`marginalized=true`、`strength × 0.2`、召回排序里 `marginalized` 乘以 0.35（`recallPenalty` 字段仅作历史记录，当前不参与排序），**不删除**；条目仍在库里，`marginalReason` 在侧边栏可见（替代人类闸门的**事后**监督）。
 - **unpin 由模型自己判断，侧边栏没有标记按钮、用户不参与。** 三重护栏：① `reason` 必填、第一人称、去空白后 ≥ 20 字符；② 每会话配额 `unpinBudgetPerSession`（默认 2）；③ 冷却 `unpinCooldownMinutes`（默认 3）。放行后记 `unpinnedBy: model`、`unpinnedAt`、`originalPinSource`（保留原 pinSource 以便复 pin）。
 - 正当的 unpin 只有两种：想起它本身正在伤人；它已经不再是我的一部分。不正当的：inconvenient、不想面对、用户这轮没提、永久记忆快满了。**这个区别要写进提示词。**
 - 矛盾检测：同库同题改写或说法相反 → 新条挂 `pending_review` + `reviewReason` + `conflictingWith`，**不进注入不进召回**，等 `listReviews` / `resolveReview` 裁决（§3.9）。
@@ -26,12 +26,22 @@
 
 只有 curator 写，主 agent 只读。domain：`universal / coding / rp / project:<name> / tooling / personal`，**RP 与 coding 冲突分域存，不合并**。RP 剧情事实、关系进度、临时情绪**不写全局**；每条必须有 `evidence` + `confidence`。
 
+**审核模式（`curatorReviewMode`）**：`auto`（默认）= 有落地证据的提炼结果自动通过；`review-all` = 提炼产物一律进待复核。`conflict`（说法矛盾）与无证据的条目在任何模式下都进人审；rewrite 类操作（merge/supersede/absorb）在 auto 下风险 ≥0.70 也暂扣。每条都带 `reviewRisk/reviewRiskReasons` 供审计与复核排序。
+
+**证据落地（grounding）**：evidence 的 quote 必须是本次策划所含会话转录的规范化子串（≥6 字，省略号分段校验，先脱敏）——模型编造的"原话"进不了库；未落地恒 pending 或不落库。
+
+**全局关联（link）**：curator 可给两条全局记忆连边（`related/refines/supports`），note 必须含转录逐字引用；每端 ≤20 条、有向边防环、移除只删边不删记忆。前端只读展示，不支持手动全局关联。
+
+**集合记忆（absorb）**：多条碎片合成一条集合记忆——合并稿 active、target superseded（absorbedInto）、sources archived（absorbedBy，**不删除**，可还原）；`absorbSnapshot` 支持一键撤销合并（人工改动过的条目拒绝撤销）；簇外重复 ≥0.90 的合并稿转人审。
+
 ### 8.4 注入
 
 - 静态 guide 与动态记忆都走 plugin 消息；当前版本不再注册本插件的 system prompt 段。所有会话（含 `persona` `complete: true`）统一由 `lib/inject.js` 的 `ensureUnifiedGuide` 在**回合首步**投放一条 `<memory-guide rules="…">` 插件消息；`rulesKey` 由协议版本、domain 和实际渲染正文计算，domain/覆盖/默认稿变化或压缩丢失（`guideLost`）时在下一个合法首步替换，同一规则不逐回合重复。旧 binding 只有 `guideMessageAt`、没有 `guideRulesKey` 时视为旧版，补投一次；失败 fail-open，不写新版本。
 - 首轮锚点 + 每用户回合最多一次；长工具回合仅有新的真实人类消息批次时追加一次，普通工具步骤不触发。私有优先、全局补充；冲突时私有胜。
+- **锚点和本回合召回只放标题卡**（1.2.2）：`formatPrivateTitle` / `formatGlobalTitle` 输出 `[id]`、标题、`source`、owner、layer、日期/年龄、marginalized/open_loop、accuracy/uncertainty/disclosure 与附件计数，**不输出正文与附件 caption**。工具返回、记忆抽屉与浏览器仍是全文；要正文就按标题关键词或方括号里的 id 调 `memu_private_recall` / `memu_global_recall`。标题为空时回退正文前 40 字；`imagined`、`never_say` 等语义标签不能因为标题化而丢失。
+- **rule 是前言，不是页脚**：`buildAnchor` 先输出锚点头与 `[rule]`，再输出 private/global/short_term 各段；inbound 路径的锚点之后直接衔接 `<memory-context>`，中间不再隔一条规则。
 - **`injectedIds` 只能记真正进入文本的条目**，否则从未展示的记忆被白白压制 8 轮。
-- 锚点分段预算 pin 40% / core 30% / global 30%；pin 装不下时末尾明示「另有 N 条未展开」，**不静默丢弃**。
+- 锚点分段预算 pin 40% / core 30% / global 30%；pin 装不下时末尾明示「另有 N 条未展开」，**不静默丢弃**。1.2.2 移除了 core≤5 / global≤8 的预先切片：标题卡比正文短，条数应由预算打包器决定，而不是固定上限；`anchorTokens` / `turnTokens` / `injectionTotalTokens` 默认值不变，inbound 的 `floor(turnBudget/2)` 保留。
 - 预算单位是**模型 token**不是字符：中文 ≈1 字符/token、英文 ≈3.4，一律走 `lib/budget.js`，**不要再用 `tokens * 3`**（英文口径，中文超支约 3 倍）。
 - 压缩后下一条用户消息重注入锚点；子代理不注入。文件夹两开关都关 → 不注入（看 clamp 后生效值，不是 binding 原始值）。召回为空必须留信号（§1.10）。
 - **召回排序的准确口径**：`privateWeighted` 只服务**私有召回流水线**（`privateRecall` 调用它）；全局召回（`globalRecall`）走 `localRecall`，不经过它。cue 会经 `cueRecall` **间接**调用 `privateRecall`，所以**不能**概括成「cue 不走私有排序」。排序里的心境项默认关闭——`privateWeighted` 自己的缺省上下文就是 `moodEnabled: false`，真正打开它的是 `privateRecall`，条件是 `|valence| ≥ MOOD_MIN_STRENGTH` 或 `|arousal − BASE_AROUSAL| ≥ 0.1`（`BASE_AROUSAL` 来自 `lib/mood.js`）；平缓对话里两项乘数恒为 1。`privateRecall` 的 topK 兜底是「传入 topK → `settings.privateTopK`（默认 5）→ 4」：引用 3 或 4 时必须说清是**设置默认值**还是**代码兜底值**，两个数不是同一个。
@@ -47,6 +57,7 @@
 - **职责分工**：`system-guide.*` 是唯一常驻规则，只写领域行为、检索时机、回答口径；`private-policy.*` 保留为字段规约参考，不再投放，避免两套常驻文本互相漂移。
 - **只有三个 key 分域**：`system-guide`、`private-policy`、`private-consolidation`；`global-curator` 不分域。
 - **远程与本地共用一份 `private-consolidation`**：正文讲「记什么、字段怎么填」，差异只有输出协议（`CONSOLIDATION_CONTRACTS.local` 调工具 / `.remote` 返回 JSON，代码追加）。不要拆第二份。
+- **1.2.2 起整理稿负责标题质量**：title 按「只看标题就知道具体事实」写（8–40 字、具体关键词、集合稿覆盖全部来源），`global-curator` 同一口径。词典/关联的工具调用属于**本地工作流**：领域整理稿与远程 JSON 路径共用，因此不写 `memu_*` 工具名；领域稿只保留「可抽什么词」的差异，稳定复用的黑话/梗/术语先 `memu_lexicon_search` 再 `memu_lexicon_propose`、写完用 `memu_private_link_suggest` 裁决候选的工具流程只出现在 local worker brief。远程契约明确「没有工具」，title 长度同样是 8–40 字。
 - RP 与 coding 是**内容**差异：coding 记事实（决定、约束、踩过的坑、工程偏好），召回当「可能过期的事实」，与代码冲突时以代码为准；rp 记经验（具体瞬间、半句原话、身体感觉、没说出口的话），允许模糊记错，不确定就标低 `confidence`。
 - **KV cache**：section 文本随 domain 变，但同一会话内恒定，缓存不受影响；中途改 domain 会让该会话失效一次缓存。别在文档里写「文本恒定」。
 
@@ -132,6 +143,14 @@
 模型下载、进度与 profile 切换/迁移已有实现，但真实模型/runtime 下载、原生推理及切换全链路在本轮仍未验证。candidate / `pending` artifact 不是可用制品，必须通过制品、校验与迁移门槛后才可进入可用/激活状态。
 
 回归与管线测试：`tests/hybrid-recall.test.mjs` 仅保留 RRF、去重、稳定排序、资格过滤与候选上限等通用融合 helper 覆盖；managed vector 行为由 `tests/managed-memory.test.mjs` 覆盖。
+
+### 8.13 标题卡、词典生命周期与私有自动关联（1.2.2）
+
+**标题卡与标题写作。** 锚点/召回的可见单位从正文改为标题卡，标题因此成为索引而不是装饰：提示词要求 8–40 字、含具体人名/物名/事件/结论关键词，禁止「一些事」「那段对话」「关于 XX 的事」；合并/吸收稿的标题要覆盖全部来源关键词。Lexicon 的注入行仍保留「term + ≤80 字短义」（不是裸词），因为词典的唯一价值是解释；UI 卡片也是 term 标题 + meaning 正文。
+
+**词典生命周期。** 公开状态只有 `active` / `archived`：用户新建、模型 `memu_lexicon_propose`、curator 带证据抽取都直接 active；`archiveLexiconTerm` / `restoreLexiconTerm` 负责可逆退场，删除只属于管理面。`rejected` 只作为 legacy 墓碑/指纹留在数据里，UI、注入、检索与计数都看不到；`pending` 只作为旧版本迁移输入：新提案 → active（敏感 → archived），revision 草稿 → archived。敏感 trigger 的新建/修改只能由用户完成，模型/curator 得到 typed 拒绝；非用户修改普通 active 词条的敏感字段也直接拒绝，不再生成 pending revision。RPC 的 `lexiconReview` 已删除，方法数 93。
+
+**私有自动关联。** 整理结算后 `lib/private-links.js` 只做本地算法：同库、同 context/track、可见非 secret、标题共享稀有 name-like token、pairScore < 0.82 且无冲突时，建立 memory↔memory `relation` 并写 `source:'auto'`；≥2 条记忆共享该 token 时复用/创建实体枢纽（人物信号 → `person`，无信号的拉丁名保守 → `thing`，CJK 无信号或 kind 冲突 → 不确定候选）。高置信写库在算法侧完成，不确定候选最多 8 对交给本次整理 worker 用 `memu_private_link_suggest` / `memu_private_link` 带证据裁决；不另起整理、不重读转录。算法/写入失败只记 warn，不能让已经成功的整理失败；自动关联不改正文、不写向量、不删除，边可在关系图移除。worker 写工具为 remember/update/link/link_suggest/lexicon_propose，读工具为 recall/list/lexicon_search，但「有没有写能力」仍只由 remember/update 判定。
 
 ---
 

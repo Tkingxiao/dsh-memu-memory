@@ -25,12 +25,25 @@ const clientJs = standaloneAsset('/dsh-memu-memory/ui-assets/client.js')
 const iconPng = standaloneAsset('/dsh-memu-memory/ui-assets/icon.png')
 
 const routeSpecs = []
-const auth = { decision: undefined, calls: 0 }
+// callbackMode: 'present' | 'throw' | 'absent' — 'absent' models a host that
+// does not implement authorizeLibrary at all (typeof check must fail).
+const auth = { decision: undefined, calls: 0, libraryDecision: true, libraryCalls: 0, libraryRequests: [], callbackMode: 'present' }
 registerRpc({
   inject: (_deps, build) => build({
     effect: (fn) => { const dispose = fn(); return typeof dispose === 'function' ? dispose : () => {} },
     webServer: { register: (spec) => { routeSpecs.push(spec); return () => {} } },
-    connection: { requestRejection: () => { auth.calls += 1; return auth.decision } },
+    connection: {
+      requestRejection: () => { auth.calls += 1; return auth.decision },
+      get authorizeLibrary() {
+        if (auth.callbackMode === 'absent') return undefined
+        return async (req, details) => {
+          auth.libraryCalls += 1
+          auth.libraryRequests.push({ req, ...details })
+          if (auth.callbackMode === 'throw') throw new Error('host authorization unavailable')
+          return auth.libraryDecision
+        }
+      },
+    },
     logger: {},
   }),
 })
@@ -243,6 +256,53 @@ test('GET-side RPC reads: 401/403 return before the private index is read', asyn
   }
 })
 
+test('library authorization: session A cannot address library B, and standalone callback fails closed', async () => {
+  const other = state.createLibrary({ name: 'auth-other', cwd: path.join(home, 'auth-other') })
+  state.setSessionBinding('auth-session-other', { libraryId: other.id, useLibrary: true, scopeKey: other.scopeKey })
+  for (const prefix of prefixes) {
+    auth.callbackMode = 'present'
+    auth.libraryDecision = true
+    auth.libraryCalls = 0
+    auth.libraryRequests.length = 0
+    const cross = await send(prefix.route, prefix.base + '/getMemory', {
+      method: 'POST',
+      body: envelope('getMemory', { libraryId: other.id, sessionId, id: 'mem-auth-sentinel' }),
+    })
+    assert.equal(cross.res.status, 403)
+    assert.equal(cross.res.text, JSON.stringify({ ok: false, error: { code: 'dsh-memu-memory/forbidden', message: 'forbidden', details: {} } }))
+    assert.equal(cross.pulls.length, 1, 'JSON body may be parsed before route authorization')
+    assert.equal(auth.libraryCalls, 0, 'bound sessions must not fall back to host callback')
+    assert.deepEqual(cross.reads, [])
+    assert.deepEqual(cross.writes, [])
+
+    auth.libraryDecision = false
+    auth.libraryCalls = 0
+    const denied = await send(prefix.route, prefix.base + '/getMemory', {
+      method: 'POST',
+      body: envelope('getMemory', { libraryId: other.id }),
+    })
+    assert.equal(denied.res.status, 403)
+    assert.equal(auth.libraryCalls, 1)
+    assert.equal(denied.reads.length, 0)
+    assert.equal(denied.writes.length, 0)
+
+    auth.libraryDecision = true
+    auth.callbackMode = 'throw'
+    auth.libraryCalls = 0
+    const thrown = await send(prefix.route, prefix.base + '/getMemory', {
+      method: 'POST', poison: false,
+      body: envelope('getMemory', { libraryId: other.id }),
+    })
+    assert.equal(thrown.res.status, 403)
+    assert.equal(auth.libraryCalls, 1)
+    assert.equal(thrown.reads.length, 0)
+    assert.equal(thrown.writes.length, 0)
+
+    auth.callbackMode = 'present'
+    auth.libraryDecision = true
+  }
+})
+
 test('attachment thumbnails: 401/403 precede authorization and attachment-pool reads', async () => {
   const attachmentLibrary = state.createLibrary({ name: 'auth-attachment', cwd: path.join(home, 'auth-attachment') })
   const attachmentSession = 'auth-attachment-session'
@@ -451,4 +511,290 @@ test('unsupported methods still authenticate first: 401/403 before 405', async (
     assert.equal((await send(prefix.route, prefix.base + '/ui', { method: 'DELETE' })).res.status, 405)
     assert.equal((await send(prefix.route, prefix.base + '/listLibraries', { method: 'GET' })).res.status, 405)
   }
+})
+
+// §10 P0: one representative per audited operation category. The table drives
+// every variant, so a new endpoint added to LIBRARY_ROUTE_OPERATIONS with the
+// wrong operation (or none) fails here instead of shipping unverified.
+const MATRIX_SHA = 'a'.repeat(64)
+const matrixRows = [
+  { endpoint: 'getMemory', operation: 'read', payload: (lib) => ({ libraryId: lib.id, id: 'mem-matrix-scratch' }) },
+  { endpoint: 'browseWall', operation: 'read', payload: (lib) => ({ libraryId: lib.id }) },
+  { endpoint: 'getStats', operation: 'read', payload: (lib) => ({ libraryId: lib.id }) },
+  { endpoint: 'addMemory', operation: 'write', payload: (lib) => ({ libraryId: lib.id, content: 'matrix write body' }) },
+  { endpoint: 'updateMemory', operation: 'write', payload: (lib) => ({ libraryId: lib.id, id: 'mem-matrix-scratch', patch: { title: 'matrix retitled' } }) },
+  { endpoint: 'archiveMemory', operation: 'archive', payload: (lib) => ({ libraryId: lib.id, id: 'mem-matrix-scratch' }) },
+  { endpoint: 'deleteMemory', operation: 'delete', payload: (lib) => ({ libraryId: lib.id, id: 'mem-matrix-scratch' }) },
+  { endpoint: 'renameLibrary', operation: 'rename', payload: (lib) => ({ libraryId: lib.id, name: 'matrix rename' }) },
+  { endpoint: 'restoreLibrary', operation: 'restore', payload: (lib) => ({ libraryId: lib.id }) },
+  { endpoint: 'importMemories', operation: 'import', payload: (lib) => ({ libraryId: lib.id, memories: [] }) },
+  { endpoint: 'exportLibrary', operation: 'export', payload: (lib) => ({ libraryId: lib.id }) },
+  { endpoint: 'getAttachment', operation: 'attachment.read', payload: (lib) => ({ libraryId: lib.id, sha256: MATRIX_SHA }) },
+  { endpoint: 'listReviews', operation: 'read', payload: (lib) => ({ libraryId: lib.id }) },
+  { endpoint: 'resolveReview', operation: 'write', payload: (lib) => ({ libraryId: lib.id, id: 'mem-matrix-scratch', action: 'reject' }) },
+  { endpoint: 'lexiconList', operation: 'read', payload: (lib) => ({ libraryId: lib.id }) },
+  { endpoint: 'lexiconAdd', operation: 'write', payload: (lib) => ({ libraryId: lib.id, term: 'matrix term', kind: 'term', meaning: 'matrix meaning' }) },
+  // §2.3：lexiconReview 删除，lifecycle 变成 archive / restore 两个普通 write；
+  // 授权模型不动（会话绑定优先、standalone 走 host callback）。
+  { endpoint: 'lexiconArchive', operation: 'write', payload: (lib) => ({ libraryId: lib.id, termId: 'lex-matrix-scratch' }) },
+  { endpoint: 'lexiconRestore', operation: 'write', payload: (lib) => ({ libraryId: lib.id, termId: 'lex-matrix-scratch' }) },
+]
+
+function seedMatrixScratch() {
+  state.updatePrivateIndex(library.id, (index) => {
+    index.entries['mem-matrix-scratch'] = {
+      title: 'matrix scratch', content: 'matrix scratch body', status: 'active', layer: 'long_term',
+      visibility: 'shared', disclosure: 'can_tell', source: 'user_said',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }
+  })
+  state.flushState()
+}
+
+test('operation matrix: every library route denies A→B, allows A→A, and gates standalone on the host callback', async () => {
+  const libB = state.createLibrary({ name: 'auth-matrix-b', cwd: path.join(home, 'auth-matrix-b') })
+  for (const prefix of prefixes) {
+    seedMatrixScratch()
+    for (const row of matrixRows) {
+      const post = (payload) => send(prefix.route, prefix.base + '/' + row.endpoint, { method: 'POST', body: envelope(row.endpoint, payload) })
+
+      // Session A → library B: 403, the host callback is never consulted, and
+      // the body (already parsed) is the only thing touched before the denial.
+      auth.callbackMode = 'present'
+      auth.libraryDecision = true
+      auth.libraryCalls = 0
+      const cross = await post({ ...row.payload(libB), sessionId })
+      assert.equal(cross.res.status, 403, `${prefix.name} ${row.endpoint}: session A must not address library B`)
+      assert.equal(cross.res.text, JSON.stringify({ ok: false, error: { code: 'dsh-memu-memory/forbidden', message: 'forbidden', details: {} } }))
+      assert.equal(cross.pulls.length, 1, 'route authorization happens after the envelope parse')
+      assert.equal(auth.libraryCalls, 0, `${row.endpoint}: a bound session must not fall back to the host callback`)
+
+      // Session A → library A: past the route gate. Business errors, when the
+      // payload is not worth making valid, still come back inside a 200.
+      const own = await post({ ...row.payload(library), sessionId })
+      assert.equal(own.res.status, 200, `${prefix.name} ${row.endpoint}: session A on its own library must pass the route gate`)
+      assert.equal(auth.libraryCalls, 0)
+
+      // Standalone (no session): exactly one authorizeLibrary call that carries
+      // the audited operation and the target library; only strict true passes.
+      auth.libraryRequests.length = 0
+      auth.libraryDecision = true
+      auth.libraryCalls = 0
+      const granted = await post(row.payload(libB))
+      assert.equal(granted.res.status, 200, `${prefix.name} ${row.endpoint}: host callback true must grant the standalone request`)
+      assert.equal(auth.libraryCalls, 1)
+      const request = auth.libraryRequests.at(-1)
+      assert.equal(request.libraryId, libB.id, `${row.endpoint}: callback must see the target library`)
+      assert.equal(request.operation, row.operation, `${row.endpoint}: callback must see the audited operation`)
+
+      auth.libraryDecision = false
+      auth.libraryCalls = 0
+      const denied = await post(row.payload(libB))
+      assert.equal(denied.res.status, 403, `${prefix.name} ${row.endpoint}: callback false must deny`)
+      assert.equal(auth.libraryCalls, 1)
+
+      auth.callbackMode = 'throw'
+      auth.libraryDecision = true
+      auth.libraryCalls = 0
+      const thrown = await post(row.payload(libB))
+      assert.equal(thrown.res.status, 403, `${prefix.name} ${row.endpoint}: a thrown callback must deny`)
+
+      auth.callbackMode = 'absent'
+      auth.libraryCalls = 0
+      const absent = await post(row.payload(libB))
+      assert.equal(absent.res.status, 200, `${prefix.name} ${row.endpoint}: a host without the callback falls back to the HTTP boundary (2026-11-01 flip)`)
+      assert.equal(auth.libraryCalls, 0)
+      auth.callbackMode = 'present'
+    }
+  }
+})
+
+test('removed lexiconReview is no longer a library route and does not dispatch', async () => {
+  for (const prefix of prefixes) {
+    auth.callbackMode = 'present'
+    auth.libraryDecision = true
+    auth.libraryCalls = 0
+    const res = await send(prefix.route, prefix.base + '/lexiconReview', {
+      method: 'POST',
+      body: envelope('lexiconReview', { libraryId: library.id, termId: 'lex-matrix-scratch', action: 'approve' }),
+    })
+    assert.equal(res.res.status, 200, 'an unknown method is answered as a business error, not routed')
+    assert.equal(auth.libraryCalls, 0, 'lexiconReview must not be authorized as a library route anymore')
+    const json = JSON.parse(res.res.text)
+    assert.equal(json.result.ok, false)
+    assert.match(json.result.error.message, /unknown endpoint/)
+  }
+  // 401/403 仍然先于方法存在性：被拒的 review 请求连 dispatch 都到不了。
+  for (const prefix of prefixes) {
+    for (const code of [401, 403]) {
+      assertRejected(await send(prefix.route, prefix.base + '/lexiconReview', {
+        method: 'POST', poison: true, rejection: code,
+        body: envelope('lexiconReview', { libraryId: library.id, termId: 'lex-matrix-scratch', action: 'approve' }),
+      }), code)
+    }
+  }
+})
+
+test('session-bound resolution: write/archive without an explicit libraryId resolve from the persisted binding', async () => {
+  const rows = [
+    { endpoint: 'updateMemory', payload: (session) => ({ sessionId: session, id: 'mem-matrix-scratch', patch: { title: 'fallback retitled' } }) },
+    { endpoint: 'archiveMemory', payload: (session) => ({ sessionId: session, id: 'mem-matrix-scratch' }) },
+  ]
+  for (const prefix of prefixes) {
+    seedMatrixScratch()
+    for (const row of rows) {
+      const post = (payload) => send(prefix.route, prefix.base + '/' + row.endpoint, { method: 'POST', body: envelope(row.endpoint, payload) })
+      auth.callbackMode = 'present'
+      auth.libraryDecision = true
+      auth.libraryCalls = 0
+      const own = await post(row.payload(sessionId))
+      assert.equal(own.res.status, 200, `${prefix.name} ${row.endpoint}: the bound session resolves its own library`)
+      assert.equal(auth.libraryCalls, 0)
+      for (const bad of ['', 'ghost-session', 42]) {
+        const denied = await post(row.payload(bad))
+        assert.equal(denied.res.status, 403, `${prefix.name} ${row.endpoint}: sessionId=${JSON.stringify(bad)} must not resolve to a target`)
+        assert.equal(denied.res.text, JSON.stringify({ ok: false, error: { code: 'dsh-memu-memory/forbidden', message: 'forbidden', details: {} } }))
+      }
+    }
+  }
+})
+
+test('global review queue: embedded sessions may read, writes need a live binding, standalone needs review.manage', async () => {
+  const seedGlobalReview = () => {
+    state.updateGlobalIndex((index) => {
+      index.entries['mem-global-review'] = {
+        title: 'global review', content: 'global pending body', status: 'pending_review', layer: 'long_term',
+        domain: 'general', visibility: 'shared', disclosure: 'can_tell', source: 'inferred',
+        reviewReason: 'matrix conflict', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }
+    })
+    state.flushState()
+  }
+  const post = (prefix, endpoint, payload) => send(prefix.route, prefix.base + '/' + endpoint, { method: 'POST', body: envelope(endpoint, payload) })
+
+  for (const prefix of prefixes) {
+    seedGlobalReview()
+    auth.callbackMode = 'present'
+    auth.libraryDecision = true
+    auth.libraryCalls = 0
+
+    // Embedded read: a well-formed session reads the global queue without any
+    // host callback — the queue is conversation-visible by design.
+    const read = await post(prefix, 'listReviews', { sessionId })
+    assert.equal(read.res.status, 200)
+    const readJson = JSON.parse(read.res.text)
+    assert.equal(readJson.result.ok, true)
+    assert.equal(readJson.result.value.scope, 'global')
+    assert.ok(readJson.result.value.items.some((item) => item.id === 'mem-global-review'))
+    assert.equal(auth.libraryCalls, 0, 'embedded reads never consult the host callback')
+
+    // Embedded write: only a session whose binding still exists may resolve.
+    const resolved = await post(prefix, 'resolveReview', { sessionId, id: 'mem-global-review', action: 'reject', resolution: 'replace' })
+    assert.equal(resolved.res.status, 200)
+    assert.equal(JSON.parse(resolved.res.text).result.ok, true)
+    assert.equal(state.loadGlobalIndex().entries['mem-global-review'].status, 'archived')
+
+    for (const bad of ['', 'ghost-session']) {
+      seedGlobalReview()
+      auth.libraryCalls = 0
+      const denied = await post(prefix, 'resolveReview', { sessionId: bad, id: 'mem-global-review', action: 'reject' })
+      assert.equal(denied.res.status, 403, `${prefix.name} resolveReview with sessionId=${JSON.stringify(bad)} must fail closed`)
+      assert.equal(state.loadGlobalIndex().entries['mem-global-review'].status, 'pending_review', 'a denied review write must not touch the queue')
+      const readDenied = await post(prefix, 'listReviews', { sessionId: bad })
+      assert.equal(readDenied.res.status, 403, `${prefix.name} listReviews with sessionId=${JSON.stringify(bad)} must fail closed`)
+    }
+
+    // Standalone management plane: the global queue authorizes with
+    // libraryId null and the dedicated review.manage operation, and a host
+    // that does not implement it fails closed.
+    const standalone = async (endpoint, payload) => {
+      seedGlobalReview()
+      auth.callbackMode = 'present'
+      auth.libraryDecision = true
+      auth.libraryCalls = 0
+      auth.libraryRequests.length = 0
+      const granted = await post(prefix, endpoint, payload)
+      assert.equal(granted.res.status, 200, `${prefix.name} ${endpoint}: review.manage true must grant the standalone request`)
+      assert.equal(auth.libraryCalls, 1)
+      const request = auth.libraryRequests.at(-1)
+      assert.equal(request.libraryId, null, 'the global queue authorizes with libraryId null')
+      assert.equal(request.operation, 'review.manage')
+
+      auth.libraryDecision = false
+      auth.libraryCalls = 0
+      assert.equal((await post(prefix, endpoint, payload)).res.status, 403, `${prefix.name} ${endpoint}: review.manage false must deny`)
+      assert.equal(auth.libraryCalls, 1)
+
+      auth.callbackMode = 'throw'
+      auth.libraryDecision = true
+      assert.equal((await post(prefix, endpoint, payload)).res.status, 403, `${prefix.name} ${endpoint}: a thrown callback must deny`)
+
+      auth.callbackMode = 'absent'
+      assert.equal((await post(prefix, endpoint, payload)).res.status, 200, `${prefix.name} ${endpoint}: a host without the callback falls back to the HTTP boundary (2026-11-01 flip)`)
+      auth.callbackMode = 'present'
+    }
+    await standalone('listReviews', {})
+    await standalone('resolveReview', { id: 'mem-global-review', action: 'reject' })
+
+    // The private branch keeps its library checks: a bound session cannot
+    // address another library's queue, and a granted standalone private read is
+    // a plain library read, not review.manage.
+    const privateLib = state.createLibrary({ name: 'auth-review-private', cwd: path.join(home, 'auth-review-private') })
+    auth.libraryDecision = true
+    assert.equal((await post(prefix, 'listReviews', { libraryId: privateLib.id, sessionId })).res.status, 403)
+    assert.equal((await post(prefix, 'resolveReview', { libraryId: privateLib.id, sessionId, id: 'mem-global-review', action: 'reject' })).res.status, 403)
+    auth.libraryRequests.length = 0
+    auth.libraryCalls = 0
+    const standalonePrivate = await post(prefix, 'listReviews', { libraryId: privateLib.id })
+    assert.equal(standalonePrivate.res.status, 200)
+    assert.equal(auth.libraryRequests.at(-1).operation, 'read', 'a private-queue read is a plain library read')
+  }
+})
+
+
+// ---- 2026-11-01 现场（Unexpected token "forbidden" / Invalid RPC response: 403）----
+// 无 libraryId 的 browseWall（"全部记忆库"视图）曾被硬拒 403：capability 缺席的宿主
+// 上整个记忆墙挂掉。契约：无 libraryId 走同一 capability 模型——缺席回退放行、实现
+// 了回调的宿主由 callback 决定；403 响应必须是 JSON 信封（standalone fetch 会
+// response.json()，裸文本抛 SyntaxError）。
+
+test('browseWall all-libraries view: absent capability allows, present callback decides, envelope on 403', async () => {
+  state.updateSettings({ memoryBackend: 'agent', vectorSource: 'local' })
+  const lib = state.createLibrary({ name: 'auth-wall-all', cwd: path.join(home, 'auth-wall-all') })
+  state.updatePrivateIndex(lib.id, (index) => {
+    index.entries['mem-wall-all'] = { title: 'wall all body', content: 'wall all body', status: 'active', layer: 'long_term', visibility: 'shared', disclosure: 'can_tell', source: 'user_said', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+  })
+  state.flushState()
+
+  for (const prefix of prefixes) {
+    // capability 缺席（当前版本宿主）：跨库视图放行——记忆墙的核心视图不能 403。
+    auth.libraryCalls = 0
+    const allowed = await send(prefix.route, prefix.base + '/browseWall', { method: 'POST', body: envelope('browseWall', { libraryId: '' }) })
+    assert.equal(allowed.res.status, 200, `${prefix.name} browseWall(''): absent capability falls back to the HTTP boundary`)
+    const payload = JSON.parse(allowed.res.text)
+    assert.ok(payload.result.value.items.length >= 1, 'the wall returns entries across libraries')
+
+    // 实现了 capability 的宿主：多库枚举由回调决定（deny → 403 JSON 信封）。
+    auth.libraryDecision = false
+    auth.libraryCalls = 0
+    const denied = await send(prefix.route, prefix.base + '/browseWall', { method: 'POST', body: envelope('browseWall', { libraryId: '' }) })
+    assert.equal(denied.res.status, 403, 'a host that implements the capability may deny the multi-library read')
+    assert.equal(auth.libraryCalls, 1, 'present capability is consulted for the multi-library read')
+
+    // 403 响应体必须是 JSON 信封：standalone fetch 客户端 response.json() 之后再读
+    // error.message——裸 "forbidden" 在客户端抛 SyntaxError（现场事故）。
+    assert.equal(denied.res.headers['content-type'] || denied.res.headers['Content-Type'], 'application/json')
+    const parsed = JSON.parse(denied.res.text)
+    assert.equal(parsed.ok, false)
+    assert.equal(parsed.error.code, 'dsh-memu-memory/forbidden')
+    assert.equal(typeof parsed.error.message, 'string')
+    auth.libraryDecision = true
+  }
+})
+
+// standalone fetch 包装器：403 信封透传 error.message，而不是只报状态码
+// （现场：Unexpected token "forbidden" → Invalid RPC response: 403，都看不到为什么）。
+test('standalone rpc wrapper surfaces the server error message instead of the status code', () => {
+  const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(client, /envelope\.error\?\.message \|\| \('Invalid RPC response: ' \+ response\.status\)/)
 })

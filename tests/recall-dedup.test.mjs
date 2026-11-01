@@ -135,18 +135,21 @@ test('the same fact arriving on both legs is folded once, keeping the highest-rr
   assert.deepEqual(fused.debug.collapsed, [{ kept: 'mem-dup1', dropped: ['mem-dup3'] }])
 })
 
-test('a write with dice ≈ 0.93 is refused as a duplicate and the library does not grow', async () => {
+test('a write with dice ≈ 0.93 is held as a near_duplicate instead of being lost', async () => {
   const f = fixture()
   const first = await memory.privateRemember({ exec: f.exec, title: '部署窗口约定', content: BODY_A })
   const measured = similarity.dice(similarity.bigrams('部署窗口的约定 ' + BODY_A), similarity.bigrams('部署窗口约定 ' + BODY_A))
   assert.ok(measured >= 0.90, 'fixture pair must sit in the reject band, got ' + measured)
   const second = await memory.privateRemember({ exec: f.exec, title: '部署窗口的约定', content: BODY_A })
   assert.equal(second.deduped, true)
+  assert.equal(second.pending, true)
   assert.equal(second.existingId, first.id)
   assert.match(second.hint, /memu_private_update/)
   const index = state.loadPrivateIndex(f.libraryId)
-  assert.equal(Object.keys(index.entries).length, 1, 'the duplicate write must not land in the library')
-  assert.equal(index.entries[first.id].content, BODY_A, 'the original must be untouched')
+  assert.equal(Object.keys(index.entries).length, 2, 'the new text is held, not silently dropped')
+  assert.equal(index.entries[second.id].status, 'pending_review')
+  assert.equal(index.entries[second.id].reviewReason, 'near_duplicate')
+  assert.equal(index.entries[first.id].status, 'active', 'the original must be untouched')
   const written = activity.listEvents({ kind: 'write' })[0]
   assert.match(written.message, /拒绝重复写入/)
   assert.equal(written.detail.existingId, first.id)
@@ -203,10 +206,13 @@ test('a short memory padded into a much longer rewrite is refused, not slipped p
   assert.ok(similarity.lengthGap(unit1, unit2) > similarity.LENGTH_PRUNE_RATIO, 'the pair must sit in the pruned band')
   const second = await memory.privateRemember({ exec: f.exec, content: padded })
   assert.equal(second.deduped, true)
+  assert.equal(second.pending, true)
   assert.equal(second.existingId, first.id)
   assert.ok(second.similarity >= similarity.DUP_REJECT_DICE, 'the probe floor lands in the reject band, got ' + second.similarity)
   const index = state.loadPrivateIndex(f.libraryId)
-  assert.equal(Object.keys(index.entries).length, 1, 'the padded rewrite must not land in the library')
+  assert.equal(Object.keys(index.entries).length, 2, 'the padded rewrite is held for review, not written active')
+  assert.equal(index.entries[second.id].status, 'pending_review')
+  assert.equal(index.entries[second.id].reviewReason, 'near_duplicate')
 })
 
 test('a genuinely different longer fact against a short entry is still written', async () => {
@@ -218,6 +224,29 @@ test('a genuinely different longer fact against a short entry is still written',
   assert.equal(second.entry.duplicateOf, undefined, 'an unrelated fact is not tagged as a duplicate')
   const index = state.loadPrivateIndex(f.libraryId)
   assert.equal(Object.keys(index.entries).length, 2)
+})
+
+test('a knownBy-hidden near-duplicate never leaks its id', async () => {
+  const f = fixture()
+  state.setSessionBinding(f.sessionId, { memoryContext: { characterId: 'hero', knownBy: ['someone-else'] } })
+  const first = await memory.privateRemember({
+    exec: f.exec, title: '隐藏部署甲', content: BODY_A,
+    context: { characterId: 'hero', knownBy: ['someone-else'] },
+  })
+  const second = await memory.privateRemember({
+    exec: f.exec, title: '隐藏部署乙', content: BODY_A.replace('灰度发布', '白名单发布'),
+    context: { characterId: 'hero', knownBy: ['someone-else'] },
+  })
+  assert.equal(second.deduped, true)
+  assert.equal(second.pending, true)
+  assert.equal(second.existingId, undefined, 'a hidden duplicate must not expose its id')
+  assert.equal(second.similarity, undefined, 'a hidden duplicate must not expose its similarity')
+  assert.equal(second.similarityBand, '0.90+')
+  const index = state.loadPrivateIndex(f.libraryId)
+  assert.equal(memory.visibleToSession(index.entries[first.id], f.sessionId), false)
+  assert.equal(index.entries[second.id].status, 'pending_review')
+  assert.equal(index.entries[second.id].reviewReason, 'near_duplicate')
+  assert.equal(index.entries[second.id].conflictingWith, null, 'the hidden id must not be written into the held entry')
 })
 
 test('allowDuplicate: true writes a second independent observation without a tag', async () => {

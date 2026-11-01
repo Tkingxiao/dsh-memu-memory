@@ -55,6 +55,8 @@ ctx.inject([sidebarRightTabs], ...) + ctx.slots.register({ name: sidebar.right.p
 ```
 
 - 客户端当前 session：`sidebar.right.pane.tab` body 的 `sessionId` prop；客户端会话列表：`ctx.sessions.list`（`ObservableSnapshot`）。
+- **库级授权回调（管理/standalone）**：宿主可提供 `c.connection.authorizeLibrary(req, { libraryId, operation })`。插件只接受严格的 `true`；缺失、`false`、非 `true` 或抛错都按 403 处理。嵌入式请求必须携带 `sessionId`，服务端用持久绑定的 `getSessionBinding(sessionId).libraryId` 与目标 `libraryId` 精确比较；显式 `libraryId`、URL、query 或客户端 token 都不是凭据。`operation` 目前为 `read`、`write`、`archive`、`delete`、`rename`、`restore`、`import`、`export`、`attachment.read`、`review.manage`。HTTP handler 先调用 `requestRejection(req)`；ZIP import 在迭代 request body / `importMediaStream` 前完成库授权。
+- `listReviews`/`resolveReview` 是双作用域端点。带私有 `libraryId` 时遵循同一 session/callback 约束；无 `libraryId`（全局审核队列）时：嵌入式请求（携带 `sessionId`）可读队列，但 `resolveReview` 写操作要求该 `sessionId` 存在且绑定仍然有效（空/悬空 sessionId 一律 403）；无 `sessionId` 的 standalone/管理请求必须通过 `authorizeLibrary(req, { libraryId: null, operation: 'review.manage' })`，宿主未实现该 operation 时 fail-closed（403）。`browseWall` 必须明确单库，不能无目标枚举私有库。
 - **注入折叠是宿主自带的，不要自己做。** `dsh-client-ui-chat` 用 `ContextInjectionRow`（一个 `DisclosureRow`）渲染所有带 `source.kind` 的消息：折叠标题 `message.contextInjection`（跨会话召回为 `message.contextRecall`）。宿主认识的 `KNOWN_FORMS = instructions | catalog | snapshot | notice | relay | recall`；表外的 form 走 opaque，仍会折叠。
 - producer label 就是 **kind 原文**（如 `plugin:dsh-memu-memory`），不可自定义。`form: recall` 只有在 `kind: session-reference` + `references[].label` 时才走专门的召回正文；本插件用 `recall` 只是拿一个折叠行，要一行可读的折叠摘要就用 `form: notice` + `source.summary`。
 
@@ -66,7 +68,7 @@ ctx.inject([sidebarRightTabs], ...) + ctx.slots.register({ name: sidebar.right.p
 
 #### 已证实：标准会话
 
-- 标准会话 `session-<redacted-standard-a>`（`agentPreset: "standard"`，21 个非 session 事件）：模型请求头 `request/header` 的工具表为 **82 个工具**，首尾两次一致；其中 `memu_*` 共 **10 个**：`memu_private_list`、`memu_private_recall`、`memu_private_remember`、`memu_private_update`、`memu_private_archive`、`memu_private_link`、`memu_private_unpin`、`memu_global_list`、`memu_global_recall`、`memu_status`。同一会话中 `===== memory anchor =====` 出现 1 次，锚点内是真实私有 id。
+- 标准会话 `session-<redacted-standard-a>`（`agentPreset: "standard"`，21 个非 session 事件）：模型请求头 `request/header` 的工具表为 **82 个工具**，首尾两次一致；其中 `memu_*` 共 **10 个**（1.1.2 历史快照；1.2.2 当前为 13 个，新增 `memu_lexicon_search`、`memu_lexicon_propose` 与 `memu_private_link_suggest`）：`memu_private_list`、`memu_private_recall`、`memu_private_remember`、`memu_private_update`、`memu_private_archive`、`memu_private_link`、`memu_private_unpin`、`memu_global_list`、`memu_global_recall`、`memu_status`。同一会话中 `===== memory anchor =====` 出现 1 次，锚点内是真实私有 id。
 - 标准会话 `session-<redacted-standard-b>`（`agentPreset: "standard"`，本轮扫描时 1737 个非 session 事件）：`<memory-guide>` 只对应 **1 个** plugin 消息 id（`<redacted-plugin-message-id>`），锚点 1 次。该 id 在多个快照/工具记录里重复出现是日志回放，不是重复投放。
 - 因此“标准会话的工具表里有 `memu_*`”“标准会话 anchor/guide 只投放一次”是**已证实**。注意这是 2026-10-29 的历史快照：当前版本标准和预设都走 `<memory-guide rules="…">` 插件消息，system prompt 不再有本插件段。
 

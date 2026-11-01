@@ -165,8 +165,7 @@ test('getGraph hides orphan entities by default and reveals them on includeOrpha
   graph.deleteEntity({ libraryId, entityId: lonely.id })
 })
 
-test('apply() schedules the sweep late, and a corrupt store only warns instead of blocking load', async () => {
-  const badLib = state.ensureSession('sweep-bad', { cwd: path.join(home, 'ws-bad'), agentPreset: 'coding' }).libraryId
+test('apply() schedules the sweep late, and a corrupt store only warns instead of blocking load', async () => {  const badLib = state.ensureSession('sweep-bad', { cwd: path.join(home, 'ws-bad'), agentPreset: 'coding' }).libraryId
   fs.writeFileSync(path.join(indexDir(), `${badLib}.entities.json`), '{ still not json')
   const info = []
   const warn = []
@@ -187,4 +186,38 @@ test('apply() schedules the sweep late, and a corrupt store only warns instead o
   await new Promise(resolve => setTimeout(resolve, 4600))
   assert.ok(warn.some(message => message.includes(`orphan entity sweep skipped ${badLib}`)), 'the sweep reports the corrupt library')
   assert.equal(warn.some(message => message.includes('orphan entity sweep failed')), false, 'per-library failures stay contained')
+})
+
+// ---- §6.4 包 D：linked 派生字段与删除路径的一致性 ----
+// 只有 relationship、没有 memory link 的实体是历史，不是孤儿——linked 必须为
+// true，启动 prune 也必须放行它；判定口径与 pruneOrphanEntities 完全一致。
+
+test('a relationship-only entity is linked, not an orphan, and prune agrees', () => {
+  const soloA = graph.createEntity({ libraryId, name: 'RelOnlyA' })
+  const soloB = graph.createEntity({ libraryId, name: 'RelOnlyB' })
+  graph.updateRelationship({ libraryId, fromId: soloA.id, toId: soloB.id, state: { familiarity: 0.4 }, evidenceIds: ['mem-free'], reason: 'The free scene is explicit evidence.' })
+  const rows = graph.listEntities({ libraryId }).items
+  const rowA = rows.find(entity => entity.id === soloA.id)
+  const rowB = rows.find(entity => entity.id === soloB.id)
+  assert.ok(rowA && rowB, 'no session means the pair comes back with everyone else')
+  assert.equal(rowA.linked, true, 'a snapshot endpoint is a reference even without any memory link')
+  assert.equal(rowB.linked, true)
+  const pruned = graph.pruneOrphanEntities(libraryId)
+  assert.ok(!pruned.removed.includes(soloA.id) && !pruned.removed.includes(soloB.id),
+    'the prune must share the linked judgement, never collect snapshot-referenced entities')
+})
+
+test('the linked flag tracks a refused delete through force, and cleanup drops the row', () => {
+  const kept = graph.createEntity({ libraryId, name: 'FlagKept' })
+  graph.linkEntries({ libraryId, fromId: 'mem-free', toId: kept.id, kind: 'person', note: 'FlagKept is the person this scene is about.' })
+  let row = graph.listEntities({ libraryId }).items.find(entity => entity.id === kept.id)
+  assert.equal(row.linked, true, 'an inbound link shows up as linked before any delete')
+  assert.throws(() => graph.deleteEntity({ libraryId, entityId: kept.id }), /still referenced/, 'the refusal keeps both the row and its link')
+  assert.ok(graph.listEntities({ libraryId }).items.some(entity => entity.id === kept.id))
+  const forced = graph.deleteEntity({ libraryId, entityId: kept.id, force: true })
+  assert.equal(forced.deleted, true)
+  assert.equal(forced.removedLinks, 1, 'force sweeps the inbound link')
+  assert.ok(state.loadPrivateIndex(libraryId).entries['mem-free'].links.every(link => link.to !== kept.id), 'the forced delete sweeps the inbound link of this entity')
+  row = graph.listEntities({ libraryId }).items.find(entity => entity.id === kept.id)
+  assert.equal(row, undefined, 'after the force delete the entity is gone from the listing too')
 })

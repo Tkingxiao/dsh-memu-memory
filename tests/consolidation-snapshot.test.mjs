@@ -262,6 +262,45 @@ test('a header without memory tools is unavailable rather than a silent wasted f
   assert.equal(probe.reasonCode, 'worker-tools-missing')
 })
 
+test('auxiliary link and lexicon tools alone do not prove the worker can write memory', () => {
+  // 判据只看 CORE_WRITE_TOOLS：link / link_suggest / lexicon_propose 是辅助面，
+  // 一份只列它们、没有 remember/update 的名单仍然是"不能写记忆"，不能据此 fork。
+  const events = [{
+    seq: 0,
+    type: 'request/header',
+    data: { header: { config: { provider: 'p', model: 'm' }, tools: [
+      { name: 'memu_private_link' },
+      { name: 'memu_private_link_suggest' },
+      { name: 'memu_lexicon_propose' },
+      { name: 'memu_lexicon_search' },
+    ] } },
+  }]
+  const probe = probeToolSurface({ ctx: null, sessionId: 's', events })
+  assert.equal(probe.ok, false)
+  assert.equal(probe.reasonCode, 'worker-tools-missing')
+  assert.equal(probe.hasWrite, false)
+})
+
+test('the brief teaches the suggest-then-adjudicate loop and lexicon extraction', () => {
+  const brief = buildWorkerBrief({
+    snapshot: { fromSeq: 0, throughSeq: 5, eventCount: 6, hash: 'brief01' },
+    probe: { tools: ['memu_private_remember', 'memu_private_update', 'memu_private_link_suggest', 'memu_lexicon_propose'] },
+    contract: 'BRIEF-CONTRACT',
+  })
+  assert.match(brief, /memu_private_link_suggest\(\{ids:\[\.\.\.\]\}\)/, 'the call shape is spelled out')
+  assert.match(brief, /已经自动连好/, 'high-confidence links are applied before the worker sees candidates')
+  assert.match(brief, /每轮最多确认 5 条/)
+  assert.match(brief, /noop/)
+  assert.match(brief, /conflict/)
+  assert.match(brief, /memu_lexicon_search/)
+  assert.match(brief, /memu_lexicon_propose/)
+  assert.match(brief, /term 是索引键/)
+  assert.match(brief, /sensitive trigger/)
+  assert.match(brief, /tools-unavailable/, 'the tools-unavailable contract survives')
+  assert.match(brief, /没有回执视为本次整理失败/, 'the receipt requirement survives')
+  assert.match(brief, /BRIEF-CONTRACT/)
+})
+
 test('a PTC-only turn is not a refusal: the probe reports ptc and the SDK surface is checked at fork time', () => {
   // 2026-10-31 口径变更：PTC 模式下 header 只列 transport（这里 ptc_exec，真实宿主为
   // run_code），其余工具走 run_code 程序里的 SDK 绑定 —— header 名单不承载"能不能写"，

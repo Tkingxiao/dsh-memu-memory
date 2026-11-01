@@ -296,7 +296,7 @@ test('six channels, layer by layer: transcript -> prompt -> simulated output -> 
   const prompt = captured.request.prompt[0].text
   assert.match(prompt, /全局记忆提炼任务/)
   const input = promptInput(prompt)
-  assert.deepEqual(Object.keys(input).sort(), ['existing_global_index', 'sessions'])
+  assert.deepEqual(Object.keys(input).sort(), ['candidate_clusters', 'clusters_truncated', 'existing_global_index', 'index_truncated', 'sessions'])
   assert.equal(input.sessions.length, 1)
   assert.deepEqual(
     Object.keys(input.sessions[0]).sort(),
@@ -336,14 +336,22 @@ test('six channels, layer by layer: transcript -> prompt -> simulated output -> 
     CHANNELS.map((channel) => channel.layers),
   )
 
-  // The simulated model echoed only what reached the prompt: four transcript
-  // channels plus the two visible existing-index entries.
-  assert.equal(job.result.created, 6)
-  for (const key of ['user', 'assistant', 'toolArgs', 'recallSecret', 'existing', 'pending']) {
+  // The simulated model echoed what reached the prompt: four transcript channels
+  // commit as active; the two index-only echoes (existing/pending never entered the
+  // transcript) fail evidence grounding and are held for review — §4.6 的防幻觉
+  // 门槛正是为这种情况设计的：prompt 里见过 ≠ 转录里说过。
+  assert.equal(job.result.created, 4)
+  for (const key of ['user', 'assistant', 'toolArgs', 'recallSecret']) {
     const entry = Object.values(loadGlobalIndex().entries).find((item) => item.title === 'Copied ' + key)
     assert.ok(entry, 'expected a committed entry copied from ' + key)
     assert.equal(entry.status, 'active')
     assert.match(entry.content, new RegExp(M[key]))
+  }
+  for (const key of ['existing', 'pending']) {
+    const held = Object.values(loadGlobalIndex().entries).find((item) => item.title === 'Copied ' + key)
+    assert.ok(held, 'expected the index-only echo to be held, not committed')
+    assert.equal(held.status, 'pending_review')
+    assert.match(held.reviewReason, /missing evidence/)
   }
   const secretEntry = Object.values(loadGlobalIndex().entries).find((item) => item.title === 'Copied recallSecret')
   assert.match(JSON.stringify(secretEntry.evidence), new RegExp(M.recallSecret))
@@ -391,7 +399,8 @@ test('commit accepts model output without provenance or secret filtering', async
         op: 'create', domain: 'general', track: 'memory', title: 'Credential shaped',
         content: 'api key: ' + M.credential,
         confidence: 0.9,
-        evidence: [{ session_id: 'probe-session', quote: 'q' }],
+        // 1 字 quote 不满足 grounding 的 ≥6 字门槛（§4.6）——加长，测试意图不变。
+        evidence: [{ session_id: 'probe-session', quote: 'credential quote for grounding' }],
       },
     ],
   }

@@ -8,6 +8,7 @@ process.env.DSH_MEMU_HOME = home
 const state = await import('../lib/state.js')
 const { registerRpc, dispatch } = await import('../lib/rpc.js')
 const { webUiHtml, standaloneHtml, standaloneAsset } = await import('../lib/webui.js')
+const { dataDir } = await import('../lib/paths.js')
 test.after(() => { state.flushState(); fs.rmSync(home, { recursive: true, force: true }) })
 function handler(rejection) {
   const routes = []
@@ -133,6 +134,47 @@ test('wall heartbeat retries failed paints, pauses hidden and shares the metadat
   assert.match(source, /result !== false/)
   assert.match(source, /data\.type === "memory-write"/)
 })
+
+test('single-library browseWall still carries global rows and F1/F2 metadata', async () => {
+  const library = state.createLibrary({ name: 'wall-global-merge', cwd: path.join(home, 'wall-global-merge') })
+  state.updatePrivateIndex(library.id, (index) => {
+    index.entries['mem-private-merge'] = {
+      title: 'private row', content: 'private row body', status: 'active', layer: 'long_term',
+      visibility: 'shared', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }
+  })
+  state.saveGlobalIndex({
+    version: 1,
+    entries: {
+      'gmem-linked': {
+        title: 'global row', content: 'global row body', status: 'active', domain: 'general', track: 'memory',
+        links: [{ id: 'lnk-probe', opId: 'op-probe', to: 'gmem-other', kind: 'related', note: '这两条讲同一件事，必须一起看。', confidence: 0.7, evidence: [], createdAt: new Date().toISOString() }],
+        absorbedFrom: ['gmem-a', 'gmem-b'],
+        updatedAt: new Date().toISOString(),
+      },
+    },
+  })
+  state.flushState()
+
+  const wall = await dispatch({}, 'browseWall', { libraryId: library.id })
+  assert.ok(wall.items.some((item) => item.id === 'mem-private-merge'), 'the authorized private row is present')
+  const globalRow = wall.items.find((item) => item.id === 'gmem-linked')
+  assert.ok(globalRow, 'a single-library wall must keep the shared global scope')
+  assert.equal(globalRow.libraryId, null)
+  assert.equal(globalRow.links.length, 1)
+  assert.deepEqual(globalRow.absorbedFrom, ['gmem-a', 'gmem-b'])
+
+  const listed = await dispatch({}, 'listGlobal', {})
+  const globalFile = listed.files.find((file) => file.id === 'gmem-linked')
+  assert.ok(globalFile, 'the global page lists the same row')
+  assert.equal(globalFile.links.length, 1)
+  assert.deepEqual(globalFile.absorbedFrom, ['gmem-a', 'gmem-b'])
+
+  const source = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(source, /wallAllBlocked/, 'the single-library fallback explains itself')
+  assert.match(source, /browseWall', \{ libraryId: firstLibraryId/, 'the wall retries the first library after an all-libraries 403')
+  assert.match(source, /setMultiBlocked\(true\)/, 'the fallback disables the all-libraries option')
+})
 test('the settings button preserves the host SPA and links to individual pages', () => {
   const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   // libraryId 选项：整理失败提醒的跳转按钮按库深链（?libraryId=…#/settings/browser）。
@@ -155,6 +197,152 @@ test('RPC still uses stable envelopes and rejects non-UI GETs', async () => {
   assert.equal(envelope.result.ok, true)
   assert.equal(envelope.rpcId, 'wall-test')
   assert.equal((await request('/dsh-memu-memory/listLibraries')).status, 405)
+})
+
+// ── 词典 RPC（§2.3 / §2.5）：公开两态 active/archived，没有 pending/review ──
+function lexiconFile(libraryId) {
+  return path.join(dataDir(), 'lexicon', libraryId + '.json')
+}
+function writeLexiconEntries(libraryId, entries) {
+  const file = lexiconFile(libraryId)
+  const store = JSON.parse(fs.readFileSync(file, 'utf8'))
+  Object.assign(store.terms, entries)
+  // 直接写盘模拟 legacy/手工数据；条目数变化保证 mtime+size 缓存必然失效。
+  fs.writeFileSync(file, JSON.stringify(store))
+}
+
+test('lexicon RPC: archive/restore lifecycle, active/archived tabs, stable statusCounts and archived-aware search', async () => {
+  const library = state.createLibrary({ name: 'lexicon-rpc', cwd: path.join(home, 'lexicon-rpc') })
+  const first = await dispatch({}, 'lexiconAdd', { libraryId: library.id, term: '糖刀', kind: 'meme', meaning: '表面发糖、实际虐心的剧情' })
+  assert.equal(first.term.status, 'active', 'the management panel writes as the user → active, never pending')
+  await new Promise((resolve) => setTimeout(resolve, 6))
+  const second = await dispatch({}, 'lexiconAdd', { libraryId: library.id, term: '红牌', kind: 'trigger', sensitivity: 'sensitive', meaning: '角色行为的红线信号' })
+  const knifeId = first.term.termId
+  const redId = second.term.termId
+
+  const activeView = await dispatch({}, 'lexiconList', { libraryId: library.id })
+  assert.equal(activeView.total, 2)
+  assert.deepEqual(activeView.items.map((item) => item.id), [redId, knifeId], 'updatedAt desc: the newest term first')
+  assert.ok(activeView.items.every((item) => item.status === 'active'), 'the default tab is active only')
+  assert.deepEqual(activeView.statusCounts, { active: 2, archived: 0 })
+  assert.deepEqual(activeView.counts, { slang: 0, meme: 1, trigger: 1, term: 0 })
+
+  const archived = await dispatch({}, 'lexiconArchive', { libraryId: library.id, termId: knifeId })
+  assert.equal(archived.libraryId, library.id)
+  assert.equal(archived.termId, knifeId)
+  assert.equal(archived.action, 'archive')
+  assert.equal(archived.term.status, 'archived')
+
+  const afterArchive = await dispatch({}, 'lexiconList', { libraryId: library.id })
+  assert.deepEqual(afterArchive.items.map((item) => item.id), [redId], 'archived rows leave the active tab')
+  assert.deepEqual(afterArchive.statusCounts, { active: 1, archived: 1 }, 'tab counts are computed before status/kind/search filters')
+  assert.deepEqual(afterArchive.counts, { slang: 0, meme: 0, trigger: 1, term: 0 }, 'kind counts follow the rows currently selected')
+
+  const archivedTab = await dispatch({}, 'lexiconList', { libraryId: library.id, status: 'archived' })
+  assert.deepEqual(archivedTab.items.map((item) => item.id), [knifeId])
+  assert.deepEqual(archivedTab.counts, { slang: 0, meme: 1, trigger: 0, term: 0 })
+  assert.deepEqual(archivedTab.statusCounts, { active: 1, archived: 1 })
+
+  const both = await dispatch({}, 'lexiconList', { libraryId: library.id, includeArchived: true })
+  assert.deepEqual(both.items.map((item) => item.id).sort(), [knifeId, redId].sort())
+  assert.equal(both.total, 2)
+  assert.deepEqual(both.statusCounts, { active: 1, archived: 1 })
+
+  const explicitWins = await dispatch({}, 'lexiconList', { libraryId: library.id, includeArchived: true, status: 'active' })
+  assert.deepEqual(explicitWins.items.map((item) => item.id), [redId], 'an explicit status outranks includeArchived')
+
+  // search 默认只搜 active；未激活的 includeArchived 才包含归档；旧的 includePending 没有任何语义。
+  assert.equal((await dispatch({}, 'lexiconSearch', { libraryId: library.id, q: '糖刀' })).items.length, 0)
+  const archivedSearch = await dispatch({}, 'lexiconSearch', { libraryId: library.id, q: '糖刀', includeArchived: true })
+  assert.equal(archivedSearch.items.length, 1)
+  assert.equal(archivedSearch.items[0].status, 'archived')
+  assert.equal((await dispatch({}, 'lexiconSearch', { libraryId: library.id, q: '糖刀', includePending: true })).items.length, 0, 'includePending is gone')
+  assert.equal((await dispatch({}, 'lexiconSearch', { libraryId: library.id, q: '红牌' })).items.length, 1)
+
+  const restored = await dispatch({}, 'lexiconRestore', { libraryId: library.id, termId: knifeId })
+  assert.equal(restored.action, 'restore')
+  assert.equal(restored.termId, knifeId)
+  assert.equal(restored.term.status, 'active')
+  assert.equal((await dispatch({}, 'lexiconList', { libraryId: library.id })).total, 2)
+
+  await assert.rejects(() => dispatch({}, 'lexiconRestore', { libraryId: library.id, termId: knifeId }), /only archived terms can be restored/)
+  await assert.rejects(() => dispatch({}, 'lexiconArchive', { libraryId: library.id, termId: 'lex-nope' }), /does not exist/)
+  await assert.rejects(() => dispatch({}, 'lexiconArchive', { libraryId: library.id }), /termId is required/)
+  await assert.rejects(() => dispatch({}, 'lexiconRestore', { libraryId: library.id }), /termId is required/)
+  // status 只认公开两态：legacy pending / rejected 明确报错，不静默当成“全都要”。
+  for (const status of ['pending', 'rejected', 'deleted']) {
+    await assert.rejects(() => dispatch({}, 'lexiconList', { libraryId: library.id, status }), /unknown lexicon status/)
+  }
+  // 旧方法彻底消失：lexiconReview 不再是 dispatch 的入口。
+  await assert.rejects(() => dispatch({}, 'lexiconReview', { libraryId: library.id, termId: knifeId, action: 'approve' }), /unknown endpoint/)
+})
+
+test('lexiconList never returns pending/rejected tombstones; ordering ties break by id', async () => {
+  const library = state.createLibrary({ name: 'lexicon-tombstones', cwd: path.join(home, 'lexicon-tombstones') })
+  await dispatch({}, 'lexiconAdd', { libraryId: library.id, term: '归档条', kind: 'term', meaning: '会被归档的词' })
+  const archivedView = await dispatch({}, 'lexiconList', { libraryId: library.id })
+  const archivedId = archivedView.items.find((item) => item.term === '归档条').id
+  await dispatch({}, 'lexiconArchive', { libraryId: library.id, termId: archivedId })
+  const stamp = new Date().toISOString()
+  const base = { kind: 'term', meaning: 'legacy/手工数据', usage: '', aliases: [], normalizedAliases: [], examples: [], context: {}, visibility: 'shared', sensitivity: 'normal', source: 'model-proposal', createdAt: stamp, updatedAt: stamp }
+  // 同一时间戳的两条 active + 一条 rejected 墓碑 + 一条 legacy pending：
+  // 列表只出 active/archived，排序在时间戳相同处按 id 稳定兜底。
+  writeLexiconEntries(library.id, {
+    'lex-bbb': { ...base, term: '乙条', normalizedTerm: '乙条', status: 'active' },
+    'lex-aaa': { ...base, term: '甲条', normalizedTerm: '甲条', status: 'active' },
+    'lex-tombstone': { ...base, term: '墓碑词', normalizedTerm: '墓碑词', status: 'rejected', fingerprint: 'deadbeef' },
+    'lex-legacy-pending': { ...base, term: '老待审', normalizedTerm: '老待审', status: 'pending' },
+  })
+  const listed = await dispatch({}, 'lexiconList', { libraryId: library.id, includeArchived: true })
+  assert.deepEqual(listed.items.map((item) => item.term), ['甲条', '乙条', '归档条'], 'ties break by id; only active/archived rows are listed')
+  assert.deepEqual(listed.statusCounts, { active: 2, archived: 1 }, 'tombstones never count toward the tabs')
+  assert.ok(listed.items.every((item) => item.status === 'active' || item.status === 'archived'))
+  const activeOnly = await dispatch({}, 'lexiconList', { libraryId: library.id })
+  assert.deepEqual(activeOnly.items.map((item) => item.term), ['甲条', '乙条'])
+  assert.deepEqual(activeOnly.statusCounts, { active: 2, archived: 1 }, 'tab counts stay stable when the active tab is selected')
+  assert.equal((await dispatch({}, 'lexiconSearch', { libraryId: library.id, q: '墓碑词', includeArchived: true })).items.length, 0)
+  assert.equal((await dispatch({}, 'lexiconSearch', { libraryId: library.id, q: '老待审', includeArchived: true })).items.length, 0)
+  assert.equal((await dispatch({}, 'lexiconSearch', { libraryId: library.id, q: '甲条' })).items.length, 1)
+})
+
+test('importMemories lexicon merge: rejected tombstones are never resurrected, legacy pending follows the migration mapping', async () => {
+  const library = state.createLibrary({ name: 'lexicon-import', cwd: path.join(home, 'lexicon-import') })
+  await dispatch({}, 'lexiconAdd', { libraryId: library.id, term: '目标条', kind: 'term', meaning: '现有 active 释义' })
+  const stamp = new Date().toISOString()
+  const base = { kind: 'term', meaning: 'x', usage: '', aliases: [], normalizedAliases: [], examples: [], context: {}, visibility: 'shared', sensitivity: 'normal', source: 'model-proposal', createdAt: stamp, updatedAt: stamp }
+  writeLexiconEntries(library.id, {
+    'lex-tombstone': { ...base, term: '墓碑词', normalizedTerm: '墓碑词', status: 'rejected', fingerprint: 'deadbeef' },
+  })
+  const memories = [{ id: 'mem-import-anchor', title: 'anchor', content: '让记忆导入有内容可写', status: 'active' }]
+  const report = await dispatch({}, 'importMemories', {
+    libraryId: library.id,
+    memories,
+    lexicon: { version: 1, terms: [
+      { term: '墓碑词', kind: 'term', meaning: '背包里的墓碑，不许复活', status: 'rejected' },
+      { term: '墓碑词', kind: 'term', meaning: '撞上库里的墓碑也不许复活', status: 'active' },
+      { term: '目标条', kind: 'term', meaning: 'legacy 草稿试图覆盖正条', status: 'pending', revisionOf: 'lex-anything' },
+      { term: '老提案', kind: 'term', meaning: 'legacy pending 提案', status: 'pending' },
+      { term: '老草稿', kind: 'term', meaning: 'legacy revision 草稿', status: 'pending', revisionOf: 'lex-missing' },
+      { term: '老敏感红牌', kind: 'trigger', meaning: 'legacy pending 敏感词', status: 'pending' },
+    ] },
+  })
+  assert.equal(report.lexicon.skipped.length, 3, 'two rejected rows and the legacy draft over an active target are skipped')
+  assert.ok(report.lexicon.skipped.every((entry) => /tombstone|rejected|legacy pending draft/.test(entry.reason)))
+  assert.equal(report.lexicon.added, 3)
+  assert.equal(report.lexicon.failed.length, 0)
+
+  const listed = await dispatch({}, 'lexiconList', { libraryId: library.id, includeArchived: true })
+  const byTerm = new Map(listed.items.map((item) => [item.term, item]))
+  assert.equal(byTerm.has('墓碑词'), false, 'a rejected tombstone stays hidden and stays rejected')
+  assert.equal(byTerm.get('目标条').status, 'active', 'the active target keeps its own text')
+  assert.equal(byTerm.get('目标条').meaning, '现有 active 释义')
+  assert.equal(byTerm.get('老提案').status, 'active', 'legacy new proposal → active')
+  assert.equal(byTerm.get('老草稿').status, 'archived', 'legacy revision draft → archived')
+  assert.equal(byTerm.get('老敏感红牌').status, 'archived', 'legacy sensitive proposal → archived')
+  assert.deepEqual(listed.statusCounts, { active: 2, archived: 2 })
+  const raw = JSON.parse(fs.readFileSync(lexiconFile(library.id), 'utf8'))
+  assert.equal(raw.terms['lex-tombstone'].status, 'rejected', 'the tombstone row is untouched')
+  assert.equal(Object.values(raw.terms).some((entry) => entry.term === '墓碑词' && entry.status === 'active'), false)
 })
 
 test('old bookmarks and RPC URLs stay compatible after the package rename', async () => {

@@ -68,6 +68,6 @@ test('the shipped tool surface compiles under the host rules', async () => {
     tools: { register: (tool) => { registered.push(tool.name); return () => {} } },
     logger: { warn: (message) => { throw new Error(`unexpected registration warning: ${message}`) } },
   })
-  assert.equal(registered.length, 10, `registered ${registered.join(', ')}`)
+  assert.equal(registered.length, 13, `registered ${registered.join(', ')}`)
   dispose()
 })
