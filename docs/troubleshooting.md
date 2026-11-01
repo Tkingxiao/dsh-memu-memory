@@ -275,6 +275,18 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **守卫**：`tests/entity-merge.test.mjs`（链接全改指、别名并集与 cap、快照重键与冲突取舍、kind 不同/自指/未知 id 拒绝且不写、prune、suggest 真值表与纯读、RPC payload 形状）；授权矩阵见 `tests/webui-auth.test.mjs`。
 
+### 3.24 某一轮失败之后，整个会话再也不出现锚点/日期/未了之事（S4 注入 → 宿主回合失败）
+
+**症状**：逐回合召回 `<memory-context>` 一直正常，但 `===== memory anchor =====`、`<memory-due>`、`<memory-anniversary>`、`[open loop]`、`<memory-guide>` 从某一轮起**整会话消失**，且库里的日期条目明明还在。真机实测台能直接重现：2026-11-01 那次 provider 配置报错，51 个请求里这五类块全为 0，而 `ctx`/`freshness` 照常。
+
+**落点**：这些块是**一次性投放**的。`ensureUnifiedGuide` 写 `guideRulesKey`，锚点靠 `ANCHOR_SENTINEL` 进 `injectedIds`，日期/纪念日/未了之事拼在同一条首轮消息里，而记账发生在消息交回决策之后、模型调用之前。宿主随后报 `turn/end`（`reason.kind` 为 `error` 或 `aborted`）——**当时插件不看这个事件**，于是那一次失败吃掉了整个会话的首轮内容。压缩路径（`guideLost` / `reinjectPending`）只管 guide 与锚点的重投，救不了 due/anniversary/open loop。
+
+**现在的做法**（1.2.4 起）：注入投放时把"这一轮消费掉了一次性内容"记在 binding 上（`injectionRollback`：hostTurn + 那批 ids + guide 的 rulesKey + 纪念日/复提名单），同时在内存里留下**本轮那几条注入消息的 id**。判据来自宿主 `agent-loop` 的 `step()`：它在第一次尝试里就把 `decision.messages` 逐条 `append('user/message')` 进转录，**之后**才去连模型——所以插件只要看见自己那条 id 的 `user/message` 事件，就说明这一轮真的发出去了。`turn/end` 到达时：没见过实证且 `kind` 是 `error`/`aborted` → `rollbackInjectionForTurn` 只撤回**那一轮**的记账，下一轮重新投；见过实证或回合正常收尾 → `consumeInjectionRollback` 删掉记录、记账保住，之后一条迟到的旧事件也撤不动它。监听段排在最前且自带 try，不会被别的监听步骤抛错带走；回滚会写一条 `kind:'system'` 的活动日志与一条 warn，不静默。
+
+**边界（重要，别当成万能药）**：这条链只对"请求根本没发出去"那类失败有意义。实测与源码都对得上：provider 配置无效（`INVALID_CONFIG`）在 `prepareRequest` 里抛，那时转录连用户消息都不留——正是需要撤回的情形；而**请求已发出、上游 500 或流式中断**时注入的消息已经在转录里（后续请求会原样重发），撤回只会让下一轮凭空多出第二条规则消息和第二个锚点，所以不撤。实证只在内存里：进程恰好在回合中间重启就查不到证据，此时**宁可漏撤一次也不误投**。逐回合召回本来就不依赖一次性记账，不受影响。
+
+**守卫**：`tests/injection-rollback.test.mjs`（6 条）——失败回合后 guide/锚点/召回 id 全部撤回且下一轮重新投出、`completed` 回合不重复投、`completed` 会消费记录所以迟到的旧失败事件撤不动、注入消息已进转录时 500 类失败保住记账、投放前取消同样撤回、当日纪念日与复提时钟一起撤回。真机侧的复现路径见 `docs/env-and-commands.md` §9.6：让 provider 报 `INVALID_CONFIG` 跑一轮，再看转录与 binding 是否一致。
+
 ---
 
 
@@ -308,6 +320,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.21 | 日期到点没唤醒 | `tests/salient-wake.test.mjs`；活动日志 `kind:'wake'` 的 `detail.stage`（service/timezone/index/list/cleanup/create/pass）就是排查线，`state.json` 里先确认 `salientWake` 真的存下了。 |
 | §3.22 | 时效提示没出现 | `tests/freshness.test.mjs` + `tests/injection-chain.test.mjs`；前置条件（真有召回、开关、预算装得下）少一个就不出，不是 bug。 |
 | §3.23 | 实体合并 / 担心丢记忆 | `tests/entity-merge.test.mjs`（链接改指、别名 cap、快照冲突取舍、拒绝形状）；合并只改指向，正文与条数不变。 |
+| §3.24 | 失败一轮后锚点/日期再不出现 | `tests/injection-rollback.test.mjs`（6 条：撤回+重投、completed 不重复、迟到事件撤不动、已进转录的 500 类失败不误撤、投放前取消撤回、纪念日复提时钟一起撤）。 |
 
 ## 附录 A · 模块地图（原 §2.1）
 

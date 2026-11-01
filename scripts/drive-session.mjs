@@ -27,7 +27,7 @@
  *     "type": "client-request",
  *     "rpcId": "<connection correlation id>",
  *     "method": "session/prompt",
- *     "payload": { "args": { <SessionPromptRequest> } }
+ *     "payload": { "args": { "request": <SessionPromptRequest> } }
  *   }
  *   ->
  *   { "type": "server-response", "rpcId": "<same>", "result": { "ok": true, "value": { "accepted": true } } }
@@ -614,15 +614,25 @@ function joinUrl(base, suffix) {
   return String(base).replace(/\/+$/, '') + suffix
 }
 
-async function sendPrompt({ base, request, timeoutMs, cookie }) {
-  const url = joinUrl(base, '/api/session/prompt')
-  const rpcId = crypto.randomUUID()
-  const envelope = {
+/**
+ * The Connection RPC carrier wraps each Remote method parameter by **name**, so a
+ * single-argument remote must go out as `{ args: { request: <SessionPromptRequest> } }`.
+ * Sending the request fields directly is rejected before the host ever sees them
+ * (`gateway/arguments-invalid: missing "request"`) — which is what this file did until it
+ * actually met a real host.
+ */
+export function buildPromptEnvelope(request, rpcId = crypto.randomUUID()) {
+  return {
     type: 'client-request',
     rpcId,
     method: 'session/prompt',
-    payload: { args: request },
+    payload: { args: { request } },
   }
+}
+
+async function sendPrompt({ base, request, timeoutMs, cookie }) {
+  const url = joinUrl(base, '/api/session/prompt')
+  const envelope = buildPromptEnvelope(request)
   const headers = { 'content-type': 'application/json' }
   if (cookie) headers.cookie = cookie
   let response
@@ -649,7 +659,7 @@ async function sendPrompt({ base, request, timeoutMs, cookie }) {
   } catch {
     throw new Error('response is not JSON (expected a Connection RPC envelope)')
   }
-  if (!body || body.type !== 'server-response' || body.rpcId !== rpcId) {
+  if (!body || body.type !== 'server-response' || body.rpcId !== envelope.rpcId) {
     throw new Error('response is not the matching Connection RPC envelope')
   }
   if (!body.result || body.result.ok !== true) {
@@ -659,7 +669,7 @@ async function sendPrompt({ base, request, timeoutMs, cookie }) {
   if (body.result.value?.accepted !== true) {
     throw new Error('session/prompt did not return { accepted: true }')
   }
-  return { rpcId }
+  return { rpcId: envelope.rpcId }
 }
 
 function isLoopbackHost(hostname) {
@@ -848,6 +858,7 @@ export {
   promptClaimIndex,
   readSessionEvents,
   scanZstdFrames,
+  sendPrompt,
   textOfPromptItem,
   waitForTurn,
 }

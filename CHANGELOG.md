@@ -1,5 +1,28 @@
 # 更新日志 / Changelog
 
+## [1.2.4] - 2026-11-01
+
+> 把 1.2.3 交付的注入实测台补上**离线可复现**的那一半，并修掉真机那一跑抓出的第一个缺口（§3.24）。不加依赖、不加构建步骤。
+
+### 注入离线模拟器
+
+- 新增 `scripts/simulate-injection.mjs`（`npm run simulate:injection`，EVALUATION ONLY）：挂真实的 `registerInjection('agent/pre-step')`，在临时 `DSH_MEMU_HOME` 里播种一份「每种可注入块各有一条」的库——明天/今天/已过期的带日期未了之事、年度纪念日、含时效词的条目、四个月前的旧条目、近似重复的主题对——跑 N 轮，把每次组装好的请求打给只监听 127.0.0.1 的伪端点，产出 `report.md` / `mock-llm.jsonl` / `settings-snapshot.json` 与一行 JSON 摘要。
+- 转录是**累积**的（已发过的插件消息留在上下文里，和宿主一样）。这不是省事：`ensureUnifiedGuide` 会检查 `decision.messages` 里有没有当前规则的 guide，历史里没有就每轮重投，`guide` 计数会变成 50/50 而不是 1/50——那种数只证明驱动写错了。
+- 默认 `randomCueChance=0`（出货默认 0.02），让跑数可复现；`--cue` 可还原。`--turns/--home/--out/--port/--json`；退出码 `0` / `2` 用法错 / `3` **注入链路自己报了 warn**（模拟器把 warn 当失败，不当噪声）。
+- 覆盖范围写死在文档与脚本头里：它量的是**插件决定了什么**，不含宿主的折叠与真实模型的 tool 轮；与真机（`scripts/drive-session.mjs`）对不上时以真机为准。
+- 新增 `tests/simulate-injection.test.mjs`（3 条）：钉的是量具属性而非某次计数——guide 只在首轮一次、锚点只在首轮一次、标题卡 `body lines` 必须为 0、JSONL 里不许出现记忆正文或标题词、设置快照带 C/D 的读数口径、用法错误退码 2。
+- 第一批离线基线（2026-11-01，50 轮，设置见快照：`autoInject=smart`、`dedupeTurns=16`、`turnTokens=800`、`injectionTotalTokens=2000`、`freshnessHint=on`、`freshnessDays=30`、`openLoopRemindDays=7`、`salientWake=off`）：注入 **18/50 轮（36%）**；按块的 Δ 计数 `guide 1 / anchor 1 / due 1 / anniversary 1 / texture 1 / openLoop 1 / context 18 / freshness 11`，`media / lexicon / cue / replay` 为 0（无附件、词典为空、cue 概率置 0、没有压缩事件）；标题卡 `body lines` 全部 0；0 warn；整场只推过 16 个不同 id。32 个 0 注入轮归因到 `dedupeTurns=16` 的窗口，这与报告的“本轮没有新块”一致，但**离线报告本身证明不了这一点**——真机要靠 session log 对账坐实。
+- `docs/env-and-commands.md` §9.6 改为「三件工具各量什么、覆盖不到什么」的分工表，并记下真机前提：provider 配置在 `~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `llm-pi-ai`，`- id/config` 是**整份替换不是合并**，改完要重启该 profile 的宿主。
+- **真机 50 轮跑了（2026-11-01，隔离实例）**：`DSH_HOME` 用 launcher 自己的 home，profile 只加一个 `dsh-memu-memory` junction，provider 指向 8090 的伪端点，`dsh --profile … --port 0` 打印的 token 换 cookie 后由 `drive-session` 灌轮。读数（51 请求 / 2 会话指纹）：`guide`、`anchor`、`due`、`anniversary`、`openLoop`、`texture` **各 1 次**（都只在首轮），`ctx` Δ **27** 跨 **26/50 轮（52%）**，`freshness` Δ **18** 跨 17 轮，`media/lexicon/cue/replay` 为 0；标题卡 `bodyLines` 全 0；12 条播种条目全部浮现过。离线对照同码 50 轮：18/50 轮、`ctx` 18、`freshness` 11——方向一致，绝对值不同，离线数只读作"插件的决策"。
+- 真机这一跑顺带抓出 **`drive-session.mjs` 的两个传输层 bug**（此前没有任何测试碰过这个脚本）：① RPC carrier 按**参数名**包参数，脚本却把请求字段直接铺在 `payload.args` 上，宿主在到达业务代码前就拒（`gateway/arguments-invalid: missing "request"`）；② 修 ① 时删掉了局部变量却留下 `return { rpcId }` 引用。现在 `buildPromptEnvelope()` 明确按 `{args:{request}}` 发，并新增 `tests/drive-session.test.mjs`（7 条）：envelope 形状、每轮 id 唯一、完成只认转录里的 `turn/end`、路径段编码、text-file 各形状，以及用 loopback 假网关跑 `sendPrompt`（校验请求体、cookie 透传、相关 id 不符要报错、401 要提示 `--cookie-file`）。
+- 顺手修好一个装机事实：`~/.dsh/profiles/memutest` 的 bundle 名还指着改名前的 `dsh-memu`（链接已悬空 → 该 profile 起来根本不带插件），改为 `dsh-memu-memory` 并重建链接，同时给它一份只指伪端点的 provider 清单（非推理模型的 `reasoningEfforts` 必须写 `false`，`{off: null}` 会被判 `INVALID_CONFIG`）。这属于用户机器上的 profile 配置，不在本仓库版本内。
+
+### 失败回合的注入记账撤回（§3.24）
+
+- **修掉真机跑出来的第一个缺口（§3.24）**：宿主会把失败的整轮回滚——真机转录证明连用户消息都不留——而插件在"消息交回决策"之后就记了账，于是 `guide`、锚点、当日纪念日、复提时钟这些**一次性内容再也不投**，整段对话只是"记忆像没接上"、一句错都不报（那 51 个请求里 guide/anchor 一次都没有，逐回合召回与时效提示照常，binding 却写着"已投放"）。现在投放时把该轮消费的东西记在 `injectionRollback` 上，并在内存里留下本轮注入消息的 id；宿主 `step()` 是**先把消息追加进转录、再去连模型**的，所以 `turn/end` 到达时"见过这条消息的 `user/message` 事件"就是它已经在转录里的实证：没见过实证且 `kind` 为 `error`/`aborted` 才撤回这一轮的记账（`lib/state.js` 的 `recordInjectionRollback` / `rollbackInjectionForTurn`），下一轮重新投；见过实证或回合正常收尾则消费掉记录、记账保住，迟到的旧事件撤不动它。监听段排在最前并自带 try，不会被别的步骤抛错带走，回滚写活动日志与一条 warn。**边界**：只有"请求根本没发出去"那类失败需要它——上游 500、流式中断时消息已经在转录里，撤回只会凭空多出第二个锚点，所以不撤；实证只在内存里，进程恰好在回合中间重启就宁可漏撤也不误投。守卫：`tests/injection-rollback.test.mjs`（6 条）。
+
+- 除 §3.24 那条撤回链路外不改记忆行为；不加依赖、不加构建步骤。门禁（2026-11-01 实测）`npm test` **1293 tests / 1291 pass / 0 fail / 2 skipped**、`acceptance-local` **50/50**、`npm run check` 全绿。
+
 ## [1.2.3] - 2026-11-01
 
 > `todolist.txt` 六条设想的施工版本（工单 A–F）。行为变化集中在注入与整理两侧，都不删记忆；工单 E 默认关闭，等真机验收。
