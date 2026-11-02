@@ -6,6 +6,7 @@ import {
   PROVIDER_ORDER,
   getEmbeddingCatalog,
   getEmbeddingModel,
+  prefixesRequireRole,
   profileFingerprint,
   readOnnxGraphHeader,
   resolveEmbeddingSources,
@@ -61,10 +62,77 @@ test('目录是冻结的只读快照，未知 id 返回 null 而不是默认模�
   assert.ok(Object.isFrozen(catalog))
   assert.ok(Object.isFrozen(catalog[0]))
   assert.throws(() => { catalog.push({ id: 'x' }) }, TypeError)
-  assert.deepEqual(catalog.map(entry => entry.id), [BGE, 'all-minilm-l6-v2-int8', 'multilingual-e5-small'])
+  assert.deepEqual(catalog.map(entry => entry.id), [
+    BGE, 'all-minilm-l6-v2-int8', 'multilingual-e5-small', 'qwen3-embedding-0.6b-int8', 'qwen3-embedding-0.6b-q4f16',
+  ])
   assert.equal(getEmbeddingModel('nope'), null)
   assert.equal(getEmbeddingModel(undefined), null)
   assert.equal(getEmbeddingModel('../../etc/passwd'), null)
+})
+
+test('三个模型的向量空间指纹钉死：改目录必须是有意识地来这里更新', () => {
+  assert.deepEqual(
+    Object.fromEntries(getEmbeddingCatalog().map(entry => [entry.id, entry.profileFingerprint])),
+    {
+      'bge-small-zh-v1.5-int8': '47511436d7468fa53b17dbd46d5dfd1454dbca9a70f34dc016c3af0a9decd748',
+      'all-minilm-l6-v2-int8': '2ede97e232225e6e6a14d9b0ef870fe8cc5ba5ac6273ae9a6da8263c314b4082',
+      'multilingual-e5-small': '4826773bf4a498168decd66edcef48e66befb982c3c60405a1416fb3fd0c5fcb',
+      'qwen3-embedding-0.6b-int8': '0934c5b89781cea545ba40f87b1bc0a9e9eb5a95cdde20390953f3642bd386bb',
+      'qwen3-embedding-0.6b-q4f16': 'a987005b6c033a3e2fdb7502836d73d6376bf8c15ea3c10be60ea0ca63a0a030',
+    },
+  )
+})
+
+// int8 与 int4 是两种量化、两个向量空间（quantization 进指纹），所以必须是两张卡片、
+// 两份 DB，而不是一个条目挂两个图文件让用户以为可以混用。
+test('Qwen3 的两张卡片是两个不同的向量空间', () => {
+  const int8 = getEmbeddingModel('qwen3-embedding-0.6b-int8')
+  const q4 = getEmbeddingModel('qwen3-embedding-0.6b-q4f16')
+  assert.notEqual(int8.profileFingerprint, q4.profileFingerprint)
+  assert.equal(int8.quantization.weights, 'qint8')
+  assert.equal(int8.quantization.scheme, 'dynamic-per-tensor')
+  assert.equal(q4.quantization.weights, 'uint4-nbits')
+  assert.notEqual(q4.quantization.scheme, int8.quantization.scheme)
+  for (const entry of [int8, q4]) {
+    assert.equal(entry.availability, 'available', entry.id)
+    assert.equal(entry.pooling, 'last', entry.id)
+    assert.equal(entry.dimension, 1024, entry.id)
+    assert.equal(entry.graph.opset, 21, entry.id)
+    // 因果 LM：只有 input_ids + attention_mask，没有 token_type_ids
+    assert.deepEqual(entry.graph.inputs.map(io => io.name), ['input_ids', 'attention_mask'], entry.id)
+    assert.deepEqual(entry.graph.outputs[0].shape, [1, 'sequence_length', 1024], entry.id)
+    // 32k 上下文的制品按 4096 分窗：刻意的延迟策略（不得超过制品上限，那条由下载器的
+    // verifyStagedArtifacts 把），窗口本身进指纹所以可复现。
+    assert.equal(entry.maxTokens, 4096, entry.id)
+    assert.ok(validateEmbeddingManifest(entry).errors.length === 0, entry.id)
+  }
+  assert.equal(int8.graph.outputs[0].dtype, 'float32')
+  assert.equal(q4.graph.outputs[0].dtype, 'float16')
+  assert.equal(int8.tier, 'preferred')
+  assert.equal(q4.tier, 'optional')
+})
+
+// Qwen3 的导出仓库在 ModelScope 上没有对应条目，所以它只能走 huggingface 系：
+// 默认镜像站，源站作第二顺位；两者 pin 同一个 commit，落盘都按同一份 sha256 校。
+test('Qwen3 卡片的默认来源是 hf-mirror，源站同 commit 可选', () => {
+  for (const id of ['qwen3-embedding-0.6b-int8', 'qwen3-embedding-0.6b-q4f16']) {
+    const resolved = resolveEmbeddingSources(id)
+    assert.deepEqual(resolved.sources.map(source => source.provider), ['hf-mirror', 'huggingface'], id)
+    assert.equal(resolved.primary.provider, 'hf-mirror', id + ' 默认必须是镜像站')
+    assert.deepEqual(resolved.skipped.map(item => item.provider), ['modelscope'], id)
+    assert.equal(resolved.skipped[0].reason, 'not-mapped', id)
+    const revision = getEmbeddingModel(id).sources['hf-mirror'].revision
+    assert.equal(getEmbeddingModel(id).sources.huggingface.revision, revision, id + ' 两个来源必须同 commit')
+    const mirrorGraph = resolved.primary.files.find(file => file.role === 'graph')
+    const originGraph = resolveEmbeddingSources(id, { providers: ['huggingface'] }).primary.files.find(file => file.role === 'graph')
+    assert.ok(mirrorGraph.url.startsWith('https://hf-mirror.com/n24q02m/'), mirrorGraph.url)
+    assert.ok(originGraph.url.startsWith('https://huggingface.co/n24q02m/'), originGraph.url)
+    assert.equal(mirrorGraph.sha256, originGraph.sha256, id)
+    // 见证制品来自基座仓库，且两个 provider 都合法（否则换源会被 origin 规则整条封掉）
+    const pooling = resolveEmbeddingSources(id, { providers: ['huggingface'] }).primary.files.find(file => file.path === '1_Pooling/config.json')
+    assert.ok(pooling.url.includes('/Qwen/Qwen3-Embedding-0.6B/'), pooling.url)
+    assert.equal(validateEmbeddingManifest(getEmbeddingModel(id)).warnings.filter(item => item.code === 'SOURCE_REVISION_UNPINNED').length, 0, id)
+  }
 })
 
 test('首个 BGE 条目带着已核实的固定 commit、逐文件字节数与 SHA-256', () => {
@@ -105,17 +173,57 @@ test('已核实的 BGE manifest 通过校验，但把未核实项如实标成警
   assert.equal(codes.filter(code => code === 'SOURCE_REVISION_UNPINNED').length, 2)
 })
 
-test('未核实模型是 pending：没有文件、没有哈希、理由齐全', () => {
+test('MiniLM 与 e5 已核实：制品齐全、清单合法、来源可下载', () => {
   for (const id of ['all-minilm-l6-v2-int8', 'multilingual-e5-small']) {
     const entry = getEmbeddingModel(id)
-    assert.equal(entry.availability, 'pending')
-    assert.deepEqual(entry.files, [])
-    assert.equal(entry.totalBytes, 0)
-    assert.ok(entry.pendingReasons.length >= 2)
+    assert.equal(entry.availability, 'available', id)
+    assert.deepEqual(entry.pendingReasons, [], id)
+    assert.equal(entry.verification.status, 'verified', id)
+    assert.match(entry.sources.modelscope.revision, /^[0-9a-f]{40}$/, id + ' revision')
+    assert.equal(entry.dimension, 384, id)
+    assert.equal(entry.maxTokens, 512, id)
+    assert.equal(entry.pooling, 'mean', id)
+    assert.ok(entry.files.length >= 8, id + ' files')
+    assert.ok(entry.totalBytes > 0, id)
+    assert.equal(entry.graph.outputs[0].shape[2], entry.dimension, id)
     const report = validateEmbeddingManifest(entry)
-    assert.equal(report.ok, true, id + ' pending 条目本身应结构合法')
-    assert.equal(report.errors.length, 0)
+    assert.deepEqual(report.errors.map(item => item.code), [], id + ' manifest must be installable')
+    const resolved = resolveEmbeddingSources(entry)
+    assert.equal(resolved.primary.provider, 'modelscope', id)
+    assert.equal(resolved.primary.files.length, entry.files.length, id)
+    // 见证制品（官方仓库的 1_Pooling）必须来自另一个 repo+revision，而不是冒充导出仓库
+    const pooling = resolved.primary.files.find(file => file.path === '1_Pooling/config.json')
+    assert.ok(pooling, id + ' needs a pooling witness')
+    assert.notEqual(pooling.repo, entry.sources.modelscope.repo, id)
   }
+})
+
+test('只有非对称前缀的模型需要角色通道，对称前缀的模型不需要', () => {
+  assert.equal(prefixesRequireRole(getEmbeddingModel('bge-small-zh-v1.5-int8')), false)
+  assert.equal(prefixesRequireRole(getEmbeddingModel('all-minilm-l6-v2-int8')), false)
+  assert.equal(prefixesRequireRole(getEmbeddingModel('multilingual-e5-small')), true)
+  // 这条要求必须对用户可见：校验器把它列成警告，而不是静默地把模型标成可用
+  const codes = validateEmbeddingManifest(getEmbeddingModel('multilingual-e5-small')).warnings.map(item => item.code)
+  assert.ok(codes.includes('PREFIX_ASYMMETRIC'))
+  assert.equal(validateEmbeddingManifest(getEmbeddingModel('all-minilm-l6-v2-int8')).warnings
+    .some(item => item.code === 'PREFIX_ASYMMETRIC'), false)
+})
+
+test('未核实的目录条目依然被挡住：没有文件、没有哈希、理由齐全', () => {
+  const pending = clone(getEmbeddingModel('all-minilm-l6-v2-int8'))
+  pending.availability = 'pending'
+  pending.pendingReasons = ['制品未核实']
+  pending.files = []
+  pending.totalBytes = 0
+  pending.verification = { ...pending.verification, status: 'unverified' }
+  delete pending.profileFingerprint
+  const withFingerprint = { ...pending, profileFingerprint: profileFingerprint(pending) }
+  const report = validateEmbeddingManifest(withFingerprint)
+  assert.equal(report.ok, true, 'pending 条目本身结构合法')
+  assert.equal(report.errors.length, 0)
+  // pending 的原因必须写出来，不能只说「不可用」
+  const noReason = { ...withFingerprint, pendingReasons: [] }
+  assert.ok(validateEmbeddingManifest(noReason).errors.some(item => item.code === 'PENDING_REASON_MISSING'))
 })
 
 test('manifest 校验会拒绝伪造/缺失的制品元数据', () => {

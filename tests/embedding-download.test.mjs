@@ -147,9 +147,19 @@ test('没有明确确认就绝不下模型，也不发任何请求', async () =>
 
 test('pending 模型与未知 id 都被拒绝，且不会联网', async () => {
   const { entry, payloads } = fixtureManifest()
+  const pending = {
+    ...entry,
+    id: 'fixture-pending-model',
+    availability: 'pending',
+    files: [],
+    totalBytes: 0,
+    pendingReasons: ['制品未核实：没有可比对的 bytes/sha256'],
+    verification: { ...entry.verification, status: 'unverified' },
+  }
+  pending.profileFingerprint = profileFingerprint(pending)
   const { fetchImpl, calls } = makeFetch(entry, payloads)
-  const { manager } = managerFor(entry, fetchImpl)
-  await assert.rejects(manager.download('all-minilm-l6-v2-int8', { confirmed: true }), error => {
+  const { manager } = managerFor(pending, fetchImpl)
+  await assert.rejects(manager.download('fixture-pending-model', { confirmed: true }), error => {
     assert.equal(error.code, 'EMBEDDING_MODEL_UNAVAILABLE')
     assert.ok(error.pendingReasons.length > 0)
     return true
@@ -157,6 +167,91 @@ test('pending 模型与未知 id 都被拒绝，且不会联网', async () => {
   await assert.rejects(manager.download('does-not-exist', { confirmed: true }), error => error.code === 'EMBEDDING_MODEL_UNKNOWN')
   assert.equal(calls.length, 0)
   assert.equal(manager.getStatus('does-not-exist').state, 'unknown')
+})
+
+// hf-mirror 对小文件用 chunked 传输（不发 content-length）。把「头缺失」当成 0 字节会
+// 让每一个小文件都被误判成大小不符——真实装 Qwen3 时踩到的就是这个。
+test('来源不发 content-length 时按下落的实际字节判断，不当成 0', async () => {
+  const { entry, payloads } = fixtureManifest()
+  const { fetchImpl } = makeFetch(entry, payloads, { responseFor: filePath => (filePath === 'config.json' ? { contentLength: null } : {}) })
+  const { manager } = managerFor(entry, fetchImpl)
+  const status = await manager.download(entry.id, { confirmed: true })
+  assert.equal(status.state, 'installed')
+  assert.equal(status.installed, true)
+})
+
+// 多来源条目（Qwen3 卡片就是 hf-mirror + huggingface 同一个 commit）：默认取目录顺序里
+// 第一个，显式选源就只能用那一个，失败也不许回退到另一个源去下载。
+test('显式选源只走那一个 provider，不回退到默认源', async () => {
+  const { entry, payloads } = fixtureManifest()
+  const mirrored = { ...entry, sources: {
+    'hf-mirror': { repo: 'fixture/tiny', revision: REVISION },
+    huggingface: { repo: 'fixture/tiny', revision: REVISION },
+  } }
+  const routes = new Map()
+  for (const provider of ['hf-mirror', 'huggingface']) {
+    for (const file of resolveEmbeddingSources(mirrored, { providers: [provider] }).primary.files) routes.set(file.url, { provider, path: file.path })
+  }
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    calls.push(url)
+    const route = routes.get(url)
+    if (!route) return { ok: false, status: 404, headers: { get: () => null }, body: null }
+    return responseFor(payloads[route.path], {})
+  }
+  const { manager } = managerFor(mirrored, fetchImpl)
+  const byDefault = await manager.download(mirrored.id, { confirmed: true })
+  assert.equal(byDefault.provider, 'hf-mirror', '默认必须是镜像站')
+  assert.ok(calls[0].startsWith('https://hf-mirror.com/'), calls[0])
+
+  const { root } = managerFor(mirrored, fetchImpl)
+  const second = createEmbeddingDownloadManager({ root, catalog: [mirrored], fetchImpl })
+  const chosen = await second.download(mirrored.id, { confirmed: true, provider: 'huggingface' })
+  assert.equal(chosen.provider, 'huggingface')
+  assert.ok(calls.some(url => url.startsWith('https://huggingface.co/')), '选源后要真的打到源站')
+  // 不存在的 provider 与「存在但这个条目没固定」是两种错，都要如实分开
+  await assert.rejects(second.download(mirrored.id, { confirmed: true, provider: 'ollama' }), error => error.code === 'EMBEDDING_PROVIDER_UNKNOWN')
+  await assert.rejects(second.download(mirrored.id, { confirmed: true, provider: 'modelscope' }), error => {
+    assert.equal(error.code, 'EMBEDDING_SOURCE_UNAVAILABLE')
+    assert.ok(String(error.message).includes('on modelscope'), error.message)
+    return true
+  })
+  // 换源之后默认源仍然可用（不许把条目卡在唯一来源上）
+  const third = createEmbeddingDownloadManager({ root, catalog: [mirrored], fetchImpl })
+  assert.equal((await third.download(mirrored.id, { confirmed: true })).provider, 'hf-mirror')
+})
+
+test('verifyStagedArtifacts 核对 last-token pooling、float16 输出与窗口上限', async () => {
+  const dir = fs.mkdtempSync(path.join(scratch, 'last-'))
+  const graph = tinyOnnxGraph(8)
+  fs.mkdirSync(path.join(dir, '1_Pooling'), { recursive: true })
+  const base = {
+    id: 'fixture-last', dimension: 8, maxTokens: 32, pooling: 'last', normalization: 'l2',
+    graph: { path: 'onnx/tiny.onnx', opset: 11, inputs: [
+      { name: 'input_ids', dtype: 'int64' }, { name: 'attention_mask', dtype: 'int64' }, { name: 'token_type_ids', dtype: 'int64' },
+    ], outputs: [{ name: 'last_hidden_state', dtype: 'float32', shape: ['batch_size', 'sequence_length', 8] }] },
+    files: [
+      { path: 'config.json', role: 'config' },
+      { path: 'onnx/tiny.onnx', role: 'graph' },
+      { path: '1_Pooling/config.json', role: 'pooling-config' },
+    ],
+  }
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ hidden_size: 8, max_position_embeddings: 32 }), 'utf8')
+  fs.mkdirSync(path.join(dir, 'onnx'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'onnx/tiny.onnx'), graph)
+  fs.writeFileSync(path.join(dir, '1_Pooling', 'config.json'), JSON.stringify({ word_embedding_dimension: 8, pooling_mode_lasttoken: true }), 'utf8')
+  const ok = await verifyStagedArtifacts({ entry: base, dir })
+  assert.ok(ok.checks.includes('pooling=last'), JSON.stringify(ok.checks))
+
+  fs.writeFileSync(path.join(dir, '1_Pooling', 'config.json'), JSON.stringify({ word_embedding_dimension: 8, pooling_mode_mean_tokens: true }), 'utf8')
+  await assert.rejects(verifyStagedArtifacts({ entry: base, dir }), /not last-token pooling/)
+  fs.writeFileSync(path.join(dir, '1_Pooling', 'config.json'), JSON.stringify({ word_embedding_dimension: 8, pooling_mode_lasttoken: true }), 'utf8')
+
+  // 窗口可以比制品小（刻意策略），但不能比制品大（必炸）
+  await assert.rejects(verifyStagedArtifacts({ entry: { ...base, maxTokens: 64 }, dir }), /exceeds the artifact's max_position_embeddings/)
+  // float16 图输出是可以接受的，但声明必须与图一致
+  const fp16 = { ...base, files: base.files.map(file => (file.role === 'graph' ? file : file)), graph: { ...base.graph, outputs: [{ name: 'last_hidden_state', dtype: 'float16', shape: ['batch_size', 'sequence_length', 8] }] } }
+  await assert.rejects(verifyStagedArtifacts({ entry: fp16, dir }), /output dtype/)
 })
 
 test('校验通过的制品原子安装：staging 清空、installed.json 记录 active:false', async () => {

@@ -1,8 +1,63 @@
 # 更新日志 / Changelog
 
-## [1.2.4] - 2026-11-01
+## [1.2.4] - 2026-11-02
 
-> 把 1.2.3 交付的注入实测台补上**离线可复现**的那一半，并修掉真机那一跑抓出的第一个缺口（§3.24）。不加依赖、不加构建步骤。
+> 一整版「量具 + 适配」：注入实测台补上离线可复现的那一半并修掉真机抓出的 §3.24 缺口；本地向量从 1 个模型扩到 5 个（新增 MiniLM、e5、Qwen3 int8/q4f16 两张卡），补上非对称前缀需要的角色通道与下载来源选择；整理超时改为按转录规模推预算；整理记录里的失败行终于像失败。不加依赖、不加构建步骤；`bge-small-zh-v1.5-int8` 的 manifest 一个字节未改。
+
+### 两条目录条目从 pending 转为可用
+
+- `all-minilm-l6-v2-int8`（23.9 MB，384 维，mean + L2）与 `multilingual-e5-small`（135.4 MB，384 维，mean + L2）现在带着固定 commit、逐文件 `bytes/sha256`、图描述符（opset 11 / 3 个 int64 输入 / `last_hidden_state float32[batch,seq,384]` / 自包含）、量化事实与许可证来源。这三条仍只固定 ModelScope 的 revision（2026-10-30 的核实口径：当时 `huggingface.co` 超时、`hf-mirror` 没取到可核对的固定 commit，所以其余来源保持「不生成 URL」）。2026-11-02 复查发现 **hf-mirror 其实可用**（它重定向到自己的 resolve-cache，不经过 huggingface.co，两条 Qwen3 卡片就走它），但没有回填到这三条：换源不是免费的，要重新逐字节核对一遍 hash，而那三条的 ModelScope 源本来就在正常工作。
+- 每条事实都有出处，不写推测值：pooling 取自官方仓库的 `1_Pooling/config.json`（作为 `origin` 固定的见证制品，不冒充导出仓库），`mean_tokens=true` 且 `word_embedding_dimension=384`；量化方案对两个图都做了结构核验——`MatMulInteger` + `DynamicQuantizeLinear`，且 MiniLM 39/39、e5 75/75 个 int8/uint8 二维权重都存在长度=输出通道数的一维 float32 scale（标量 scale=0），即 per-channel 权重 + 动态激活量化；e5 另有仓库自带的 `quant_config.json` 佐证 `reduce_range=true`。
+- `maxTokens` 按制品本身取 512（`config.max_position_embeddings`、`tokenizer_config.model_max_length`、图输出维度三处一致），不按 sentence-transformers wrapper 的 `max_seq_length=256` 收窄——那只是 SB 的窗口，写进目录会把分窗口径变成模型属性。参数量同样来自图内 initializer 元素计数（22,565,376 / 117,505,920），不是模型页上的约数。
+- 三条 `runtime` 事实抽出成共享的 `PINNED_ONNX_RUNTIME`：三个模型 pin 的是同一棵受管 ORT 树，复制三遍只会让哪天改漏一份。改动前后 `bge-small-zh-v1.5-int8` 的 `profileFingerprint` 与 `manifestDigest` 逐字节相同（`47511436…` / `c18f4719…`），已装好的 BGE 库不会因此对不上号。
+
+### 非对称前缀需要角色通道，而不是猜（§14.4 / §14.8）
+
+- worker 此前完全不施加 `manifest.prefixes`，所以 e5 这类模型即使装了也会用错读法。现在前缀由 worker 按请求角色施加，角色走 model 字符串后缀（`:query` / `:passage`）：MemU 的信封只有 `{model, input, encoding_format}`，没有 role 字段，而**知道这条文本是查询还是被存进的条目的一方只有启动子进程的插件**，所以 `retrieve` 注入 `:query`、`commit` / `list-files` 注入 `:passage`。
+- 裸 model id 对非对称 profile 一律 400 `LOCAL_VECTOR_ROLE_REQUIRED`，不"默认成文档"：默认错一边就得到一个指纹声称不是这个空间的向量空间，而 HTTP 还是 200。是否要角色由 `prefixesRequireRole(entry)`（即 `prefixes.query !== prefixes.document`）派生，前缀本身在指纹里，因此不引入第二个可配置开关。BGE/MiniLM 两侧同前缀，行为与请求字节完全不变。
+- `prefixesRequireRole` 只从前缀派生；`/health` 现在报告 `rolesRequired`，worker endpoint 也把它带回给调用方，`healthCheckLocalVector` 用文档角色探测。
+- 实测过再写进目录：`query:` 与 `passage:` 下同一句话的余弦 0.9811（确实是两个向量），前缀策略 A/B（同一份草稿）asym R@1 0.6667 / MRR 0.8182 / 分离度 0.1230，sym-passage 0.6364 / 0.8030 / 0.0867，sym-query 0.6667 / 0.8157 / 0.1155，无前缀 0.6364 / 0.8030 / 0.1139。差异只有一个样本量级，所以结论是"对称前缀不是不能活，而是没有理由用一个更差的"，不是"非对称被证明显著更好"。
+- 真机端到端（隔离 home + junction 复用已装引擎与制品，不碰真实记忆库）：`MiniLM(g1) → e5(g2) → BGE(g3)` 三次切换各 6/6 条重建、0 失败，库文件名带各自指纹+代际（`global.<fp8>.g<n>.sqlite3`），切换后中英查询均召回，回滚回到上一空间。这一跑同时坐实了 MemU 会把带后缀的 model 原样回传（`memu/embedding/backends/openai.py` 发 `{"model": embed_model, "input": inputs}`）。
+
+### 守卫与界面
+
+- `tests/embedding-catalog.test.mjs`：三条目的指纹钉死（改目录必须是有意识地来这里更新）；新增"两条已核实条目"与"只有非对称前缀需要角色通道"两组断言；pending 的口径改用合成条目验证。
+- 新增 `tests/local-embedding-env.test.mjs`（3 条）：角色→model 字符串的映射、对称模型逐字节不变、strict-local 信封未被角色改动带走。`tests/local-embedding-worker.test.mjs` 加 1 条：前缀确实到达推理、裸 id 被拒且**没有进推理**、`/health` 报告 `rolesRequired`。`tests/local-embedding-protocol.test.mjs` 加 1 条角色解析与拒绝。`tests/embedding-runtime.test.mjs` 的"完整运行时"断言从只看 BGE 扩成遍历三条目 × 五个平台。
+- 设置页模型卡多一个语言 Tag（`en` / `zh · en · multilingual`），因为现在有三条可选，"这只在英文上强"是选择时必须看得见的信息；`getLocalVectorState().catalog` 随之透出 `languages` 与 `rolesRequired`。
+- 文档：`docs/env-and-commands.md` 新增 §9.5.1（三条模型的制品事实、实测横向对照、角色通道的为什么与命令）。
+
+### Qwen3-Embedding-0.6B 两张卡片（int8 默认 + q4f16）
+
+- 目录新增 `qwen3-embedding-0.6b-int8`（`onnx/model_quantized.onnx`，600.2 MB，默认下载的那张）与 `qwen3-embedding-0.6b-q4f16`（541.8 MB）。逐文件 `bytes/sha256` 与 HF 文件树的 `lfs.oid` 逐字节对上；图头是 opset 21、只有 `input_ids` + `attention_mask`（因果 LM 没有 `token_type_ids`）、输出 `last_hidden_state[1, sequence_length, 1024]`——**batch 维是导出时写死的 1**，所以一次只能喂一行。
+- **两种量化 = 两个向量空间 = 两张卡片**：int8 是 `quantize_dynamic`，图侧核实 196/196 个 `MatMulInteger` 的 scale/zero_point 都是 rank-0 标量、per-channel scale 向量为 0 → **per-tensor**，与 BGE/MiniLM/e5 的 per-channel 不是同一个空间；q4f16 是 `com.microsoft.MatMulNBits`（int4、block_size=128）+ float16 激活、图输出 dtype 也是 float16。`quantization` 进指纹，所以分条目、分 DB，不许一个条目挂两个图文件让用户以为能混用。
+- 新增 **last-token pooling**（`pooling: 'last'`）：因果 LM 按 `attention_mask` 累加和定位最后一个非 pad token，与官方 `1_Pooling(pooling_mode_lasttoken=true)` 同口径。校验器的 pooling 白名单加 `last`（`max` 仍是「可以声明、执行侧没实现」，所以没有任何 available 条目用它）。
+- 窗口与上限：`maxTokens` 合法范围从 8192 放宽到 32768（Qwen3 制品的 `max_position_embeddings`），但卡片按实测延迟取 **4096**——1520 字实测已 4.29 s，按 32k 跑一条长记忆会直接顶到 worker 的 120 s 请求超时。`verifyStagedArtifacts` 因此从「窗口必须等于制品上限」改成「不得超过制品上限」：超过必炸，小于是指纹里写明的策略。单文件下载上限 512 MiB → 1 GiB（否则装不下这条已逐字节核实的 600 MB 制品）。
+- 查询侧用官方 `Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:` 前缀、document 侧官方明确不加指令 → 非对称，复用上一节那条角色通道，无需新概念。实测同一句话加/不加前缀余弦只有 **0.8284**（q4f16 0.8203），比 e5 的 0.9811 挪动得多——前缀在这款模型上是真的换空间。
+- 实测（同一批文本、同一棵受管 ORT 树，五行可以直接比）：加载 int8 2.06 s / q4f16 11.4 s；一次编码 29 / 380 / 1520 字 = int8 91 / 437 / 4286 ms，q4f16 110 / 870 / 5863 ms，而 BGE 是 5 / 17 / 22 ms。草稿集（33 条可答）int8 带前缀 R@1 0.6970 / MRR 0.8359、裸文本 0.6667 / 0.8081；q4f16 带前缀 0.7273 / 0.8510。**q4f16 没有比 int8 差**，差一个样本不足以排质量；能当依据的只有加载慢 5.5 倍与贡献算子依赖，所以默认仍是 int8。
+- 真机端到端：五路互切 `MiniLM(g1) → Qwen3-int8(g2) → Qwen3-q4f16(g3) → e5(g4) → BGE(g5)` 各 6/6 条重建、0 失败，每个代际一份指纹命名的库，切换后中英查询均召回，回滚回到上一空间。
+
+### 整理超时不再是必然事件：预算随转录规模走
+
+- 真实读数（2026-11-02，935 条事件的会话）：整理 fork 开始后 **125 s 才写出第一条记忆**，180 s 到点只写完 3 条 → 超时；退避重试 131 s 完成。**不是卡死，也没丢东西**——那 3 条在 `index/lib_256e5cb7.json` 与向量库里都核到了。根因是 fork 的种子是整段会话，worker 读完整段才开始写，而预算是写死的 180 s。
+- 现在按范围推：`consolidationWaitBudget(eventCount)` = `120 s + 0.35 s/事件`，夹在 `[180 s, 600 s]`（斜率取自实测的 0.14–0.2 s/事件，留约 2 倍余量）。小会话仍是 3 分钟，935 条拿到 447 s，再大也不会超过 10 分钟——卡死的 fork 仍然会被收掉。显式 `maxWaitMs` 的调用方行为完全不变（既有 30 ms 超时用例照旧过）。
+- 可见性：`整理已开始` 日志带上「预算 Ns」，超时文案带上「over N events」，失败行用上一节的红色 + `失败` 标签——下次看到就能判断是不是范围太大。
+- 明确没做的事：**超时仍然不推进 `lastSleepSeq`**。没有回执就不能证明覆盖了哪一段，重试必须重读同一段；为了省时间改成部分推进等于可能漏事件，不做。
+- 守卫：`tests/consolidation-fork.test.mjs` 新增预算缩放用例（0/100/200/935/5000/非法值）。
+### 总日志里的失败行终于像失败了
+
+- 现象：WebUI ›「全部日志」里，整理超时/失败与正常流水**长得一模一样**。判据写的是 `level === 'error'` 才上色，而活动日志的超时路径记的是 `level: 'warn'` + `ok: false`（`lib/private.js`），归一化器又只在没显式给 level 时才从 `ok===false` 推成 warn——于是这条真实失败永远走不到那个分支。
+- 改成三档判定 `logRowState`：**失败**（`ok === false || level === 'error'`，红左边条 + 浅红底 + `失败` Tag）/ **降级**（`level === 'warn'` 且没失败，例如「向量未激活，写入已降级为索引+引擎」「自动关联跳过」，橙边 + `降级` Tag）/ 常规（不标）。失败与降级不同色是刻意的：都标红会让真失败被降级噪声淹没。
+- **标红只发生在总日志页**。侧栏「整理记录」不再显示失败行（过滤掉，空态按过滤后算）——失败已经由它上方跨会话的「整理提醒」负责（可清除、可跳转），5 行摘要里再挤一遍红字只会把正常流水挤走。
+- 不只靠颜色（配色对色觉障碍与灰度截图无效），Tag 带 hover 解释；样式走作用域 CSS `.dshm-logrow.is-failed` / `.is-degraded`，没有新增内联样式。
+- 守卫：`tests/client-render.test.mjs` 新增一条行为用例（总日志页三行 fixture 分别断言 class 与文字标签，hover 必须存在）；静态断言钉住「侧栏先过滤失败行」「只有总日志页用 `logRowClass`」「旧的 `level === 'error' ? 'warn'` 不许回来」。做过变异验证：把判定改回只看 `level === 'error'` 时行为用例立刻红。
+### 下载来源可选：默认 hf-mirror，源站可切
+
+- `download(id, { provider })`：不传就取目录顺序里第一个已固定的来源（Qwen3 卡片因此默认 **hf-mirror**），传了就只用那一个、解析不出可用来源时如实报错而**不回退**到别的源。RPC `downloadLocalVectorModel` 透传 `provider`；设置页只在「有多于一个已固定来源」的卡片上给一行 `is-row` 选择，只有一个来源就不出现「选」这件事。换源不改向量空间——provider 不进指纹，每个文件落盘前都要过目录 pin 的同一个 `sha256`。
+- 见证制品（基座仓库的 `1_Pooling/config.json`）原本绑死它被核实的那个 provider，换源会被这条规则整条封掉；新增 `origin.providers` 显式声明合法的镜像集合（默认仍是单 provider，三条老条目行为不变）。
+- **第一次真装 Qwen3 抓到的真 bug**：hf-mirror 对小文件用 chunked 传输、**不发 `content-length`**，而下载器把 `Number(null) = 0` 当成「声明了 0 字节」，于是每个小文件都被误判成 `EMBEDDING_SIZE_MISMATCH`。现在头缺失等于「未知」，判断交给落盘的字节数与 sha256。第二个由测试抓到：`embedding-download.js` 用了 `PROVIDERS` 却没 import。
+- 目录构建器顺手去掉一条自找麻烦的断言：`totalBytes` 只在**与文件之和不符**时报错——它本来就是同一份事实的两种写法，旧规则逼着手写清单里那条要么删掉要么预先算对。
+- 文档：`docs/env-and-commands.md` §9.5.1 改为五行对照（含延迟列的同一批文本口径）并新增「下载来源」一段；`docs/troubleshooting.md` §3.25 覆盖 Qwen3 专属坑（固定 batch=1、贡献算子域、延迟、选源与 chunked 头）。
+- 守卫：`tests/embedding-catalog.test.mjs`（五指纹钉死、两张 Qwen3 卡片是两个空间、默认来源必须是 hf-mirror 且源站同 commit 同 sha256）、`tests/embedding-download.test.mjs`（缺失 content-length 不误判、显式选源不回退、两种错码分开、last-pooling/float16/窗口上限的装机校验）、`tests/local-embedding-worker.test.mjs`（cls / mean / last 在同一份 hidden state 上各算各的，padding 不参与 last 的定位）。
 
 ### 注入离线模拟器
 
@@ -21,7 +76,7 @@
 
 - **修掉真机跑出来的第一个缺口（§3.24）**：宿主会把失败的整轮回滚——真机转录证明连用户消息都不留——而插件在"消息交回决策"之后就记了账，于是 `guide`、锚点、当日纪念日、复提时钟这些**一次性内容再也不投**，整段对话只是"记忆像没接上"、一句错都不报（那 51 个请求里 guide/anchor 一次都没有，逐回合召回与时效提示照常，binding 却写着"已投放"）。现在投放时把该轮消费的东西记在 `injectionRollback` 上，并在内存里留下本轮注入消息的 id；宿主 `step()` 是**先把消息追加进转录、再去连模型**的，所以 `turn/end` 到达时"见过这条消息的 `user/message` 事件"就是它已经在转录里的实证：没见过实证且 `kind` 为 `error`/`aborted` 才撤回这一轮的记账（`lib/state.js` 的 `recordInjectionRollback` / `rollbackInjectionForTurn`），下一轮重新投；见过实证或回合正常收尾则消费掉记录、记账保住，迟到的旧事件撤不动它。监听段排在最前并自带 try，不会被别的步骤抛错带走，回滚写活动日志与一条 warn。**边界**：只有"请求根本没发出去"那类失败需要它——上游 500、流式中断时消息已经在转录里，撤回只会凭空多出第二个锚点，所以不撤；实证只在内存里，进程恰好在回合中间重启就宁可漏撤也不误投。守卫：`tests/injection-rollback.test.mjs`（6 条）。
 
-- 除 §3.24 那条撤回链路外不改记忆行为；不加依赖、不加构建步骤。门禁（2026-11-01 实测）`npm test` **1293 tests / 1291 pass / 0 fail / 2 skipped**、`acceptance-local` **50/50**、`npm run check` 全绿。
+- 门禁（2026-11-02 实测）：`npm test` **1311 tests / 1309 pass / 0 fail / 2 skipped**（两条真实引擎用例按设计跳过）、`node scripts/acceptance-local.mjs` **50/50**、`npm run check` 全绿（含 i18n、文档预算、test-tracking 与 loader-stubs）。
 
 ## [1.2.3] - 2026-11-01
 

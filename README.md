@@ -360,23 +360,9 @@ With the preview running, use `npm run test:graph-browser -- http://127.0.0.1:77
 
 The suite includes two optional real-engine integration cases: curator writing requires `DSH_MEMU_TEST_ENGINE_PYTHON`, and the backup venv/WAL case requires `DSH_MEMU_BACKUP_REAL_ENGINE=1`; both are skipped by default. The 50 automated acceptance checks pass. The optional engine was installed and smoke-tested in an isolated directory with the pinned wheel; embedding tests use a local deterministic server, which proves the protocol, not semantic quality.
 
-## Changelog
-
-**1.2.4 (2026-11-01)**: measurement, plus the first gap the measurement caught. `scripts/simulate-injection.mjs` (`npm run simulate:injection`) drives the real injection pipeline over N synthetic turns against a throwaway library and the loopback mock LLM, so "what did the plugin actually put in the prompt" has a reproducible offline answer before anyone argues about it — offline baseline 18/50 turns carried a memory block, title cards leaked zero body lines. The real host then ran the same 50 turns (26/50, with guide / anchor / due / anniversary / open-loop / texture once each), and that run exposed §3.24: when the host rolls a turn back before the request ever leaves, the plugin had already spent the one-shot accounting, so the rules card, the anchor, dated reminders and the re-reminder clock never came back for the rest of the conversation. Accounting is now recorded per turn and withdrawn only when `turn/end` reports a failed turn whose injected message provably never reached the transcript; a failure after the messages were appended keeps the accounting, so nothing is ever placed twice. No new dependencies, no build step, no data migration.
-
-**1.2.3 (2026-11-01)**: the six todolist work orders. Emotion now shows on the card (arousal / dominance / source, read-only); dated open loops re-raise every `openLoopRemindDays` instead of going quiet after one mention, and never repeat in a turn that already named them; recalled memory that looks time-sensitive gets one conditional `<memory-freshness>` line nudging the model to verify with a search tool *if* the conversation has one; optional `salientWake` (off by default, experimental) asks the host scheduler to wake the bound conversation on the day; entity merge candidates with two-click confirmation in the graph page (RPC methods 93 → 95). Also a loopback-only injection measurement harness (`scripts/mock-llm.mjs` + `scripts/drive-session.mjs`) so later tuning can be counted instead of argued about. No new dependencies, no build step, no data migration.
-
-**1.2.2 (2026-11-01)**: title-card anchor/recall (id + title + semantic tags, body behind recall), automatic lexicon lifecycle and card management, private auto-links/entity hubs, help page v2, and WebUI layout/selector polish; together with the previously unreleased curator three-stage pipeline, global links, absorb/undo, review modes and lexicon store baseline. Prompt contracts are unified (remote curation stays tool-free, title 8–40 characters), the PTC worker mounts 5 write + 3 read tools, and no new dependencies or build steps were added.
-
-**1.2.1 (2026-10-31)**: fact-level dedup (write-side gate + recall-side cluster folding); consolidation now works in PTC (run_code) sessions; sidebar consolidation-failure alerts (cross-session, clearable, jump-to-library); the "currently in vector store" count follows real additions and deletions; private/global groups and multi-select bulk ops on the memory wall; one-click view from the global page; graph delete cascades with orphan-entity cleanup; remote consolidation counts only what actually landed.
-
-**1.1.3 (2026-10-30)**: managed local vectors are usable end to end (runtime/model download, switch-and-rebuild, progress with per-item failures); activity log with a Logs page; consolidation results move under the sidebar button; archive/restore and list refresh drop from seconds to milliseconds; a date written in the text is picked up when the field is empty; default topK 5/5; fixes the blank settings/WebUI panel (React #310).
-
-**1.1.2 (2026-10-29)**: anchor and recall delivery in agent-preset conversations; startup catch-up consolidation; panel TDZ crash fix.
-
-Full notes: [`CHANGELOG.md`](CHANGELOG.md).
-
 ## Documentation
+
+- Release notes: [`CHANGELOG.md`](CHANGELOG.md)
 
 [`AGENTS.md`](AGENTS.md) is the index for anyone changing this repo — which file answers
 which question. The detail lives in [`docs/`](docs/): failure modes, the change process,

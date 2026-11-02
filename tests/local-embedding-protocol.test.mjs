@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   DEFAULT_MAX_BATCH,
+  ROLE_SUFFIXES,
   LocalEmbeddingError,
   assertVector,
   buildEmbeddingResponse,
@@ -10,7 +11,9 @@ import {
   errorBody,
   errorStatus,
   estimateUsage,
+  modelIdForRole,
   parseEmbeddingRequest,
+  splitModelRole,
 } from '../lib/local-embedding-protocol.js'
 
 const MODEL = 'bge-small-zh-v1.5@r1+mean-l2-512'
@@ -44,8 +47,8 @@ test('vectors must be finite, non-zero and exactly the manifest dimension', () =
 })
 
 test('the request parser accepts exactly the SDK shapes and refuses the rest', () => {
-  assert.deepEqual(parseEmbeddingRequest({ model: MODEL, input: 'hello' }, { model: MODEL }), { inputs: ['hello'], encoding: 'float' })
-  assert.deepEqual(parseEmbeddingRequest({ model: MODEL, input: ['a', 'b'], encoding_format: 'base64' }, { model: MODEL }), { inputs: ['a', 'b'], encoding: 'base64' })
+  assert.deepEqual(parseEmbeddingRequest({ model: MODEL, input: 'hello' }, { model: MODEL }), { inputs: ['hello'], encoding: 'float', role: 'document' })
+  assert.deepEqual(parseEmbeddingRequest({ model: MODEL, input: ['a', 'b'], encoding_format: 'base64' }, { model: MODEL }), { inputs: ['a', 'b'], encoding: 'base64', role: 'document' })
   rejects(() => parseEmbeddingRequest(null, { model: MODEL }), /^LOCAL_VECTOR_BAD_REQUEST$/)
   rejects(() => parseEmbeddingRequest([], { model: MODEL }), /^LOCAL_VECTOR_BAD_REQUEST$/)
   rejects(() => parseEmbeddingRequest({ input: 'hello' }, { model: MODEL }), /^LOCAL_VECTOR_BAD_REQUEST$/)
@@ -57,6 +60,29 @@ test('the request parser accepts exactly the SDK shapes and refuses the rest', (
   rejects(() => parseEmbeddingRequest({ model: 'other-model', input: 'hello' }, { model: MODEL }), /^LOCAL_VECTOR_MODEL_MISMATCH$/)
   rejects(() => parseEmbeddingRequest({ model: MODEL, input: 'hello', encoding_format: 'binary' }, { model: MODEL }), /^LOCAL_VECTOR_BAD_ENCODING$/)
   rejects(() => parseEmbeddingRequest({ model: MODEL, input: 'x'.repeat(65_537) }, { model: MODEL }), /^LOCAL_VECTOR_INPUT_TOO_LONG$/)
+})
+
+// §14.4: a model that reads query and document differently must be told which one it
+// is getting. MemU's envelope has no role field, so the role rides on the model string
+// the plugin injects — and a bare id must be refused, never defaulted.
+test('the role travels on the model string and a role-less request is refused when roles matter', () => {
+  assert.equal(modelIdForRole(MODEL, 'query'), MODEL + ':query')
+  assert.equal(modelIdForRole(MODEL, 'document'), MODEL + ':passage')
+  assert.deepEqual(splitModelRole(MODEL + ':query'), { model: MODEL, role: 'query' })
+  assert.deepEqual(splitModelRole(MODEL + ':passage'), { model: MODEL, role: 'document' })
+  assert.deepEqual(splitModelRole(MODEL), { model: MODEL, role: null })
+
+  const query = parseEmbeddingRequest({ model: modelIdForRole(MODEL, 'query'), input: '她怕什么' }, { model: MODEL, rolesRequired: true })
+  assert.deepEqual(query, { inputs: ['她怕什么'], encoding: 'float', role: 'query' })
+  const passage = parseEmbeddingRequest({ model: modelIdForRole(MODEL, 'document'), input: '林夏害怕打雷' }, { model: MODEL, rolesRequired: true })
+  assert.equal(passage.role, 'document')
+  rejects(() => parseEmbeddingRequest({ model: MODEL, input: '她怕什么' }, { model: MODEL, rolesRequired: true }), /^LOCAL_VECTOR_ROLE_REQUIRED$/)
+  // 后缀不能拿来冒充另一个模型
+  rejects(() => parseEmbeddingRequest({ model: 'other' + ROLE_SUFFIXES.query, input: 'x' }, { model: MODEL, rolesRequired: true }), /^LOCAL_VECTOR_MODEL_MISMATCH$/)
+
+  // 一个前缀两边相同的模型没有角色可言：裸 id 保持原来的行为
+  assert.equal(parseEmbeddingRequest({ model: MODEL, input: 'x' }, { model: MODEL }).role, 'document')
+  assert.equal(parseEmbeddingRequest({ model: modelIdForRole(MODEL, 'query'), input: 'x' }, { model: MODEL }).role, 'query')
 })
 
 test('the batch cap is enforced before any inference happens', () => {

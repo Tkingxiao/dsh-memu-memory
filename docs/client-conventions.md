@@ -24,6 +24,7 @@
 - `<button>` 里**不许**再嵌 `role="button"`（键盘够不到）。
 - 破坏性操作 = **二次点击**（文案变「确认…？」，2.5s 复原），不用 `globalThis.confirm`、不用 modal。
 - **算法给的候选（实体合并、关联建议）只显示、永不自动执行**：列表来自只读 RPC，逐条二次点击确认才写；操作后用一行回执说清影响面（`S.muted` + `V.accent`，自清），数字取 RPC 返回值，**不估算**。参考节点图页的合并候选（`docs/memory-semantics.md` §8.14）。
+- **失败只在 WebUI「全部日志」标红**：活动日志三档 = 失败（`ok===false` 或 `level==='error'`）/ 降级（`level==='warn'` 且没失败）/ 常规，判据集中在 `logRowState`；总日志页用作用域 CSS `.dshm-logrow.is-failed` / `.is-degraded`，并且**同时给文字 Tag**（`logStateFailed`/`logDegraded` + hover 说明）——颜色不能是唯一通道。**侧栏「整理记录」不放失败行**（它只显示正常流水；失败由上方跨会话的「整理提醒」负责，别在两处重复标红），所以侧栏既不过 `logRowClass` 也不上色。判据别写成只看 `level==='error'`：整理超时记的是 `warn + ok=false`，那样失败会长得和正常行一样（真出过）。
 - 设置项 = 即时保存 + 250ms trailing debounce，一次重试 + `console.warn`，`pagehide` 时 flush。反馈用 toast（2.6s），不用常驻 error/notice 字符串。
 
 ### 7.4 数据与刷新

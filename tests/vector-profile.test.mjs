@@ -139,11 +139,35 @@ test('profile depends on the catalog only: it never touches state', () => {
 
 // ---------------------------------------------------------------- 拒绝
 
+// 三条已核实条目都能建 profile：切换功能的前提是「任意两条之间都能换」，而前缀必须随
+// profile 下发到 worker，否则 e5 的两种读法在建 profile 这一步就丢了。
+test('every verified catalog entry builds a profile that carries its prefixes', () => {
+  for (const entry of catalog.getEmbeddingCatalog()) {
+    const built = vp.profileFromCatalog(entry.id)
+    assert.equal(built.catalogId, entry.id)
+    assert.ok(Number.isInteger(built.dimension) && built.dimension > 0, entry.id)
+    assert.deepEqual(built.prefixes, entry.prefixes, entry.id)
+    assert.equal(built.fingerprint, entry.profileFingerprint, entry.id)
+    assert.equal(built.verification.status, 'verified', entry.id)
+  }
+})
+
 test('a pending model is refused instead of guessed', () => {
-  assertCode(() => vp.profileFromCatalog('multilingual-e5-small'), 'VECTOR_PROFILE_PENDING')
-  assertCode(() => vp.profileFromCatalog('all-minilm-l6-v2-int8'), 'VECTOR_PROFILE_PENDING')
-  assertCode(() => vp.profileFromCatalog('nope-not-in-catalog'), 'VECTOR_PROFILE_UNKNOWN')
-  assertCode(() => vp.profileFromCatalog(null), 'VECTOR_PROFILE_UNKNOWN')
+  // 目录里三条都已核实，所以「未核实」用注入的候选条目验：挡住的是状态，不是某个 id。
+  const pending = clone(entry)
+  pending.id = 'pending-candidate'
+  pending.availability = 'pending'
+  pending.files = []
+  pending.verification = { ...pending.verification, status: 'unverified' }
+  delete pending.profileFingerprint
+  vp.setCatalogEntryResolver(id => (id === 'pending-candidate' ? pending : catalog.getEmbeddingModel(id)))
+  try {
+    assertCode(() => vp.profileFromCatalog('pending-candidate'), 'VECTOR_PROFILE_PENDING')
+    assertCode(() => vp.profileFromCatalog('nope-not-in-catalog'), 'VECTOR_PROFILE_UNKNOWN')
+    assertCode(() => vp.profileFromCatalog(null), 'VECTOR_PROFILE_UNKNOWN')
+  } finally {
+    vp.resetCatalogEntryResolver()
+  }
 })
 
 test('an unverified manifest is refused', () => {

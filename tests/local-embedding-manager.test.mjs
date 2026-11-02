@@ -308,6 +308,24 @@ test('an EPIPE on the worker pipes degrades recall instead of crashing the host'
   assert.doesNotThrow(() => manager.close())
 })
 
+test('the endpoint tells the caller whether roles must be named, derived from the manifest prefixes', async () => {
+  const cases = [
+    { prefixes: undefined, expected: false },
+    { prefixes: { query: '', document: '' }, expected: false },
+    { prefixes: { query: 'query: ', document: 'passage: ' }, expected: true },
+  ]
+  for (const item of cases) {
+    const { spawnImpl, children } = fakeSpawn()
+    const manager = makeManager({ spawnImpl })
+    const profile = Object.freeze({ ...PROFILE, manifest: Object.freeze({ ...PROFILE.manifest, prefixes: item.prefixes }) })
+    const pending = manager.acquire(profile)
+    push(children[0], readyLine())
+    const endpoint = await pending
+    assert.equal(endpoint.rolesRequired, item.expected, JSON.stringify(item.prefixes))
+    manager.close()
+  }
+})
+
 test('ambient proxies and remote credentials never reach the worker', async () => {
   const ambient = {
     HTTP_PROXY: 'http://127.0.0.1:7890',

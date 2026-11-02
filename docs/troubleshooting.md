@@ -33,6 +33,8 @@
 聊很久一条记忆都没写 → §3.18
 人格预设会话里完全没有记忆 → §3.19
 鉴权 / 401/403 行为说不清 → §3.20
+本地向量模型装不上 / 切不过去 / 召回 400 → §3.25
+整理超时（fork 预算不够）→ §3.26
 ```
 
 ## 3. 出过的问题：症状 → 落点 → 守卫
@@ -287,7 +289,31 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **守卫**：`tests/injection-rollback.test.mjs`（6 条）——失败回合后 guide/锚点/召回 id 全部撤回且下一轮重新投出、`completed` 回合不重复投、`completed` 会消费记录所以迟到的旧失败事件撤不动、注入消息已进转录时 500 类失败保住记账、投放前取消同样撤回、当日纪念日与复提时钟一起撤回。真机侧的复现路径见 `docs/env-and-commands.md` §9.6：让 provider 报 `INVALID_CONFIG` 跑一轮，再看转录与 binding 是否一致。
 
+### 3.25 本地向量模型装不上 / 切不过去 / 召回 400（S4 受管向量 → 模型目录与角色通道）
+
+**症状**：设置页里某个模型点不动；或切到 `multilingual-e5-small` 后召回整段没有，日志里出现 `LOCAL_VECTOR_ROLE_REQUIRED` / `LOCAL_VECTOR_MODEL_MISMATCH`；或换了模型后检索明显变差。
+
+**落点**：三条 ModelScope 模型（BGE / MiniLM / e5）与两张 Qwen3 卡片（int8 / q4f16）都只从**固定 commit** 取制品，逐文件 `bytes/sha256` 是硬门槛，所以「下载按钮灰着」先跑 `node scripts/local-vector-verify.mjs` 看报的是 `manifest` 还是 `source`。Qwen3 的导出仓库在 ModelScope 上没有对应条目，默认来源是 hf-mirror、可切 huggingface 源站（同一 commit、同一份 sha256，换源不换向量空间）；注意 hf-mirror 对小文件用 chunked 传输、不发 `content-length`，这条已被当作「未知」而不是 0 处理。e5 与 Qwen3 都是**非对称前缀**模型（`query: `/`passage: `、官方 `Instruct: …\nQuery:`），角色由插件写在发给 worker 的 model 字符串后缀上（`retrieve` → `:query`，`commit` / `list-files` → `:passage`）；这种 profile 对**裸 model id 直接 400** `LOCAL_VECTOR_ROLE_REQUIRED`，绝不"默认成文档"——默认错一边等于换一个向量空间而 HTTP 还是 200。绕过插件 env 直接手起一个 MemU 进程（自己 export `MEMU_EMBED_MODEL`）就会撞上这条 400，这是设计而不是 bug。
+
+**Qwen3 专属**：它是因果 LM，`pooling=last`（取最后一个非 pad token，opset 21），图导出时**固定 batch=1**，所以一次只能喂一行——worker 的 adapter 本来就逐行编码。int8 与 q4f16 是**两个向量空间**（量化方式进指纹），两张卡各自下载、各自重建，切过去不会复用对方的库。q4f16 依赖 `com.microsoft` 贡献算子域且实测**更慢**（加载 11.4 s vs 2.06 s）。延迟口径：短句一次编码 int8 91 ms / q4f16 110 ms，1520 字 4.29 s / 5.86 s，比另外三个模型慢一到两个数量级——「切换后感觉变卡」先看是不是切到了 Qwen3 卡片，分窗也因此只取 4096（制品支持 32k）。
+
+**换了模型不等于换得对**：MiniLM 是英文模型，中文锚点召回实测弱于 BGE/e5（同一份合成草稿 R@1 0.5455 对 0.6667），"检索变差"先看设置页当前生效的 `catalogId` 而不是先怀疑注入。口径与实测数字在 `docs/env-and-commands.md` §9.5.1。
+
+**守卫**：`tests/embedding-catalog.test.mjs`（三条目指纹钉死、只有非对称前缀需要角色通道）、`tests/local-embedding-protocol.test.mjs` 与 `tests/local-embedding-worker.test.mjs`（角色解析、前缀确实进推理、裸 id 被拒且没进推理）、`tests/local-embedding-env.test.mjs`（对称模型的 `MEMU_EMBED_MODEL` 逐字节不变）。
+
 ---
+
+### 3.26 整理超时（S4 私有整理 → fork 预算）
+
+**症状**：整理提醒里出现「整理超时 · fork f-xxxxxx · timeout：consolidation timed out after Ns」，而对话本身一切正常、库里也可能已经多了几条记忆。
+
+**落点**：整理是一次**整段会话的 fork**——种子是截止快照的全部事件，worker 先读完整段转录才开始写，所以耗时随会话长度涨。2026-11-02 的真实读数（935 条事件的会话）：开始后 **125 s 才写出第一条**，180 s 到点时只写完 3 条 → 超时；退避重试 131 s 完成。也就是说 180 s 的固定预算对大会话必然偏紧，**不是卡死、不是死锁，也不会丢已写入的记忆**。
+
+**现在的做法**：预算按范围大小推（`consolidationWaitBudget(eventCount)`，政策 `120 s + 0.35 s/事件`，夹在 `[180 s, 600 s]`；斜率取自上面实测的 0.14–0.2 s/事件并留约 2 倍余量）。显式传 `maxWaitMs` 的调用方（测试、工具）仍然完全由调用方决定。「整理已开始」那条日志现在会写「预算 Ns」，失败行也会写「over N events」，所以下次看到超时能直接判断是不是范围太大。**超时仍然不会推进 `lastSleepSeq`**（没有回执就不算整理过），重试会重读同一段——这是 `§14.8`「先证明覆盖范围再推进」的代价，不能为了省时间改成部分推进。
+
+**还能再快的两条路（未做，需拍板）**：① 把 fork 的种子换成脱敏压缩后的转录（远端路径 `condenseEvents` 已有先例，但 fork 的种子来自 `dsh-session.buildForkSeed`，要动得先确认能替换）；② 常驻 MemU 进程，替掉「每次工具调用新起 python（导入链 2.05 s）」——这条同时能提速每轮召回与迁移重建。
+
+**守卫**：`tests/consolidation-fork.test.mjs` 的 `the consolidation wait budget scales with the transcript`（0/100/200/935/5000/非法值）与既有的 `a fork still running at the deadline reports a timeout instead of silence`（显式 30 ms 仍生效、超时不得推进游标）。
 
 
 ## 守卫索引表
@@ -321,6 +347,8 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.22 | 时效提示没出现 | `tests/freshness.test.mjs` + `tests/injection-chain.test.mjs`；前置条件（真有召回、开关、预算装得下）少一个就不出，不是 bug。 |
 | §3.23 | 实体合并 / 担心丢记忆 | `tests/entity-merge.test.mjs`（链接改指、别名 cap、快照冲突取舍、拒绝形状）；合并只改指向，正文与条数不变。 |
 | §3.24 | 失败一轮后锚点/日期再不出现 | `tests/injection-rollback.test.mjs`（6 条：撤回+重投、completed 不重复、迟到事件撤不动、已进转录的 500 类失败不误撤、投放前取消撤回、纪念日复提时钟一起撤）。 |
+| §3.25 | 本地向量模型装不上 / 切不过去 / 召回 400 | `tests/embedding-catalog.test.mjs`（三条目指纹钉死、只有非对称前缀需要角色通道）、`tests/local-embedding-protocol.test.mjs`、`tests/local-embedding-worker.test.mjs`（前缀进推理、裸 id 拒且不入推理）、`tests/local-embedding-env.test.mjs`（对称模型 model 串逐字节不变）。 |
+| §3.26 | 整理超时（fork 预算） | `tests/consolidation-fork.test.mjs`：预算随事件数缩放（0/100/200/935/5000/非法值），显式 `maxWaitMs` 仍生效，超时不推进 `lastSleepSeq`。 |
 
 ## 附录 A · 模块地图（原 §2.1）
 

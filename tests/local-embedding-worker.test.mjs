@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   createOnnxAdapter,
   manifestDimension,
@@ -213,6 +214,62 @@ test('auth, origin, host, method, content type and JSON failures are all refused
   }
 })
 
+// last-token pooling 是新写的算术（因果 LM 取最后一个非 pad token），所以拿假的
+// ORT/tokenizer 树把它钉住：同一份 hidden state 下，cls / mean / last 必须各自算对，
+// 且 padding 不参与 last 的定位。
+test('last-token pooling picks the last unmasked token, not the last row', async () => {
+  const hidden = [
+    [1, 0],
+    [0, 2],
+    [3, 1],
+    [7, 7],
+  ]
+  const mask = [1, 1, 1, 0]
+  const ortFile = path.join(modelDir, 'fake-ort.mjs')
+  const tokFile = path.join(modelDir, 'fake-tokenizers.mjs')
+  fs.writeFileSync(ortFile, [
+    'export class Tensor { constructor(type, data, dims) { this.type = type; this.data = data; this.dims = dims } }',
+    'export class InferenceSession {',
+    '  static async create() { return new InferenceSession() }',
+    '  constructor() { this.inputNames = [\'input_ids\', \'attention_mask\']; this.outputNames = [\'last_hidden_state\'] }',
+    '  async run() { return { last_hidden_state: { dims: [1, 4, 2], data: [' + hidden.map(row => row.join(',')).join(',') + '] } } }',
+    '  async release() {}',
+    '}',
+    '',
+  ].join('\n'), 'utf8')
+  fs.writeFileSync(tokFile, [
+    'export class Tokenizer {',
+    '  static fromFile() { return new Tokenizer() }',
+    '  async encode() { return { getIds: () => [1, 2, 3, 0], getAttentionMask: () => [' + mask.join(',') + '], getTypeIds: () => [0, 0, 0, 0] } }',
+    '}',
+    '',
+  ].join('\n'), 'utf8')
+  fs.writeFileSync(path.join(modelDir, 'model.onnx'), 'fake graph bytes', 'utf8')
+  fs.writeFileSync(path.join(modelDir, 'tokenizer.json'), '{}', 'utf8')
+  const ortUrl = pathToFileURL(ortFile).href
+  const tokUrl = pathToFileURL(tokFile).href
+  const expectations = {
+    cls: [1, 0],
+    mean: [4 / 3, 1].map(value => value / Math.hypot(4 / 3, 1)),
+    last: [3, 1].map(value => value / Math.hypot(3, 1)),
+  }
+  for (const pooling of ['cls', 'mean', 'last']) {
+    const adapter = await createOnnxAdapter({
+      modelDir,
+      manifest: manifest({ pooling, dimension: 2, maxTokens: 8 }),
+      runtimeDir: modelDir,
+      runtimeModule: ortUrl,
+      tokenizerModule: tokUrl,
+    })
+    const [vector] = await adapter.encode(['任何文本'])
+    assert.equal(vector.length, 2, pooling)
+    vector.forEach((value, index) => assert.ok(Math.abs(value - expectations[pooling][index]) < 1e-9, `${pooling}[${index}] got ${value}`))
+    const norm = Math.sqrt(vector.reduce((sum, item) => sum + item * item, 0))
+    assert.ok(Math.abs(norm - 1) < 1e-9, pooling + ' must stay L2 normalised')
+    await adapter.close()
+  }
+})
+
 test('an unknown model is refused instead of being served by the loaded weights', async () => {
   const { worker, adapter } = await fixture()
   try {
@@ -222,6 +279,43 @@ test('an unknown model is refused instead of being served by the loaded weights'
     assert.equal(adapter.calls.length, 1)
   } finally {
     await worker.close()
+  }
+})
+
+// §14.4：前缀是模型自己的事实，所以由 worker 施加；两种读法不同的模型，绝不能被一个
+// 没说角色的请求「默认」成某一种——默认错了一边，向量空间就错了而 HTTP 还是 200。
+test('query/document prefixes come from the manifest and a role-less request is refused when they differ', async () => {
+  const asymmetric = fakeAdapter()
+  const { worker } = await fixture({ adapter: asymmetric, manifest: manifest({ prefixes: { query: 'query: ', document: 'passage: ' } }) })
+  try {
+    const bare = await post(worker, { model: MODEL, input: ['她怕打雷'] })
+    assert.equal(bare.status, 400)
+    assert.equal(bare.body.error.code, 'LOCAL_VECTOR_ROLE_REQUIRED')
+    assert.deepEqual(asymmetric.calls, [['embedding readiness probe']], 'a refused role must not reach inference')
+
+    const query = await post(worker, { model: MODEL + ':query', input: ['她怕打雷'] })
+    const passage = await post(worker, { model: MODEL + ':passage', input: ['她怕打雷'] })
+    assert.equal(query.status, 200)
+    assert.equal(passage.status, 200)
+    assert.deepEqual(asymmetric.calls.slice(1), [['query: 她怕打雷'], ['passage: 她怕打雷']])
+    assert.notEqual(JSON.stringify(query.body.data[0].embedding), JSON.stringify(passage.body.data[0].embedding))
+
+    const health = await (await fetch(worker.healthUrl, { headers: auth })).json()
+    assert.equal(health.rolesRequired, true)
+  } finally {
+    await worker.close()
+  }
+
+  // 两边同一个前缀（BGE/MiniLM 就是这种）：裸 model id 的字节级行为保持不变。
+  const symmetric = fakeAdapter()
+  const same = await fixture({ adapter: symmetric, manifest: manifest({ prefixes: { query: '', document: '' } }) })
+  try {
+    const bare = await post(same.worker, { model: MODEL, input: ['她怕打雷'] })
+    assert.equal(bare.status, 200)
+    assert.deepEqual(symmetric.calls, [['embedding readiness probe'], ['她怕打雷']])
+    assert.equal((await (await fetch(same.worker.healthUrl, { headers: auth })).json()).rolesRequired, false)
+  } finally {
+    await same.worker.close()
   }
 })
 

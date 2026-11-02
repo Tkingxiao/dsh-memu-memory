@@ -10,7 +10,7 @@ process.env.DSH_MEMU_HOME = home
 delete process.env.DSH_MEMU_EMBED_RUNTIME_DIR
 
 const runtime = await import('../lib/embedding-runtime.js')
-const { getEmbeddingModel } = await import('../lib/embedding-catalog.js')
+const { getEmbeddingCatalog, getEmbeddingModel } = await import('../lib/embedding-catalog.js')
 const service = await import('../lib/local-vector-service.js')
 const { profileFromCatalog, setRequestedProfile } = await import('../lib/vector-profile.js')
 
@@ -105,7 +105,12 @@ function makeInstaller(root, options = {}) {
 }
 
 test('a pending catalog model pins no runtime and is refused before any download', () => {
-  const plan = runtime.runtimePlan(getEmbeddingModel('all-minilm-l6-v2-int8'), 'win32-x64')
+  // 目录里现在没有 pending 条目，所以这里造一个：未核实的候选就是没有 runtime 事实。
+  const plan = runtime.runtimePlan({
+    id: 'pending-candidate',
+    availability: 'pending',
+    runtime: { engine: 'onnxruntime-node', version: null, abi: 'napi-v6' },
+  }, 'win32-x64')
   assert.equal(plan.ok, false)
   assert.ok(plan.errors.some(item => item.code === 'RUNTIME_ENTRY_NOT_AVAILABLE'))
   assert.ok(plan.errors.some(item => item.code === 'RUNTIME_ARTIFACTS_MISSING'))
@@ -118,18 +123,21 @@ test('a platform with no pinned native binaries fails closed instead of guessing
   assert.deepEqual(plan.errors.map(item => item.code), ['RUNTIME_NATIVE_MISSING'])
 })
 
-test('the verified BGE entry pins a complete runtime for every shipped platform', () => {
-  const entry = getEmbeddingModel('bge-small-zh-v1.5-int8')
-  for (const platform of ['win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64', 'darwin-arm64']) {
-    const plan = runtime.runtimePlan(entry, platform)
-    assert.equal(plan.ok, true, platform + ': ' + JSON.stringify(plan.errors))
-    assert.equal(plan.artifacts.length, 3)
-    for (const artifact of plan.artifacts) {
-      assert.match(artifact.sha256, /^[0-9a-f]{64}$/)
-      assert.equal(artifact.url.startsWith('https://'), true)
-      assert.ok(artifact.bytes > 0)
+// 三个模型共用同一棵 pin 住的受管运行时树（PINNED_ONNX_RUNTIME），所以每条都得能整成
+// 完整计划；哪天共享常量被改坏，这里会先红。
+test('每一条已核实的目录条目都钉住了每个平台的完整运行时', () => {
+  for (const entry of getEmbeddingCatalog()) {
+    for (const platform of ['win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64', 'darwin-arm64']) {
+      const plan = runtime.runtimePlan(entry, platform)
+      assert.equal(plan.ok, true, entry.id + ' ' + platform + ': ' + JSON.stringify(plan.errors))
+      assert.equal(plan.artifacts.length, 3, entry.id)
+      for (const artifact of plan.artifacts) {
+        assert.match(artifact.sha256, /^[0-9a-f]{64}$/)
+        assert.equal(artifact.url.startsWith('https://'), true)
+        assert.ok(artifact.bytes > 0)
+      }
+      assert.ok(plan.native.length >= 2, entry.id + ' ' + platform)
     }
-    assert.ok(plan.native.length >= 2)
   }
 })
 

@@ -60,7 +60,7 @@ python -m memu commit payload.json --json --db <db>
 
 `commit` payload：`{ recall_files: [{ name, track: memory, description, content }], resource: [], user: {} }`。
 
-### 9.5 本地向量运行时（受管，2026-10-30）
+### 9.5 本地向量模型与运行时（受管，2026-10-30 / 2026-11-02）
 
 **不再需要手工环境变量**：运行时（`onnxruntime-node` 1.31.1 + `onnxruntime-common` + `@huggingface/tokenizers`）由插件按 catalog pin 装进 `<dataDir>/downloads/embeddings/runtime/`，规格见 §14.13。`DSH_MEMU_EMBED_RUNTIME_DIR` 只剩「显式覆盖」用途：指向的目录里没有那三个包时会被忽略（`warn`）并回落到受管目录；也不需要 Ollama。
 
@@ -72,6 +72,36 @@ node scripts/local-runtime-install.mjs --target <dir> --platform win32-x64 --id 
 ```
 
 状态 `installed / absent / unsupported / downloading / verifying / installing / failed / cancelled`；`unsupported` = catalog 没 pin 该平台原生库（如 `darwin-x64`）。装失败只 `warn` + 回词法召回，不会自动改用云端 embedding。
+
+#### 9.5.1 五条已核实模型（2026-11-02）
+
+每条都 pin 在来源仓库的 HEAD commit，逐文件 `bytes/sha256` 与文件清单双向核对一致，再用受管 ORT 树真跑推理（单位范数、重复编码余弦 1.0）。BGE / MiniLM / e5 走 ModelScope 直连（2026-10-30 的核实口径）；两张 Qwen3 卡片的导出仓库在 ModelScope 上不存在（只读核对 `record not found`），所以走 hf-mirror，`huggingface.co` 源站作为可选项。
+
+| catalog id | 制品 | 维度 / 窗口 | pooling | 前缀 | 加载 | 一次编码 29 / 380 / 1520 字 | 实测（42 条 recall-bench 草稿，33 条可答） |
+|---|---:|---|---|---|---:|---|---|
+| `bge-small-zh-v1.5-int8` | 24.6 MB | 512 / 512 | cls + L2 | 无 | 254 ms | 5 / 17 / 22 ms | R@1 0.6667 · R@3 0.9697 · MRR 0.8106 |
+| `all-minilm-l6-v2-int8` | 23.9 MB | 384 / 512 | mean + L2 | 无 | 122 ms | 5 / 17 / 30 ms | R@1 0.5455 · R@3 1.0000 · MRR 0.7525 |
+| `multilingual-e5-small` | 135.4 MB | 384 / 512 | mean + L2 | `query: ` / `passage: ` | 787 ms | 6 / 19 / 47 ms | R@1 0.6667 · R@3 1.0000 · MRR 0.8182 |
+| `qwen3-embedding-0.6b-int8` | 600.2 MB | 1024 / 4096 | last + L2 | 官方 `Instruct: …\nQuery:` / 无 | 2.06 s | 91 / 437 / 4286 ms | 带前缀 R@1 0.6970 · R@3 0.9697 · MRR 0.8359；裸文本 0.6667 · 0.9394 · 0.8081 |
+| `qwen3-embedding-0.6b-q4f16` | 541.8 MB | 1024 / 4096 | last + L2 | 同上 | 11.4 s | 110 / 870 / 5863 ms | 带前缀 R@1 0.7273 · R@3 0.9697 · MRR 0.8510；裸文本 0.6667 · 0.9394 · 0.8081 |
+
+延迟那一列是**同一批文本、同一个受管 ORT 树**上重测的（29 / 380 / 1520 字三段中文），所以五行之间可以直接比：Qwen3 int8 一次编码是另外三款的 18–195 倍，q4f16 还要再慢一截、加载慢 5.5 倍。
+
+**这些数字是同一份合成草稿上的横向对照，不是质量结论**（草稿带刻意保留的词面线索，`docs/recall-benchmark.md` 自己声明它不是金标；33 条可答样本上 0.03 的差就是 1 条）。表里读得出的只有相对关系：e5 与 BGE 同级、MiniLM 在中文上明显弱；Qwen3 两个变体在草稿上略高，但一次编码慢 18–195 倍。英文 paraphrase 余弦 MiniLM 0.62/0.70、BGE 0.65/0.64、e5 0.91/0.93。q4f16 在这份草稿上没有比 int8 差（0.7273 对 0.6970）——差一个样本，不足以给两个变体排质量，能当依据的只有实测到的「加载慢 5.5 倍 + 依赖 com.microsoft 贡献算子」。
+
+**角色通道**（e5 与两张 Qwen3 卡片都需要；为什么必须存在、为什么不是猜）：MemU 的 embeddings 信封只有 `{model, input, encoding_format}`，没有 role 字段。非对称前缀意味着同一句话有两种读法，所以角色由**启动子进程的一方**写在 model 字符串上——`retrieve` 用 `<id>@<rev>+<proto>:query`，`commit` / `list-files` 用 `:passage`；worker 解析后缀并按 profile 的 `prefixes` 施加前缀，**裸 model id 对这种 profile 直接 400 `LOCAL_VECTOR_ROLE_REQUIRED`**，绝不"默认成文档"。两边同前缀的模型（BGE/MiniLM）保持原样，裸 id 照旧可用。派生规则是 `prefixesRequireRole(entry)` = `prefixes.query !== prefixes.document`，前缀本身在指纹里，所以「要不要角色通道」和「这个向量空间长什么样」永远来自同一份事实（§14.8）。前缀不是装饰：实测同一句话加/不加前缀的余弦，e5 是 0.9811，Qwen3 int8 只有 **0.8284**（q4f16 0.8203）——Qwen3 的 Instruct 前缀真的把向量挪开了，草稿上的读数也对应得上（带前缀比裸前缀 R@1 高 0.03、MRR 高 0.028）。真机验证：五路互切 `MiniLM(g1) → Qwen3-int8(g2) → Qwen3-q4f16(g3) → e5(g4) → BGE(g5)` 各 6/6 条重建、0 失败，每次切换后中英查询都能召回，回滚回到上一空间。
+
+**下载来源（provider）**：不传就取目录顺序里第一个已固定的来源，所以 Qwen3 卡片的默认是 **hf-mirror**；`huggingface.co` 源站是同 commit 的同一批文件，可选。选源只走那一个、失败也不回退到别的源（`download(id, { provider })` → RPC `downloadLocalVectorModel` 的 `provider` → 设置页在「有多于一个已固定来源」的卡片上给一行 `is-row` 选择，只有一个来源就不出现「选」这件事）。换源不改向量空间：provider 不进指纹，每个文件落盘前都要过目录里 pin 的同一个 `sha256`。两个真实踩到的坑记在这里：① hf-mirror 对小文件用 chunked 传输、**不发 `content-length`**，头缺失必须当「未知」而不是 0，否则每个小文件都被误判成大小不符（第一次真装 Qwen3 就是被这条挡住的）；② 见证制品（基座仓库的 `1_Pooling/config.json`）默认绑死它被核实的那个 provider，多镜像来源要用 `origin.providers` 显式声明，否则换源会把整条封掉。
+
+**两张 Qwen3 卡片是两个向量空间**：int8 是 `quantize_dynamic`（QInt8），图侧核实 196/196 个 `MatMulInteger` 的 scale/zero_point 都是 rank-0 标量、per-channel scale 向量为 0 → **per-tensor**，和另外三款 per-channel 不是同一个空间；q4f16 是 `com.microsoft.MatMulNBits`（int4、block_size=128）+ float16 激活，图输出 dtype 也是 float16。`quantization` 进指纹，所以分条目、分 DB，不能混用。两者都是 opset 21 的因果 LM：只有 `input_ids` + `attention_mask`（没有 `token_type_ids`），池化取**最后一个非 pad token**（`pooling=last`，官方 `1_Pooling` 声明 `pooling_mode_lasttoken=true`），且图**导出时固定 batch=1**——一次只能喂一行，worker 的 adapter 本来就逐行编码。分窗取 4096 而不是制品支持的 32768：1520 字实测已 4.29 s，按 32k 跑一条长记忆会直接顶到 worker 的 120 s 请求超时；窗口是指纹字段，所以这是写明的策略而不是疏漏。
+
+```bash
+node scripts/local-vector-verify.mjs                                        # 只读：五条目录条目的 manifest/来源/已装 deep 校验
+node scripts/local-vector-verify.mjs --download --id all-minilm-l6-v2-int8   # 显式联网装该模型（默认落 .tmp-* 临时根）
+node scripts/local-vector-verify.mjs --download --id qwen3-embedding-0.6b-int8 --target <dataDir>/downloads/embeddings
+```
+
+`--target` 指到插件数据目录就等于设置页的「下载并校验」；该脚本从不写 active profile，切换仍然只能走设置页的「切换并重建」。
 
 ### 9.6 注入实测台（工单 B，仅评测用）
 

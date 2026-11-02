@@ -278,9 +278,16 @@ test('the memory UI renders the read-only arousal/dominance/emotionSource line',
 
 test('the sidebar run log keeps five rows and links its header to the WebUI logs page', () => {
   const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  assert.match(src, /runLog\.slice\(0, 5\)/, 'the sidebar shows the five newest runs, not an unbounded list')
+  // 侧栏只显示正常流水（失败由「整理提醒」负责），列表仍是最近 5 条。
+  assert.match(src, /runLog\.filter\(\(row\) => logRowState\(row\) !== 'failed'\)/, 'the sidebar run log must drop failed rows')
+  assert.match(src, /sidebarRuns\.slice\(0, 5\)/, 'the sidebar shows the five newest runs, not an unbounded list')
   assert.match(src, /openWebUiPage\('logs'\)/, 'the run-log header must open the WebUI logs page')
   assert.match(src, /runLogOpen/, 'the jump needs a visible label')
+  // 红色只属于 WebUI 的总日志页：侧栏整段不过 logRowClass（失败行已被过滤），
+  // 判据仍集中在 logRowState 一处，改口径只改那一处。
+  assert.equal((src.match(/className: logRowClass\(row\)/g) || []).length, 1, 'only the WebUI logs page marks row state')
+  assert.ok(src.includes('const sidebarRuns = runLog.filter('), 'the sidebar must filter failed rows before rendering')
+  assert.ok(!/tone: row\.level === 'error' \? 'warn'/.test(src), 'the old level-only predicate must not come back')
 })
 
 // The browser row is the only place a human can see that a memory is marked
@@ -861,6 +868,54 @@ test('API vector settings render provider fields and hide the managed local cata
   assert.ok(!text.includes('Fixture Download Model'))
   assert.ok(!text.includes('managedVectorDownload'))
   assert.ok(!nodes.some((node) => node.type === 'progress'))
+})
+
+// 日志行的三档视觉状态。真实读数里整理超时记的是 level=warn + ok=false
+//（lib/private.js 的超时路径），所以「只看 level==='error'」会把它显示成正常行——
+// 用户看到的就是「失败长得好普通」。这条钉的是行为：哪一行该红、哪一行该橙、
+// 哪一行什么都不该标。
+test('failed and degraded activity rows are visually distinguished from normal rows', async () => {
+  const failed = {
+    id: 'act-failed', at: '2026-11-02T07:58:29.775Z', kind: 'consolidate', level: 'warn',
+    scope: 'private', sessionId: 'session-abcdef', libraryId: 'lib-1', ok: false,
+    message: '整理超时 · 空闲 · fork f-7535be · timeout：consolidation timed out after 180s', detail: null, refs: [],
+  }
+  const degraded = {
+    id: 'act-degraded', at: '2026-11-02T07:59:00.000Z', kind: 'vector', level: 'warn',
+    scope: 'private', sessionId: 'session-abcdef', libraryId: 'lib-1',
+    message: '向量未激活，写入已降级为索引+引擎', detail: { reason: 'no active vector generation' }, refs: [],
+  }
+  const normal = {
+    id: 'act-normal', at: '2026-11-02T08:02:40.988Z', kind: 'consolidate', level: 'info',
+    scope: 'private', sessionId: 'session-abcdef', libraryId: 'lib-1',
+    message: '整理完成 · 空闲 · fork 1-2b16be · 索引 +1', detail: null, refs: [],
+  }
+  const ctx = fakeCtx({
+    answers: { getActivityLog: { events: [failed, degraded, normal], stats: { total: 3, capped: 2000, bytes: 1024 } } },
+  })
+  globalThis.__dshMemuExports.apply(ctx)
+  const settings = registrations.filter((r) => r.slot === 'settings.section').pop()
+  const first = await renderPage(settings.component, { ctx, t: (key) => key }, undefined, { remount: true })
+  collectPageHook()
+  for (const effect of first.effects) effect.fn()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const mid = await renderPage(settings.component, { ctx, t: (key) => key }, 10)
+  for (const effect of mid.effects) effect.fn()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const { tree } = await renderPage(settings.component, { ctx, t: (key) => key }, 10)
+  const rows = new Map()
+  const labels = []
+  walkNodes(tree, (node) => {
+    if (typeof node.props?.key === 'string' && node.props.key.startsWith('act-')) rows.set(node.props.key, node.props)
+    if (node.props?.children === 'logStateFailed' || node.props?.children === 'logDegraded') labels.push(node.props)
+  })
+  assert.equal(rows.size, 3, 'the log page rendered none of the fixture rows')
+  assert.match(String(rows.get('act-failed')?.className), /dshm-logrow is-failed/, 'the timeout row must carry the failed state class')
+  assert.match(String(rows.get('act-degraded')?.className), /dshm-logrow is-degraded/, 'a fallback-path row is degraded, not failed')
+  assert.equal(rows.get('act-normal')?.className, 'dshm-logrow', 'normal rows must not pick up any state class')
+  assert.ok(labels.some((props) => props.children === 'logStateFailed'), 'the failed row needs a 失败 label, not only colour')
+  assert.ok(labels.some((props) => props.children === 'logDegraded'), 'degraded rows need their own word')
+  assert.ok(labels.every((props) => typeof props.title === 'string' && props.title.length > 0), 'every state tag must explain itself on hover')
 })
 
 test('clicking the API source tab sends the explicit setEmbeddingSource RPC only', async (t) => {
