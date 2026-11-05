@@ -1,5 +1,38 @@
 # 更新日志 / Changelog
 
+## [1.2.5] - 2026-11-05
+
+> 一版把「同一个开关到底管多大一片」讲清楚：跨库召回不再只管记忆——词典的锚点摘要、本回合匹配与 `memu_lexicon_search` 走同一条作用域，并新增一本**全局词典**；节点图的范围选择器加上全局记忆。另一侧是本地向量运行时的下载体验：npmjs / npmmirror 双源、百分比与 MB/s、暂停 / 停止 / 续传。RPC 方法数仍是 **95**（全局图与全局词典都复用既有端点，加的是 payload 而不是方法）。
+
+### 跨库召回：记忆与词典一条尺子（§8.15 / §8.16，默认关闭）
+
+- `settings.crossLibraryRecall` 打开后，`privateRecall` 合并**同领域**的其它私有库候选；自动召回、`memu_private_recall`、`memu_private_list` 与侧栏私有列表同一套作用域。候选库资格：至少一个非整理 fork 会话绑定且 `domainOf()` 等于当前领域、文件夹 `useLibrary` 没关、库未归档；当前绑定库始终参与且不按 domain 过滤。逐库候选用 RRF（k=60）合并，命中带 `libraryId`，`touchAccessMany` 与统计按所属库分组落账——否则那本库的热度永远记不到头上。
+- 新写入的私有词条落 `domain` 戳（记忆与词典同一来源：`domainOf(binding)`）；戳之前的旧条目按「该库的绑定会话领域已匹配」放行。显式传 `libraryId` 的库浏览仍只看那一本，否则「我正在看哪个库」没有答案。`memu_private_update` / `archive` / `delete` 只解析当前库，跨库命中标 `library=…（跨库只读）`，避免把「查不到」读成「被删了」。
+- **词典跟上了同一条作用域**（这是 1.2.4 那次改动漏掉的另一半）：新增 `lib/lexicon-scope.js` 一处回答「这个会话看得见哪些词典」= 当前库 → 同域其它库 → 全局词典，候选库资格直接复用 `crossLibrarySources`，所以不会出现「记忆跨文件夹、词典不跨」的半套同步。B 通道跨源命中用词典核心的 `rankLexiconHits` 重排（排序尺子仍只有那一把），同词面**私有压全局**、注入里一行不重复；candidate / injection 计数按词条所属词典分别落库。
+- **全局词典**（`data/lexicon/global.json`，保留存储名 `global`，与 `index/global.json` 对齐；私有库 id 恒为 `lib_<hex>`，撞不上）：与全局记忆同构——每个会话都读得到，**只有用户能写**。全局 curator 见到词典 op 照旧拒绝，`memu_lexicon_propose` 没有全局路径（§1 硬规则二）。它不看跨库开关，只看 `useGlobal` 天花板；私有记忆整个关掉时，这一页只剩全局词典。条目过滤复用 `appliesToDomain`（`universal` / `personal` 恒可见，无 domain 按通用处理）。
+- 坏一本不塌整段：辅源（同域库、全局词典）读失败只降级成 `errors` 并落 `lastRecallError`（`lexicon: degraded lexicon sources: …`），主源读失败继续抛给既有的 fail-open。没有降级时返回体与单库时代逐字节一致。
+- 全局词典**不走库级授权**：`authorizeGlobalLexiconRoute` 与 `listGlobal` / `removeGlobalLink` 同规格由 HTTP 边界把关，绝不要求宿主 `authorizeLibrary` 去授权一本根本不存在的库；带会话的请求仍认凭证（会话存在 + 全局层没被关掉），悬空 sessionId 一律 403。
+
+### WebUI
+
+- 词典页范围选择器加「全局词典」第一项（照搬节点图全局视图的写法，不新增第二套控件），并写清口径差异：**页是浏览面，选一本看一本**，合并只发生在注入与模型检索。没有私有库时这一页照样可用（全局词典由用户手写，不依赖任何库）；全局词条跳记忆墙时 `libraryId` 落回 `null`，不把保留字当库 id。
+- 节点图范围选择器加**全局记忆**：`getGraph({ scope: 'global' })` 读 `global.json` 的 `entries[id].links[]`，节点是全局条目（`kind: 'global'`，独立配色 `#8b7bd8`），`suppressed` / `expired` 隐藏、指向已删除目标的边保留占位节点；全局视图只读，移除边仍在全局记忆列表完成。
+- 本地向量运行时：下载源可选 npmjs / npmmirror（每个源都必须返回 catalog pin 住的 `bytes`/`sha256`，**换源不换向量空间**），进度带百分比、已下载/总量与实时 MB/s（后端没给速度时前端按相邻采样算），支持暂停 / 停止 / 继续；已下字节留在 `<runtimeRoot>/.cache/*.part`，换源或重启后按 HTTP `Range` 从偏移续传。同指纹的 pending 账本还多了 `manifestDigest` 校验——目录改了制品清单就不续旧账，起新一代（否则到 `syncShadowImpl` 才炸）。
+- 打开某文件夹的私有记忆开关时会顺手补建/接管库，并把该文件夹里「已 opting-in 却没有库」的历史会话回填上；单个会话把 `useLibrary` 打开同样走 `ensureLibraryForCwd`，不再留下 `libraryId` 永远为空的绑定。全局提炼的会话选择器按 `workspaceRegistry` 的归档集合与工作区成员过滤，已删除的对话不再能被选去提炼。
+- 侧栏私有行与 `listPrivate` 支持 `limit` / `previewChars`（首屏仍只 1 个 RPC、不发全文请求）；跨库时私有行带库名 Tag。
+
+### 修掉一个能把整批注入打死的 fail-open 自伤
+
+`injectInboundForStep` 把 `let lexiconError = null` 写在锚点段之后，而锚点的 `catch` 在它之前赋值 → 命中 TDZ：**词典文件一坏，`catch` 自己抛 `ReferenceError`，整批 inbound 注入没投出去**（决策路径那份声明在前，所以只有 inbound 撞）。声明已提前，并写进 `docs/troubleshooting.md` 的改动注意。
+
+### 守卫与文档
+
+- 新增 `tests/lexicon-scope.test.mjs`（16 条：源序与优先级、`useGlobal`/`useLibrary` 两层天花板、条目级 domain、`appliesToDomain`、词面去重、计数分库、辅源降级留信号、主源抛错、备份同权、模型侧只读标注、领域戳）；`tests/webui-auth.test.mjs` 加全局词典授权 1 条；`tests/lexicon-ui.test.mjs` 加「前后端把全局 id 拼成同一个字符串」的防漂移 1 条；`tests/cross-library-recall.test.mjs`、`tests/global-graph.test.mjs`（新）、`tests/embedding-runtime.test.mjs`、`tests/vector-migration.test.mjs`、`tests/browser.test.mjs`、`tests/client-render.test.mjs`、`tests/settings-plumbing.test.mjs` 随改动扩。
+- 文档：`docs/memory-semantics.md` 新增 §8.16（词典作用域）并回指 §8.13 / §8.15 / §8.4；`docs/troubleshooting.md` 补跨库与全局词典四条症状 + 授权模型一条；`docs/env-and-commands.md` §9.5 补下载源与续传；README / README.zh 两页表行同步。
+- 验证口径（本机 2026-11-05 实测）：`npm test` 1343 tests / 1341 pass / 0 fail / 2 skipped（两条真实引擎用例按设计跳过），`acceptance-local` 50/50，`npm run check` 全绿（含 rpc-method-count 95、i18n、AGENTS.md 预算）。**已知待办，非本版引入**：`npm run test:chain` 的 manual / idle 六格与 `npm run replay` 的 5 个检查点，在 1.2.4 的干净代码副本上复现同样结果（整理凭证与空闲 sweep 的 harness 侧问题），本版未动它们。
+
+---
+
 ## [1.2.4] - 2026-11-02
 
 > 一整版「量具 + 适配」：注入实测台补上离线可复现的那一半并修掉真机抓出的 §3.24 缺口；本地向量从 1 个模型扩到 5 个（新增 MiniLM、e5、Qwen3 int8/q4f16 两张卡），补上非对称前缀需要的角色通道与下载来源选择；整理超时改为按转录规模推预算；总日志里的失败行终于像失败（红色只在 WebUI 总日志页；侧栏整理记录只留正常流水，失败由「整理提醒」负责）。不加依赖、不加构建步骤；`bge-small-zh-v1.5-int8` 的 manifest 一个字节未改。

@@ -42,6 +42,10 @@ function fixtureEntry(overrides = {}) {
           name: 'onnxruntime-node',
           version: '9.9.9',
           url: 'https://registry.npmjs.org/onnxruntime-node/-/onnxruntime-node-9.9.9.tgz',
+          sources: [
+            { id: 'npmjs', label: 'npmjs', url: 'https://registry.npmjs.org/onnxruntime-node/-/onnxruntime-node-9.9.9.tgz' },
+            { id: 'npmmirror', label: 'npmmirror', url: 'https://registry.npmmirror.com/onnxruntime-node/-/onnxruntime-node-9.9.9.tgz' },
+          ],
           bytes: TARBALL.length,
           sha256: sha256(TARBALL),
           extract: ['package.json', 'lib', 'bin/napi-v6/<platform>'],
@@ -280,7 +284,55 @@ test('a tampered runtime on disk is not reused as ready', async () => {
   await assert.rejects(installer.ensure({ reuseOnly: true }), /not installed yet/)
   const repair = await installer.ensure({ confirmed: true })
   assert.equal(repair.status, 'installed')
-  assert.equal(fetch.calls.length, 2)
+  // The verified artifact cache is reused for the repair: the tampered tree is
+  // rebuilt from the pinned bytes without another network download.
+  assert.equal(fetch.calls.length, 1)
+})
+
+test('an interrupted download resumes from the stable cache and can switch source', async () => {
+  const root = path.join(home, 'resume')
+  const firstCalls = []
+  const firstFetch = async (url, init = {}) => {
+    firstCalls.push({ url: String(url), range: init.headers?.Range || null })
+    const half = TARBALL.subarray(0, 8)
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: name => (name === 'content-length' ? String(TARBALL.length) : null) },
+      body: (async function* () { yield half; throw new Error('network lost') })(),
+    }
+  }
+  const first = makeInstaller(root, { fetch: { fetchImpl: firstFetch, calls: firstCalls } })
+  await assert.rejects(first.installer.ensure({ confirmed: true }), /network lost/i)
+  const cacheDir = path.join(root, '.cache')
+  const parts = fs.readdirSync(cacheDir).filter(name => name.endsWith('.part'))
+  assert.equal(parts.length, 1)
+  assert.equal(fs.statSync(path.join(cacheDir, parts[0])).size, 8)
+
+  const secondCalls = []
+  const secondFetch = async (url, init = {}) => {
+    const range = init.headers?.Range || null
+    const start = Number(/^bytes=(\d+)-$/.exec(range || '')?.[1] || 0)
+    secondCalls.push({ url: String(url), range })
+    return {
+      ok: true,
+      status: start > 0 ? 206 : 200,
+      headers: {
+        get: name => {
+          if (name === 'content-range') return `bytes ${start}-${TARBALL.length - 1}/${TARBALL.length}`
+          if (name === 'content-length') return String(TARBALL.length - start)
+          return null
+        },
+      },
+      body: (async function* () { yield TARBALL.subarray(start) })(),
+    }
+  }
+  const second = makeInstaller(root, { fetch: { fetchImpl: secondFetch, calls: secondCalls } })
+  const installed = await second.installer.ensure({ confirmed: true, source: 'npmmirror' })
+  assert.equal(installed.status, 'installed')
+  assert.equal(secondCalls.length, 1)
+  assert.equal(secondCalls[0].range, 'bytes=8-')
+  assert.match(secondCalls[0].url, /npmmirror\.com/)
 })
 
 test('the real tarball extractor drops everything the allow-list did not pin', async () => {

@@ -30,7 +30,7 @@ It is **local-first by default**. The default `agent` backend stores full text i
 > [!WARNING]
 > **Early-stage software.** This plugin is still early and may contain unforeseen errors, bugs or breaking changes. Back up your data, and please [report an issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) or send a pull request — feedback helps the project improve.
 
-> **Status:** 1.2.4. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
+> **Status:** 1.2.5. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
 
 ## Screenshots
 
@@ -58,7 +58,7 @@ All screenshots are the real WebUI on isolated example data, not anyone's memori
 
 - **Three layers, one timeline.** `short_term` drafts expire after 72 hours by default; `long_term` is the body of ordinary memory; `must_remember` needs a reason and a source, decays over 365 days with a 0.35 strength floor, and can be *marginalized* but never auto-deleted to make room.
 - **Recall is a moment, not a dump.** The first turn after a session starts (or after compaction) gets an anchor block with budgets for pinned, core and global memory. After that, each user turn gets at most one recall. Deduplication and a token budget are enforced in code, not left to the prompt. Anchor and recall entries are **title cards**: title, id and semantic tags only. The body stays in the drawer and behind `memu_private_recall` / `memu_global_recall`, so the same budget exposes far more memories without pasting text the model never asked for.
-- **A private lexicon writes itself.** The consolidation worker extracts stable, evidenced slang, memes and project terms with one term per entry. Ordinary entries become active immediately (no human review queue), while sensitive triggers and sensitive edits stay user-only. The lexicon page is a card flow with active/archived tabs, edit, archive/restore and two-step permanent delete.
+- **A private lexicon writes itself.** The consolidation worker extracts stable, evidenced slang, memes and project terms with one term per entry. Ordinary entries become active immediately (no human review queue), while sensitive triggers and sensitive edits stay user-only. The lexicon page is a card flow with active/archived tabs, edit, archive/restore and two-step permanent delete. A **global lexicon** sits beside the per-library ones: every conversation reads it, only you write it. With same-domain cross-library recall on, the anchor, this-turn match and `memu_lexicon_search` merge those libraries too — the page still browses one book at a time.
 - **Private links are algorithm-first.** After consolidation, a zero-token pass connects memories that share a rare name or alias in the same context/track and creates/reuses an entity hub (for example `yuike`). Uncertain pairs are handed to the consolidation worker for an evidence-based decision. Links are metadata (`source: 'auto'`), shown with an “Auto” badge in the graph and removable; they never rewrite a body, write a vector or delete anything.
 - **A date is either an anniversary or one day.** `MM-DD` recurs every year (a birthday); `YYYY-MM-DD` fires the day before and the day itself, then is spent. A memory that says "tomorrow" is stored as the dated form, so an appointment does not come back every year.
 - **Memory fades unevenly.** Recency, access count, peak and end effects, primacy, habituation and flashbulb accuracy feed one strength score. Mood is described by four components (joy / anger / sorrow / fear, summing to 1) plus arousal (intensity) and dominance (sense of control); a compound mood such as jealousy is a named mix of the four, not a new axis. Mood only reorders recall: it never enters the injected text and never rewrites a memory body. Gating is the OR of three independent conditions — the dominant share is >= 0.35, |arousal - 0.35| >= 0.1, or |dominance| >= 0.25; when none holds, both multipliers are exactly 1. Older entries carry no emotion and keep the old valence path; the four axes are never inferred back from valence. A vivid memory can be more confident than it is accurate, and the UI says so.
@@ -105,15 +105,15 @@ The sidebar has exactly **one** entry: **MemU WebUI**. The memory wall and all s
 
 **In-place work.** Clicking a memory card opens a right-side drawer with the full text and the fields that decide how it behaves — title, content, tags, disclosure, confidence, open loop — plus save, archive, restore and "open in the browser" for heavier work. Archived memories can be deleted in the same drawer; the first click only arms it and the second confirms. Global memories are read-only in the drawer and link to their own page. Filters and scroll position stay where they were. Cards that carry images use the first usable attachment as a cover, and the drawer opens the full gallery; `secret` and `never_say` entries never receive a pixel URL, so they show a label instead.
 
-**Graph and list together.** The **Relations** tab renders the graph canvas and the adjacency list side by side (stacked on narrow screens), with the focus selector above them and link/entity/relationship tools below. There is no mode switch to forget.
+**Graph and list together.** The **Relations** tab renders the graph canvas and the adjacency list side by side (stacked on narrow screens), with the focus selector above them and link/entity/relationship tools below. There is no mode switch to forget. The scope selector also carries a **Global memory** entry: nodes are global entries and edges are `related/refines/supports`; the global view is read-only, and edges are removed from the global memory list.
 
 The locally bundled D3 force layout preserves positions and the camera across background data refreshes. Drag nodes, pan the background, zoom with the wheel or pinch, fit the graph, and highlight neighbors. Labels avoid collisions; graph settings adjust repulsion, link distance, labels and live layout. Layout only visualizes recorded links: it never infers or writes relationships. The graph page also lists **entity merge candidates** (same kind, contained or near-identical spellings) — suggestions only, confirmed by two clicks, and merging redirects links and folds aliases into the main node without deleting any memory.
 
 | Page | What it is for |
 |---|---|
 | Memories | Private/global grouped wall, source/status/library/preview, in-place drawer, multi-select bulk ops, node graph tab |
-| Engine & connection | Optional MemU engine install/switch, embedding endpoint, backups and restore |
-| Memory settings | Injection mode, token budgets, topK, relevance threshold, retention, open-loop cadence, freshness hint, date wake-up, automation |
+| Engine & connection | Optional MemU engine install/switch, embedding endpoint, backups and restore; local runtime download shows MB/s, offers npmjs / npmmirror, and supports pause, stop and resume |
+| Memory settings | Injection mode, token budgets, topK, same-domain cross-library recall, relevance threshold, retention, open-loop cadence, freshness hint, date wake-up, automation |
 | Folders | Folder-level private/global ceiling, expandable conversations and their own switches |
 | Libraries | Create, rename, archive, restore, explicitly delete libraries |
 | Memory browser | Full-text editing, attachments, review queue, graph and bounded canvas, JSON/ZIP import/export |
@@ -246,8 +246,8 @@ Folder policy is a **ceiling, not an initial value**: turning a folder switch of
 | `memu_private_unpin` | Marginalize a permanent memory with a first-person reason, quota and cooldown |
 | `memu_private_link` | Link memories/entities with evidence, or update a relationship snapshot; also adjudicates `memu_private_link_suggest` candidates; cannot delete edges |
 | `memu_private_link_suggest` | Run the local high-confidence linking/entity-hub pass for ids written this consolidation and return only uncertain candidate pairs |
-| `memu_lexicon_search` | Search active private-lexicon terms; archived and tombstoned terms stay hidden |
-| `memu_lexicon_propose` | Add or update a lexicon term; ordinary entries become active immediately, sensitive triggers remain user-only |
+| `memu_lexicon_search` | Search active lexicon terms this conversation can see: bound library + global lexicon (+ same-domain libraries when cross-library recall is on); archived and tombstoned terms stay hidden |
+| `memu_lexicon_propose` | Add or update a lexicon term in the bound library (never the global lexicon); ordinary entries become active immediately, sensitive triggers remain user-only |
 | `memu_global_recall` / `memu_global_list` | Read the global layer by domain |
 | `memu_status` | Storage health, sync heartbeat, recall state and image-turn status |
 

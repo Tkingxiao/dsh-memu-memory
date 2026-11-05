@@ -7,7 +7,7 @@ import path from 'node:path'
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-memory-browser-'))
 process.env.DSH_MEMU_HOME = home
 
-const { createLibrary, ensureSession, loadPrivateIndex, savePrivateIndex, listLibraries, getSessionBinding } = await import('../lib/state.js')
+const { createLibrary, ensureSession, loadPrivateIndex, savePrivateIndex, listLibraries, getSessionBinding, setSessionBinding, getLibrary, normalizeCwd } = await import('../lib/state.js')
 const { privateRemember, privateRecall, privateUpdate, privateArchive, globalList, globalRecall } = await import('../lib/memory.js')
 const { dispatch } = await import('../lib/rpc.js')
 
@@ -255,6 +255,63 @@ test('folder sessions use host titles and hide archived or deleted conversations
   const out = await dispatch(ctx, 'listFolderSessions', { scopeKey: cwd })
   assert.deepEqual(out.sessions.map((s) => s.sessionId), ['folder-visible'])
   assert.equal(out.sessions[0].title, '可见对话')
+})
+
+test('turning private memory on backfills the folder library instead of leaving libraryId null', async () => {
+  const cwd = path.join(home, 'repair-scope')
+  setSessionBinding('repair-scope-session', {
+    scopeKey: cwd, useLibrary: false, useGlobal: true, libraryId: null,
+    domain: 'coding', domainOverride: 'rp',
+  })
+  const out = await dispatch({}, 'setSessionScope', { sessionId: 'repair-scope-session', useLibrary: true })
+  const binding = getSessionBinding('repair-scope-session')
+  assert.equal(binding.useLibrary, true)
+  assert.ok(binding.libraryId, 'enabling private memory must bind a library')
+  assert.equal(out.binding.libraryId, binding.libraryId)
+  assert.equal(getLibrary(binding.libraryId).scopeKey, normalizeCwd(cwd))
+})
+
+test('enabling a folder policy backfills conversations that already opted into private memory', async () => {
+  const cwd = path.join(home, 'repair-folder')
+  setSessionBinding('repair-folder-a', { scopeKey: cwd, useLibrary: true, useGlobal: true, libraryId: null, domain: 'coding', domainOverride: 'rp' })
+  setSessionBinding('repair-folder-b', { scopeKey: cwd, useLibrary: false, useGlobal: true, libraryId: null, domain: 'coding', domainOverride: 'rp' })
+  await dispatch({}, 'setFolderPolicy', { scopeKey: cwd, useLibrary: true })
+  const a = getSessionBinding('repair-folder-a')
+  assert.ok(a.libraryId, 'a private-enabled conversation must be bound')
+  assert.equal(getLibrary(a.libraryId).scopeKey, normalizeCwd(cwd))
+  const b = getSessionBinding('repair-folder-b')
+  assert.equal(b.libraryId, null, 'a conversation that opted out stays opted out')
+  assert.equal(b.useLibrary, false)
+})
+
+test('the global curation picker hides archived and deleted conversations too', async () => {
+  const cwd = path.join(home, 'browser-global-list')
+  const ctx = {
+    get(name) {
+      if (name === 'sessionQuery') {
+        return {
+          listSessions: async () => [
+            { header: { id: 'global-visible', cwd }, live: true, persisted: true },
+            { header: { id: 'global-archived', cwd }, live: false, persisted: true },
+            { header: { id: 'global-deleted', cwd }, live: false, persisted: true },
+            { header: { id: 'global-subagent', cwd, origin: 'subagent' }, live: false, persisted: true },
+          ],
+          readTitleSnapshots: async (ids) => ids.map((sessionId) => ({ sessionId, status: 'fulfilled', value: {} })),
+        }
+      }
+      if (name === 'workspaceRegistry') {
+        return {
+          archivedSessionIds: ['global-archived'],
+          // The deleted conversation's log still exists, but its workspace no
+          // longer claims it. listSessions() above still returns it.
+          list: () => [{ path: cwd, sessionIds: ['global-visible', 'global-archived'] }],
+        }
+      }
+      return null
+    },
+  }
+  const out = await dispatch(ctx, 'listSessions', { limit: 80 })
+  assert.deepEqual(out.sessions.map((s) => s.id), ['global-visible'])
 })
 
 // ---- provenance in the browser, and the private review queue ----

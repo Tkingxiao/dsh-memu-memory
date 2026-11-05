@@ -613,6 +613,34 @@ test('operation matrix: every library route denies A→B, allows A→A, and gate
   }
 })
 
+// 全局词典（lib/lexicon.js 的 GLOBAL_LEXICON_ID）不是私有库：宿主不该被叫去授权一本
+// 根本不存在的库，绑定中的会话也不该因为点名「全局」而不是自己的库就被判成越权。
+// 会话侧仍要认凭证（会话存在 + 全局层没被天花板关掉）；standalone 与 listGlobal 一样
+// 只由 HTTP 边界把关。
+test('the global lexicon is a shared store, not a library route', async () => {
+  const { GLOBAL_LEXICON_ID } = await import('../lib/lexicon.js')
+  for (const prefix of prefixes) {
+    const post = (payload) => send(prefix.route, prefix.base + '/lexiconList', { method: 'POST', body: envelope('lexiconList', payload) })
+    auth.callbackMode = 'present'
+    auth.libraryDecision = false
+    auth.libraryCalls = 0
+    const bound = await post({ libraryId: GLOBAL_LEXICON_ID, sessionId })
+    assert.equal(bound.res.status, 200, `${prefix.name}: a bound session may address the global lexicon`)
+    assert.equal(auth.libraryCalls, 0, `${prefix.name}: the host must not be asked about a library that does not exist`)
+    const ghost = await post({ libraryId: GLOBAL_LEXICON_ID, sessionId: 'auth-session-ghost' })
+    assert.equal(ghost.res.status, 403, `${prefix.name}: a dangling session id is never a credential`)
+    state.setSessionBinding(sessionId, { useGlobal: false })
+    const blocked = await post({ libraryId: GLOBAL_LEXICON_ID, sessionId })
+    state.setSessionBinding(sessionId, { useGlobal: true })
+    assert.equal(blocked.res.status, 403, `${prefix.name}: useGlobal=false means there is no global lexicon for that conversation`)
+    auth.libraryDecision = false
+    auth.libraryCalls = 0
+    const solo = await post({ libraryId: GLOBAL_LEXICON_ID })
+    assert.equal(solo.res.status, 200, `${prefix.name}: the management plane is governed by the HTTP boundary`)
+    assert.equal(auth.libraryCalls, 0)
+  }
+})
+
 test('removed lexiconReview is no longer a library route and does not dispatch', async () => {
   for (const prefix of prefixes) {
     auth.callbackMode = 'present'

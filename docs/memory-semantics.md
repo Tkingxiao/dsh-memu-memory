@@ -32,13 +32,15 @@
 
 **全局关联（link）**：curator 可给两条全局记忆连边（`related/refines/supports`），note 必须含转录逐字引用；每端 ≤20 条、有向边防环、移除只删边不删记忆。前端只读展示，不支持手动全局关联。
 
+**全局节点图**：WebUI 记忆墙 → 节点图 → 范围选择「全局记忆」。`getGraph({scope:'global'})` 读 `global.json` 的 `entries[id].links[]`：节点是全局条目（`kind:'global'`，单独配色），边是 `related/refines/supports`；`suppressed/expired` 条目隐藏，但指向已删除目标的那条边保留占位节点。全局视图只读，移除边仍在全局记忆列表里完成。它与私有节点图共用同一个 `getGraph` RPC，不新增方法。
+
 **集合记忆（absorb）**：多条碎片合成一条集合记忆——合并稿 active、target superseded（absorbedInto）、sources archived（absorbedBy，**不删除**，可还原）；`absorbSnapshot` 支持一键撤销合并（人工改动过的条目拒绝撤销）；簇外重复 ≥0.90 的合并稿转人审。
 
 ### 8.4 注入
 
 - 静态 guide 与动态记忆都走 plugin 消息；当前版本不再注册本插件的 system prompt 段。所有会话（含 `persona` `complete: true`）统一由 `lib/inject.js` 的 `ensureUnifiedGuide` 在**回合首步**投放一条 `<memory-guide rules="…">` 插件消息；`rulesKey` 由协议版本、domain 和实际渲染正文计算，domain/覆盖/默认稿变化或压缩丢失（`guideLost`）时在下一个合法首步替换，同一规则不逐回合重复。旧 binding 只有 `guideMessageAt`、没有 `guideRulesKey` 时视为旧版，补投一次；失败 fail-open，不写新版本。
 - 首轮锚点 + 每用户回合最多一次；长工具回合仅有新的真实人类消息批次时追加一次，普通工具步骤不触发。私有优先、全局补充；冲突时私有胜。
-- **锚点和本回合召回只放标题卡**（1.2.2）：`formatPrivateTitle` / `formatGlobalTitle` 输出 `[id]`、标题、`source`、owner、layer、日期/年龄、marginalized/open_loop、accuracy/uncertainty/disclosure 与附件计数，**不输出正文与附件 caption**。工具返回、记忆抽屉与浏览器仍是全文；要正文就按标题关键词或方括号里的 id 调 `memu_private_recall` / `memu_global_recall`。标题为空时回退正文前 40 字；`imagined`、`never_say` 等语义标签不能因为标题化而丢失。
+- **锚点和本回合召回只放标题卡**（1.2.2）：`formatPrivateTitle` / `formatGlobalTitle` 输出 `[id]`、标题、`source`、owner、layer、日期/年龄、marginalized/open_loop、accuracy/uncertainty/disclosure 与附件计数，**不输出正文与附件 caption**。工具返回、记忆抽屉与浏览器仍是全文；要正文就按标题关键词或方括号里的 id 调 `memu_private_recall` / `memu_global_recall`。标题为空时回退正文前 40 字；`imagined`、`never_say` 等语义标签不能因为标题化而丢失。跨库召回开启时（§8.15），private 标题卡可能来自其它同领域库；id 仍全局唯一，按 id 取正文仍走 `memu_private_recall`，写入仍只落在当前库。
 - **条件式时效提示（工单 D）**：本回合召回块已经生成后，若其中至少一条真正进入文本的条目带时间敏感信号——`salientDate` 是已过去的 `YYYY-MM-DD`（年度 `MM-DD` 不算）、标题/正文命中固定词表 `最新|最近|现在|目前|今年|版本|价格|天气|新闻|比分|汇率`、或 `updatedAt||createdAt` 距现在 ≥ `freshnessDays`（`owner=about_project` 的工程事实不算年龄）——且 `freshnessHint !== false`、用户文本长度 ≥ `minUserChars`，就在最后一个 `</memory-context>` 之后追加**一个** `<memory-freshness>` 块，N 为去重后的 stale 条数。提示与召回共用 `turnTokens` 预算：放不下就丢弃提示，召回本身仍成功（fail-open，计算异常只 `warn`）。它只说「若你的会话里有可用的搜索工具就先核实」，**不声称** `web_search` 一定存在（工具面不确定性见 `docs/host-api.md` §6.8），也不改 `<memory-guide>`/`rulesKey`。`freshnessDays` 默认 30，范围 `[1,3650]`；`freshnessHint` 默认开。
 - **rule 是前言，不是页脚**：`buildAnchor` 先输出锚点头与 `[rule]`，再输出 private/global/short_term 各段；inbound 路径的锚点之后直接衔接 `<memory-context>`，中间不再隔一条规则。
 - **`injectedIds` 只能记真正进入文本的条目**，否则从未展示的记忆被白白压制 8 轮。
@@ -78,7 +80,7 @@
 
 - 所以 `secret` 的实际边界是「**不被自动注入、不当回响源、附件不出像素**」；同一文件夹里另一个会话**主动检索时照样能拿到**。它挡的是「自己冒出来」，不是「别人查到」。要「跨会话绝不外泄」，靠 §8.7 的上下文边界，不是 `secret`。
 - 「只有我知道」= `disclosure: never_say`（不许说出口）+ `secret`（不许自动浮现）两个字段的组合，不是加密。侧边栏和记忆墙始终能看到正文——这是**事后监督**的设计，不是疏漏。
-- 全局 curator 读的是会话日志与全局库，不读私有库条目（`compactGlobalIndex`），所以 `secret` 不会被复制进「每会话都注入」的全局记忆；跨文件夹（不同库）之间也读不到。
+- 全局 curator 读的是会话日志与全局库，不读私有库条目（`compactGlobalIndex`），所以 `secret` 不会被复制进「每会话都注入」的全局记忆；跨文件夹（不同库）之间的私有召回**默认隔离**，只有显式打开 `crossLibraryRecall` 才会合并同领域库，且只读——见 §8.15。
 
 ### 8.7 上下文作用域：`channelId / characterId / worldId / branchId` + `knownBy`
 
@@ -149,7 +151,7 @@
 
 **标题卡与标题写作。** 锚点/召回的可见单位从正文改为标题卡，标题因此成为索引而不是装饰：提示词要求 8–40 字、含具体人名/物名/事件/结论关键词，禁止「一些事」「那段对话」「关于 XX 的事」；合并/吸收稿的标题要覆盖全部来源关键词。Lexicon 的注入行仍保留「term + ≤80 字短义」（不是裸词），因为词典的唯一价值是解释；UI 卡片也是 term 标题 + meaning 正文。
 
-**词典生命周期。** 公开状态只有 `active` / `archived`：用户新建、模型 `memu_lexicon_propose`、curator 带证据抽取都直接 active；`archiveLexiconTerm` / `restoreLexiconTerm` 负责可逆退场，删除只属于管理面。`rejected` 只作为 legacy 墓碑/指纹留在数据里，UI、注入、检索与计数都看不到；`pending` 只作为旧版本迁移输入：新提案 → active（敏感 → archived），revision 草稿 → archived。敏感 trigger 的新建/修改只能由用户完成，模型/curator 得到 typed 拒绝；非用户修改普通 active 词条的敏感字段也直接拒绝，不再生成 pending revision。RPC 的 `lexiconReview` 已删除（方法数见 `docs/contributing.md` 的 rpc-method-count 标记）。
+**词典生命周期。** 公开状态只有 `active` / `archived`：用户新建、模型 `memu_lexicon_propose`、curator 带证据抽取都直接 active；`archiveLexiconTerm` / `restoreLexiconTerm` 负责可逆退场，删除只属于管理面。`rejected` 只作为 legacy 墓碑/指纹留在数据里，UI、注入、检索与计数都看不到；`pending` 只作为旧版本迁移输入：新提案 → active（敏感 → archived），revision 草稿 → archived。敏感 trigger 的新建/修改只能由用户完成，模型/curator 得到 typed 拒绝；非用户修改普通 active 词条的敏感字段也直接拒绝，不再生成 pending revision。RPC 的 `lexiconReview` 已删除（方法数见 `docs/contributing.md` 的 rpc-method-count 标记）。**哪些词条进得来**是另一层：全局词典 + 同域跨库，见 §8.16。
 
 **私有自动关联。** 整理结算后 `lib/private-links.js` 只做本地算法：同库、同 context/track、可见非 secret、标题共享稀有 name-like token、pairScore < 0.82 且无冲突时，建立 memory↔memory `relation` 并写 `source:'auto'`；≥2 条记忆共享该 token 时复用/创建实体枢纽（人物信号 → `person`，无信号的拉丁名保守 → `thing`，CJK 无信号或 kind 冲突 → 不确定候选）。高置信写库在算法侧完成，不确定候选最多 8 对交给本次整理 worker 用 `memu_private_link_suggest` / `memu_private_link` 带证据裁决；不另起整理、不重读转录。算法/写入失败只记 warn，不能让已经成功的整理失败；自动关联不改正文、不写向量、不删除，边可在关系图移除。worker 写工具为 remember/update/link/link_suggest/lexicon_propose，读工具为 recall/list/lexicon_search，但「有没有写能力」仍只由 remember/update 判定。
 
@@ -160,6 +162,37 @@
 **纪念日到点唤醒（工单 E，默认关闭）。** `settings.salientWake === 'schedule'` 时，整理周期里的 `runSalientWakePass` 会按**投递时区**（`salientWakeTimeZone`，留空跟随系统）扫描今天/明天命中的 salient date，给每个绑定会话通过宿主公开的 `ctx.schedule` 建一条一次性任务：标题 `memu:due:<sessionId>:<YYYY-MM-DD>`，`timing: { kind:'at', at:{date,time,time_zone} }`（时刻取 `salientWakeHour`，默认 `09:00`；时区留空跟随系统，非空必须是有效 IANA 区），`target: { kind:'session', sessionId }`。**日历日与「这一刻过去了吗」都按投递时区算**（`dayInZone` / `instantInZone`，用 `Intl` 取该时区墙上钟再换算绝对瞬间）：按机器墙钟算会在配置时区与系统时区不一致时排错一天，或把那个时区里还没到的时刻当成已过而静默不排。幂等靠 `schedule.list` 对账而不是往 binding 写任务 id：同名 active 任务跳过、paused 不动、ended 删除、已过时刻的当天槽位不补建。投递是 `agent.followup`，**会新开一整回合**，而本插件的注入管线只认 `source.kind==='user'` 的真实用户消息——所以那条回合拿不到锚点、召回和纪念日块，**唤醒 prompt 必须自带正文**（日期、升级措辞、`memu_private_recall` 指引、「已说过不要重复」）。宿主没有 schedule 服务、subagent 会话（`subagent_session`）、已归档会话（`invalid_rule`）都只记 `kind:'wake'` 的活动日志并跳过，不能让整个周期失败。边界：宿主进程必须活着；at-least-once 可能重复投递；用户手删任务下一轮会重建；任务在宿主的定时任务界面可见。真机验证前默认 `off`。
 
 **实体主节点合并（工单 F）。** 同一记忆库里写法不同的实体（`林眠` / `林眠儿`）可以由用户合并到主节点。`suggestEntityMerges({libraryId})` 是纯读：同 `kind` 且「归一化后短方（≥2 字）被包含」或「短方 ≥3 字且编辑距离 ≤2」时给出 `{sourceId(短), targetId(长), reason}`，稳定排序、上限 20，**永不自动合并**。`mergeEntities({libraryId,targetId,sourceIds})` 在实体文件锁内一次完成：别名取并集（含来源实体的名字）并 cap 30（超出部分在返回值 `droppedAliases` 里报告，不静默丢）；私有索引里所有 `links[].to === sourceId` 改指 target，同 `(to, kind)` 冲突按既有替换规则去重；关系快照按端点对重键，与主节点侧冲突时**保留主节点侧**并计入 `relationships.conflicts`；来源实体删除后再 `pruneOrphanEntities` 兜底（主节点受保护）。合并**不删除任何记忆**，只改指向；活动日志记 `kind:'write' op:'entity-merge'`，失败留 warn。kind 不同的合并请求直接拒绝。WebUI 节点图页给出候选、两次点击确认、合并后回执（改指多少条链接、并入多少别名、丢了多少别名与冲突快照）。跨库、全局↔私有归并不做。
+
+### 8.15 跨库召回（默认关闭）
+
+`settings.crossLibraryRecall` 打开后，`privateRecall` 会把**同领域**的其它私有库候选合并进本次召回；自动召回（`buildRecall`）、`memu_private_recall`、`memu_private_list` 与侧栏私有列表走同一套作用域，因此一次开关同时覆盖它们。**词典走同一条作用域**（锚点摘要、本回合匹配、`memu_lexicon_search`）——见 §8.16。显式传 `libraryId` 的库浏览器（`browseLibrary` / 记忆浏览）仍只显示该库，否则“我正在看哪个库”就没有答案。
+
+- **候选库资格**：该库至少有一个非整理 fork 的会话绑定，且绑定的 `domainOf()` 等于当前会话领域；文件夹策略 `useLibrary === false` 的库排除；归档库排除。当前绑定库**始终参与**，且它的条目不按 domain 过滤（保持旧行为）。
+- **条目过滤**：其它库的条目若带 `domain` 必须等于当前领域；旧条目没有 `domain` 字段时，按「该库的绑定会话领域已匹配」放行。新写入的私有条目会带 `domain`（`privateRememberImpl` 从当前 binding 取）。
+- **合并**：逐库候选用 RRF（k=60）合并，每个命中保留 `libraryId`；`retrievalScore` 由跨库 RRF 归一化，保证后续心境/衰减排序仍以跨库结果为先验。`touchAccessMany` 与 `stats` 按命中所在库分组，不再全部记到当前库。
+- **边界不变**：`visibleToSession` 仍按当前会话的 `memoryContext` 过滤；`secret` 在自动召回里仍被排除，显式召回仍可读；`knownBy` 规则不变。
+- **只读**：`memu_private_update` / `memu_private_archive` / `memu_private_delete` 仍只解析当前绑定库。跨库命中在工具结果里标 `library=…（跨库只读；写入仍落在当前库）`，避免把「unknown memory」误读成「已被删除」。
+- **单库不换路**：只有一个候选库时走原路径，结果形状与旧版一致；只有真正存在第二个合格库时才返回 `recallRoute: 'cross-library'` 与 `libraries`。
+
+---
+
+### 8.16 词典作用域：全局词典与同域跨库
+
+词典与记忆是两条链（锚点摘要 / B 通道匹配 / `memu_lexicon_search` 对 `privateRecall`），但「这个会话看得见哪些词条」必须与 §8.15 同一个答案，否则同一个开关下记忆跨文件夹、词典不跨，用户读到的是半套同步。作用域由 `lib/lexicon-scope.js` 一处回答，三份数据、三套过滤：
+
+- **当前绑定库**：主源。条目**不**按 domain 过滤（保持旧行为），也是模型与整理链路**唯一**的写入目标。
+- **全局词典**：`data/lexicon/global.json`，保留存储名 `global`（`lexicon.GLOBAL_LEXICON_ID`；私有库 id 恒为 `lib_<hex>`，撞不上）。与全局记忆同构——每个会话都读得到，**只有用户能写**：全局 curator 见到词典 op 一律拒绝（§8.3），`memu_lexicon_propose` 没有全局路径。开关是 `useGlobal`（文件夹 + 会话两层天花板），与 `crossLibraryRecall` 无关；私有记忆整个关掉时，这一页仍只剩全局词典可读。条目过滤复用 `appliesToDomain`：`universal` / `personal` 恒可见，写了别的领域的词条只在那个领域可见，**没有 domain 的词条按通用处理**（全局词典由用户手写，不戳领域）。
+- **同域其它库**：只有 `crossLibraryRecall === true` 才进候选，资格判定直接复用 `memory.js` 的 `crossLibrarySources`（同领域、非整理 fork、文件夹没关私有记忆、未归档），条目再按 `entry.domain` 过滤——与 §8.15「旧条目没有 domain 时随库放行」同口径。新词条落 `domain`：`memu_lexicon_propose` 恒打当前会话领域；RPC `lexiconAdd` 只在带 `sessionId` 且写私有库时打，写全局词典不打。
+
+**合并与优先级**：源序 = 当前库 → 同域库 → 全局（「私有优先、全局补充」）。同一个规范词面只保留第一份，所以全局词典与私有库撞词时私有解释胜出，注入里一行不重复。B 通道的跨源命中用词典核心的 `rankLexiconHits` 重排——排序尺子仍只有那一把，合并方不自定顺序。只有一个来源时不去重（一本词典内部允许同词面跨 scope 共存），保持旧行为。
+
+**计数落库**：candidate / injection 按词条所属词典分组落账，同 §8.15 的 `touchAccessMany` 分组一个道理——跨库命中不把热度全记到当前库，否则那本库的频率先验永远读不到真实使用。冷却按会话记，与来源无关。
+
+**只读边界**：`lexiconUpdate` / `Delete` / `Archive` / `Restore` 与 `memu_lexicon_propose` 只作用于显式选中的那一本；`memu_lexicon_search` 给外来命中标 `home=…（跨库只读；写入仍落在当前库）`，全局命中标 `home=全局词典`。词典页是**浏览面**：选一本看一本（与记忆浏览器、与 `browseLibrary` 一致），合并只发生在注入与模型检索；页顶的口径说明就是为这句差异写的。RPC 层 `lexiconSearch` 不带 `libraryId` 时是会话视角（跨源），带 `libraryId`（含传 `global`）时只看那一本。
+
+**坏一本不塌整段**：辅源（同域库、全局词典）读失败只降级成 `errors`，锚点与匹配照常出；主源读失败继续抛，由调用方按 §1-规则 10 记 `logger.warn` + `lastRecallError`。`errors` 非空时才多带这一个字段——没有降级时返回体与单库时代逐字节一致。
+
+守卫：`tests/lexicon-scope.test.mjs`（源序、`useGlobal`/`useLibrary` 天花板、条目级 domain、`appliesToDomain`、词面去重、计数落库、辅源降级、主源抛错、备份同权、只读标注）；`tests/lexicon-ui.test.mjs`（全局 id 前后端同拼法）。
 
 ---
 

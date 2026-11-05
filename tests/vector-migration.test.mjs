@@ -159,9 +159,29 @@ test('prepareShadow allocates a brand-new generation path and never switches by 
   const resumed = await migrator.prepareShadow({ profile: BGE })
   assert.equal(resumed.generation, first.generation)
   assert.equal(resumed.resumed, true)
+
   const fresh = await migrator.prepareShadow({ profile: BGE, fresh: true })
   assert.notEqual(fresh.generation, first.generation)
   assert.notEqual(fresh.databases.global, first.databases.global)
+})
+
+test('a pending generation with a stale manifest is discarded instead of resumed', async () => {
+  resetAll()
+  const fx = createFixture()
+  const migrator = fx.migrator()
+  const first = await migrator.prepareShadow({ profile: BGE })
+  // A catalog manifest change (for example adding a download source) must not be
+  // resumed under the same fingerprint: the old journal profile no longer verifies.
+  vp.updatePendingJournal(journal => ({
+    ...journal,
+    status: 'failed',
+    profile: { ...journal.profile, manifestDigest: '0'.repeat(64) },
+    error: { code: 'VECTOR_STALE_TEST', message: 'old manifest' },
+  }))
+  const replacement = await migrator.prepareShadow({ profile: BGE })
+  assert.notEqual(replacement.generation, first.generation, 'a stale pending generation must be discarded')
+  assert.equal(replacement.resumed, false)
+  assert.ok(vp.manifestDigestAccepted(vp.pendingJournal().profile.manifestDigest, catalog.getEmbeddingModel(BGE)))
 })
 
 // ---------------------------------------------------------------- syncShadow

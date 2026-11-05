@@ -71,7 +71,9 @@ node scripts/local-runtime-install.mjs --download --cache <dir>   # 用离线 ta
 node scripts/local-runtime-install.mjs --target <dir> --platform win32-x64 --id <modelId> --shallow
 ```
 
-状态 `installed / absent / unsupported / downloading / verifying / installing / failed / cancelled`；`unsupported` = catalog 没 pin 该平台原生库（如 `darwin-x64`）。装失败只 `warn` + 回词法召回，不会自动改用云端 embedding。
+状态 `installed / absent / unsupported / downloading / paused / stopped / verifying / installing / failed / cancelled`；`unsupported` = catalog 没 pin 该平台原生库（如 `darwin-x64`）。装失败只 `warn` + 回词法召回，不会自动改用云端 embedding。
+
+**下载源与续传（设置页）**：运行时三个 tarball 默认从 `npmjs` 取，也可选 `npmmirror（国内镜像）`；每个源都必须返回与 catalog pin 一致的 `bytes`/`sha256`，换源不会换运行时树。下载进度显示百分比、已下载/总量（MB）与实时速度（MB/s）。`暂停`/`停止`只中断传输、不发布 active；已下载字节保存在 `<runtimeRoot>/.cache/<artifact>-<sha256>.tgz.part`，继续/换源/重启后用 HTTP `Range` 从该偏移续传。旧版本留在 `.staging/install-*/.artifacts/*.tgz` 的部分下载会在下一次安装时被接管；校验失败才删除坏 part。
 
 #### 9.5.1 五条已核实模型（2026-11-02）
 

@@ -541,7 +541,30 @@ test('the lexicon panel is a two-tab card flow with no review/pending surface; a
   // 来源记忆跳转与命中三计数 tooltip 保留。
   assert.match(panel, /onFocusMemory/)
   assert.match(panel, /lexiconHitsDetail/)
+  // 作用域选择器：全局词典是选择器里的第一项，不是一个私有库（与记忆墙节点图的
+  // 「全局记忆」同一款做法）；口径说明用设置页同一种 note 样式。
+  assert.match(panel, /lexiconGlobalScope/)
+  assert.match(panel, /lexiconGlobalHint/)
+  assert.match(panel, /lexiconBrowseScopeHint/)
+  assert.match(panel, /dshm-settings-note/)
+  // 全局词条跳记忆墙时 libraryId 必须落回 null（全局页），不能把保留字当库 id。
+  assert.match(panel, /isGlobalLib \? null : activeLib/)
+  // 没有私有库时这一页照样可用：全局词典由用户手写，不依赖任何库。
+  assert.ok(!/h\(Empty, null, t\('lexiconNoLibrary'\)\)/.test(panel), 'no private library must not blank the whole page')
   // 自动关联边带小 Tag，手动边不受影响（只认 source === 'auto'）。
   assert.match(src, /edge\.source === 'auto'/)
   assert.match(src, /t\('graphAutoLink'\)/)
 })
+
+// 全局词典的保留存储名由服务端定义、由前端复写一遍（client.js 是浏览器侧脚本，
+// 不能 import lib/）。两边漂移一次，前端就会把 `global` 当成一本不存在的私有库。
+test('the client and the server spell the global lexicon id the same way', () => {
+  const core = fs.readFileSync(new URL('../lib/lexicon.js', import.meta.url), 'utf8')
+  const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const server = /export const GLOBAL_LEXICON_ID = '([^']+)'/.exec(core)?.[1]
+  const browser = /const GLOBAL_LEXICON_ID = '([^']+)'/.exec(client)?.[1]
+  assert.ok(server, 'lib/lexicon.js must define GLOBAL_LEXICON_ID')
+  assert.equal(browser, server)
+  assert.ok(state.listLibraries().every((lib) => lib.id !== server), 'a library id may never be the reserved global id')
+})
+

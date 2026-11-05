@@ -299,6 +299,8 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **换了模型不等于换得对**：MiniLM 是英文模型，中文锚点召回实测弱于 BGE/e5（同一份合成草稿 R@1 0.5455 对 0.6667），"检索变差"先看设置页当前生效的 `catalogId` 而不是先怀疑注入。口径与实测数字在 `docs/env-and-commands.md` §9.5.1。
 
+**运行时下载慢 / 重启后从 0 重下 / 切换没重建**：运行时和模型是两件制品，切换还要求 MemU 引擎已就绪——三件事缺一件，`切换并重建` 就是灰的或直接失败。旧版本曾在引擎安装完成前启动迁移，留下 `MEMU_ENGINE_NOT_READY` 的失败 pending；引擎就绪后重新点一次切换即可（会覆盖旧 pending）。运行时下载现在有 `npmjs` / `npmmirror` 两个源、进度里显示 MB/s，支持暂停/停止；部分字节在 `<runtimeRoot>/.cache/*.part`，停止换源或重启后从该偏移续传，不会重新下载已完成的 115 MB。若仍被 `LOCAL_VECTOR_RUNTIME_BUSY` 挡住，先看 `install.lock` 的 pid 是否还活着；进程还活着时不要手删锁。
+
 **守卫**：`tests/embedding-catalog.test.mjs`（三条目指纹钉死、只有非对称前缀需要角色通道）、`tests/local-embedding-protocol.test.mjs` 与 `tests/local-embedding-worker.test.mjs`（角色解析、前缀确实进推理、裸 id 被拒且没进推理）、`tests/local-embedding-env.test.mjs`（对称模型的 `MEMU_EMBED_MODEL` 逐字节不变）。
 
 ---
@@ -485,7 +487,20 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 - 不带 sessionId（standalone 管理面）：宿主实现了 `connection.authorizeLibrary(req, { libraryId, operation })` 时严格 `=== true` 才放行（fail-closed）；**未实现时回退放行**（HTTP 边界的 requestRejection 仍是门）——fail-closed 会在真实宿主上把 standalone WebUI 全部 403（本条目的来源）。
 - 无 libraryId 的 `browseWall`（"全部记忆库"视图）走同一回退模型；实现了 capability 的宿主可拒绝多库枚举。
 - 全局复核队列：嵌入式会话可读、写需活绑定；standalone 需要 `review.manage` grant（capability 缺席时同样回退放行）。
+- 全局词典（`libraryId === 'global'`，§8.16）**不是库级路由**：不能让宿主去 authorize 一本不存在的库，也不能因为会话点名「全局」而不是自己的库就判越权。规则在 `authorizeGlobalLexiconRoute`——带 sessionId 要求会话存在且 `effectiveScope().useGlobal !== false`（全局层被关了这本词典对该会话就不存在）；不带 sessionId 与 `listGlobal` / `removeGlobalLink` 一样由 HTTP 边界把关，不问 `authorizeLibrary`。
 - 授权拒绝的 403 是 JSON 信封：`{"ok":false,"error":{"code":"dsh-memu-memory/forbidden",...}}`。
+
+## 跨库召回与全局节点图
+
+- **开了 `crossLibraryRecall` 仍读不到别的库**：候选库必须至少有一个同领域的会话绑定（`domainOf` 相等），文件夹 `useLibrary` 不能为 `false`，库不能归档；当前绑定库自己的条目不参与 domain 过滤。旧条目没有 `domain` 字段时，依赖该库绑定会话的领域匹配。
+- **跨库命中在工具里标 `library=…（跨库只读）`**：这是有意的。`memu_private_update` / `archive` / `delete` 仍只解析当前绑定库；要改那条记忆，去它所属的库或记忆浏览。
+- **全局节点图是空的**：节点来自 `global.json` 的条目，边只来自 curator 写入的 `links`；没有 link 时仍会显示孤立节点。`suppressed` / `expired` 条目不显示，指向已删除目标的边保留占位节点。全局视图只读，移除边在全局记忆列表完成。
+- **开了 `crossLibraryRecall`，词典页却还是只看一本**：这是有意的。词典页与记忆浏览器一样是**浏览面**（选一本看一本），跨库合并只发生在注入与模型检索（`memu_lexicon_search`）里。作用域与过滤口径见 §8.16；页顶的口径说明讲的就是这句差异。
+- **另一个文件夹的黑话没被解释 / 全局词典不生效**：候选库要和 §8.15 一样的资格（同领域会话绑定、文件夹没关私有记忆、未归档），条目还要过 `entry.domain`（新词条由 `memu_lexicon_propose` 与 RPC `lexiconAdd` 打领域戳，旧词条无戳随库放行）。全局词典不看跨库开关，只看 `useGlobal`：文件夹或会话把全局关了，`[lexicon · 词典]` 里就没有全局那一行。排查顺序：`memu_lexicon_search` 的头部 `library=… + 全局（，跨库=…）` → 有没有那本库 → 那条词有没有被同词面的私有词条顶掉（私有优先）。
+- **跨库命中的词典改不掉**：`memu_lexicon_search` 会标 `home=…（跨库只读）`。写路径只落在当前绑定库，要改那条词就去它所属的库（词典页选那本库，或记忆浏览器）。
+- **某本词典坏了会不会整段没了**：辅源（同域库、全局词典）坏掉只降级——`lastRecallError` 里出现 `lexicon: degraded lexicon sources: <libraryId>: …`，其余来源照常注入；主源（当前绑定库）坏掉才整段 fail-open，并按 §3.1 留同一份信号。
+- **inbound 路径里词典一坏、整条注入反而没投出去**（旧 bug，已修）：`injectInboundForStep` 把 `let lexiconError = null` 写在锚点段**之后**，而锚点的 `catch` 在它**之前**就赋值 → 撞 TDZ，`catch` 自己抛 `ReferenceError`，fail-open 反把整批注入打死。声明必须在第一次使用之前；决策路径那份本来就写在前面，所以只有 inbound 会撞。改这段时顺手确认声明顺序（口径见 §1-规则 10）。
+- **提炼列表里仍有已删除对话**：`listSessions()` 会返回归档或已移出工作区的会话，`sessionCatalog` 现在按 `workspaceRegistry.archivedSessionIds` 与工作区成员过滤；宿主没有 `workspaceRegistry` 时只能过滤 subagent 会话。
 
 ## 提炼与词典排错（1.2.2）
 

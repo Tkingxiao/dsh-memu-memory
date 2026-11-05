@@ -12,7 +12,7 @@
 |---|---|---|---|
 | 1. 持久绑定 | `state.json` 的 `sessions[sessionId]`：`scopeKey`、`libraryId`、开关、`memoryContext`、`inbound.pending/seen/claimed/clock`、`sleepRetryAt`、注入标记等 | 跨重启、fork、插件重载保留；只有显式状态写入才改变 | 只读快照可读；报告的核心对象 |
 | 2. 运行时监听器 | `lib/preset-scope.js:19` 的 `attachments`，按 **agent context 对象** 键控 | 随 context 存在；context 被替换时旧监听器应释放，下一次 attach 重新挂载 | 跨进程不可读，声明为 `runtime-listener` |
-| 3. 临时映射/缓存 | `lib/inbound.js:12-14` 的 `mediaJobs`/`calls`/`sessions`、`lib/media.js:19` 的 `captures`、`lib/private.js:213` 的 `inFlight`、`lib/curator.js:11` 的 `jobs`、`lib/state.js:938` 的 `indexCache`、`lib/paths.js:52` 的 `readFailures` | 随 promise settle、turn/end、session/disposed、下一次成功读取或下一次加载清理 | 跨进程不可读，声明为 `temporary-map` 或 `cache` |
+| 3. 临时映射/缓存 | `lib/inbound.js:12-14` 的 `mediaJobs`/`calls`/`sessions`、`lib/media.js:19` 的 `captures`、`lib/private.js:213` 的 `inFlight`、`lib/curator.js:11` 的 `jobs`、`lib/state.js:1146` 的 `indexCache`、`lib/paths.js:52` 的 `readFailures` | 随 promise settle、turn/end、session/disposed、下一次成功读取或下一次加载清理 | 跨进程不可读，声明为 `temporary-map` 或 `cache` |
 
 **三层不混算。** `summary.bindings`、`summary.inbound`、`summary.unfinished` 只统计持久绑定；`summary.runtime` 只在调用方提供了进程内快照时出现，分别是 `runtimeListeners` 和 `temporaryMaps` 的合计。runtime 计数不会加进 binding 数，也不会把“持久层零候选”解释成“运行时没有残留”。同一份 state 在提供/不提供 runtime 快照时，`bindings` 与 `candidates` 必须完全一致。
 

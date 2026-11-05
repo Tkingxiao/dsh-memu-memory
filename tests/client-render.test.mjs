@@ -759,6 +759,45 @@ test('local vector settings render catalog controls and native download and migr
   assert.ok(!rpcCalls.some((call) => /downloadLocalVector|selectLocalVector|switchLocalVector/.test(call.endpoint)), 'rendering performed a model operation')
 })
 
+test('runtime download shows MB/s, selectable sources and pause/stop controls', async (t) => {
+  const { tree, nodes, rpcCalls } = await renderVectorSettings(t, {
+    settings: { memoryBackend: 'api', vectorSource: 'local' },
+    localVector: {
+      ...VECTOR_CATALOG_FIXTURE,
+      runtime: {
+        status: 'downloading',
+        ready: false,
+        sources: [
+          { id: 'npmjs', label: 'npmjs' },
+          { id: 'npmmirror', label: 'npmmirror' },
+        ],
+        downloadSource: 'npmjs',
+        progress: {
+          bytes: 50 * 1048576,
+          totalBytes: 100 * 1048576,
+          speedBps: 2.5 * 1048576,
+          current: 'onnxruntime-node',
+        },
+      },
+      vector: {},
+    },
+  })
+  const text = treeText(tree)
+  for (const visible of ['managedVectorPause', 'managedVectorStop', 'managedVectorRuntimeSource', 'npmjs', 'npmmirror', '2.5 MB/s']) {
+    assert.ok(text.includes(visible), visible + ' did not render')
+  }
+  const progress = nodes.find((node) => node.type === 'progress' && node.props['aria-label'] === 'managedVectorProgress')
+  assert.ok(progress, 'runtime progress bar missing')
+  assert.equal(progress.props.value, 50 * 1048576)
+  assert.equal(progress.props.max, 100 * 1048576)
+  const pause = nodes.find((node) => node.type === 'button' && node.props.children === 'managedVectorPause')
+  const stop = nodes.find((node) => node.type === 'button' && node.props.children === 'managedVectorStop')
+  assert.ok(pause && stop, 'pause/stop buttons missing')
+  await pause.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.ok(rpcCalls.some((call) => call.endpoint === 'installLocalVectorRuntime' && call.payload?.action === 'pause'))
+})
+
 test('migration with unknown total renders indeterminate native progress', async (t) => {
   const { tree, nodes } = await renderVectorSettings(t, {
     settings: { memoryBackend: 'api', vectorSource: 'local' },

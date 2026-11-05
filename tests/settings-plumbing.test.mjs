@@ -23,6 +23,7 @@ const SAMPLE = {
   openLoopRemindDays: 14,
   freshnessHint: false,
   freshnessDays: 90,
+  crossLibraryRecall: true,
   salientWake: 'schedule',
   salientWakeHour: '20:30',
   salientWakeTimeZone: 'Asia/Shanghai',
