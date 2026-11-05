@@ -101,13 +101,16 @@
 - 工具面：`visibility` 只接受 `shared` / `secret`，传 `session` 会得到解释性报错（而不是静默降级）；面板下拉与中英文标签同步删掉了这一档。
 
 ### 8.9 空闲整理：什么时候跑，以及为什么可以什么都不写
-- 触发：`settings.sleepConsolidation` 开着时，每 5 分钟扫一遍（`lib/cycle.js` 的 `runSleepPass`），挑「`lastTurnAt` 早于 `lastSleepAt` 且已经安静 ≥ `sleepAfterIdleMinutes`」的会话，交给 `requestPrivateConsolidation` 起一个 fork 去读转录、写记忆。**默认 3 分钟**（`lib/state.js` 的 `DEFAULT_SETTINGS`）；旧值 8/20 的安装保留原选择，只是新装默认更短。
-- 应用启动后 8 秒补跑一次（`STARTUP_SWEEP_MS`），因为定时器只在应用开着时存在：一段对话如果是在应用关着的时候结束的，它永远等不到那个「空闲窗口」——用户一回来发消息，`lastTurnAt` 就被顶新了。补偿每次最多处理 **2 个**会话（`runSleepPass` 的 `limit`），按最近活动排序。
-- **有新回合 ≠ 该写记忆。** 进 fork 之前先做两道本地评估（只看 `lastSleepSeq` 之后的转录）：① `assessConsolidationValue` 的硬门槛——没有任何人类消息（只有插件通知、工具结果、心跳）→ 跳过；只有一条**纯应答**（「谢谢」「好的」「ok」「收到」，且没有任何工具调用）→ 跳过。**这里刻意不按字数判断**：字数少的偏好句（「我不吃香菜」）比一千字的闲聊更该留，长度是坏代理。② `assessWake` 的加权分（`lib/active-memory.js`）：`H` 真人回合、`C` 真人文字 + 助手正文 + 去重后的成功工具结果（每个结果最多 2000 字符）、`U` 去重后的有效工具单元；`score = 0.35*min(H/3,2) + 0.45*min(C/4000,2) + 0.20*min(U/20,2)`，默认 `activeMemoryMinScore = 0.8`。空闲未到 `activeMemoryStarvationMinutes`（默认 15 分钟）时分数必须达标；到了饥饿阈值，**小于 2000 条事件的会话**无条件唤醒，**大 transcript 不吃饥饿豁免**——fork 的 seed 是整段前缀（真机 5913 条事件约 26MB），宿主虽然会压缩上下文，实测一次整理仍要约 4~22 万 input tokens（含缓存读，主要取决于记忆工具步数）；一个「继续」级薄回合只有 0.14~0.43 分，不能靠饥饿反复付这笔钱；大会话里的密集回合仍按分数正常触发。
-- **近期触发过记忆就不 fork。** `runSleepPass` 先看 `suppressionReason`：距上次整理不足 `activeMemoryCooldownMinutes`（默认 0）或距上次**注入过记忆**不足 `activeMemoryRecallCooldownMinutes`（默认 15 分钟）→ 跳过并发 `check` 日志。被抑制或低分跳过的回合返回 `settled: false`，不推进 `lastSleepSeq`/`lastSleepAt`；下一轮扫描重新评估，等真正有密集新内容再整理。
-- 评估通过但整理写了 0 条 = 正常成功（`lastSleepAt` 前移），不会每小时重来。整理日志额外记录 `scanned/fresh/index +N`（扫描多少事件、上次游标后新增多少、索引实际新增多少），`check` 日志记录 `score/reason/parts/空闲分钟/会话事件数`，用来区分「没触发、被门挡住、提取空转」。
+- 触发：`settings.sleepConsolidation` 开着时，每 5 分钟扫一遍（`lib/cycle.js` 的 `runSleepPass`）。候选有三条腿：① 空闲 ≥ `sleepAfterIdleMinutes`（**默认 2 分钟**，`lib/state.js` 的 `DEFAULT_SETTINGS`）；② **水位**——账本里 pending 积压 ≥ 200 事件，不依赖空闲；③ 新活动但水位不足时的**探针**（最多每 15 分钟一次，读转录并评估，不 fork）。排序是 backlog → idle → probe，扫描每次最多处理 **2 个**会话。
+- 应用启动后 8 秒补跑一次（`STARTUP_SWEEP_MS`），因为定时器只在应用开着时存在：一段对话如果是在应用关着的时候结束的，它永远等不到那个「空闲窗口」——用户一回来发消息，`lastTurnAt` 就被顶新了。
+- **有新回合 ≠ 该写记忆。** 进 fork 之前先做两道本地评估（只看 `lastSleepSeq` 之后的转录）：① `assessConsolidationValue` 的硬门槛——没有任何人类消息（只有插件通知、工具结果、心跳）→ 跳过；只有一条**纯应答**（「谢谢」「好的」「ok」「收到」，且没有任何工具调用）→ 跳过。**这里刻意不按字数判断**：字数少的偏好句（「我不吃香菜」）比一千字的闲聊更该留，长度是坏代理。② 水位优先级高于 `assessWake` 加权分：pending ≥ 200 事件或 ≥10 个真人回合直接整理；水位以下才走 `score = 0.35*min(H/3,2) + 0.45*min(C/4000,2) + 0.20*min(U/20,2)`（`H` 真人回合、`C` 真人文字 + 助手正文 + 去重工具结果、`U` 去重有效工具单元），默认 `activeMemoryMinScore = 0.8`、`activeMemoryStarvationMinutes = 15`。
+- **每次只种一窗。** `requestPrivateConsolidation` 只把 `lastSleepSeq` 之后的增量切成一个 ≤300 事件、尾部对齐完整回合的窗口（`selectConsolidationWindow`）；种子经 `compactSeedEvents` 清噪：只留真人消息 / 助手正文 / 工具调用与结果，删 reasoning、`source.replayState`、`data.stream`、插件召回、`runtime-context`、`request/header` 等后台事件；工具结果截 1600 字、重复输出只留一份。窗口开头插一条 `[memory-catalog]` 已有记忆目录（id + 标题 + layer + status），worker 用它合并/去重，不再为旧库重读历史。剩余事件留到下一次扫描，`lastSleepSeq` 只随对账回执前进。
+- **近期触发过记忆就不 fork。** `runSleepPass` 先看 `suppressionReason`：距上次整理不足 `activeMemoryCooldownMinutes`（默认 0）或距上次**注入过记忆**不足 `activeMemoryRecallCooldownMinutes`（默认 15 分钟）→ 跳过并发 `check` 日志。探针/水位可绕过「刚注入过」这一条（它们先评估、不直接 fork）；被抑制或低分跳过的回合返回 `settled: false`，不推进 `lastSleepSeq`/`lastSleepAt`。
+- **寒暄与无新事件是终态。** `small-talk` / `no-human-turn` / `no-new-events` 返回 `settled: true` 并写入 `lastSleepAt`，下一次真人消息到达前不再重扫同一段；政策跳过不计入 `ran`（没有 worker 回执）。
+- **同一快照失败有上限。** `failJob` 按窗口 `snapshotHash` 记 `failures`；连续 2 次失败后下一次请求返回 `skipped: 'snapshot-failed'`（`settled: true`），不再重复付同一段的 fork 成本。新事件会改变哈希，重新获得机会。
+- 评估通过但整理写了 0 条 = 正常成功（`lastSleepAt` 前移），不会每小时重来。整理日志额外记录 `scanned/fresh/index +N`（`scanned` 现在是**这一窗**的事件数，`fresh` 是游标后的总增量）和 `remaining`（还余多少事件），`check` 日志记录 `score/reason/parts/空闲分钟/会话事件数/待整理事件数`。
 - 会话被删：host 对 `readSession` 报 `session "…" not found`，这是**不变量**而不是瞬时故障。`runSleepPass` 一旦看到就把 binding 标 `sessionGone: true` 并清掉重试计数，此后直接跳过（以前会按 2 的幂退避、封顶 1 小时，永远重试）；同名会话后来真的收到新消息时（`lib/inbound.js`）会清掉这个标记。**"读不出来"不是"被删了"**：转录读失败（例如 `ENOENT`）由快照层显式标成可重试（`lib/consolidation-snapshot.js` 的 `failed()` → `retryable: true`），`runSleepPass` 只按退避重试、不打 `sessionGone`——`isGoneSessionError` 只认宿主那句 `session "…" not found` / `no such session`。
-- 手动「整理这场对话」（RPC `generatePrivate`）带 `force: true`，跳过上面两道评估与抑制：用户已经决定了。
+- 手动「整理这场对话」（RPC `generatePrivate`）带 `force: true`，跳过上面两道评估与抑制：用户已经决定了。若游标已经到末尾，手动整理只重查最后 ≤300 个事件，不再重放整段历史。
 
 ---
 

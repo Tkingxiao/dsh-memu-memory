@@ -253,11 +253,11 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **症状**：开了 `salientWake='schedule'`，条目明天到期，第二天会话里什么都没发生；或者宿主的定时任务界面里根本没有 `memu:due:` 任务。
 
-**落点**：`lib/salient-wake.js` 是整理周期里的一个 pass（`lib/cycle.js`），所以先看周期有没有跑。按顺序排：① 设置真的存下了吗（`setSettings` 的 allowlist 漏 key 会静默丢弃，`state.json` 里应出现 `salientWake: 'schedule'`）；② 宿主有没有 schedule 服务（`ctx.get('schedule')` 可能是 undefined，此时只 warn 一次并降级为被动注入）；③ 时区（`salientWakeTimeZone` 留空跟随系统，填了无效 IANA 区就整轮跳过并记一条）；④ 时刻（`HH:mm`，早于该时刻的当天槽位不补建，只排明天）；⑤ 会话状态（`useLibrary=false`、归档会话、subagent 会话会被宿主拒或本插件主动跳过）。活动日志 `kind='wake'` 的 `detail.stage`（`service / timezone / index / list / cleanup / create / pass`）就是这条排查线。
+**落点**：`lib/salient-wake.js` 是整理周期里的一个 pass（`lib/cycle.js`），所以先看周期有没有跑。按顺序排：① 设置真的存下了吗（`setSettings` 的 allowlist 漏 key 会静默丢弃，`state.json` 里应出现 `salientWake: 'schedule'`）；② 宿主有没有 schedule 服务（`ctx.get('schedule')` 可能是 undefined，此时只 warn 一次并降级为被动注入）；③ **宿主是哪一代 schedule API**——`0.2.2+` 是宿主级任务表（`create(request)` / `list→{items}` / `edit`），`0.2.0–0.2.1` 是会话级提醒（`create(sessionId,request)` / `list({sessionId})` / `delete`）；旧宿主上 `scheduleFlavor()` 返回 `session`，pass 以 `skipped: 'schedule-api'` 降级并只 warn 一次，不会排程也不该排程；④ 时区（`salientWakeTimeZone` 留空跟随系统，填了无效 IANA 区就整轮跳过并记一条）；⑤ 时刻（`HH:mm`，早于该时刻的当天槽位不补建，只排明天）；⑥ 会话状态（`useLibrary=false`、归档会话、subagent 会话会被宿主拒或本插件主动跳过）。活动日志 `kind='wake'` 的 `detail.stage`（`service / schedule-api / timezone / index / list / cleanup / create / pass`）就是这条排查线。
 
 **已经建了任务但没开口**：投递是 `agent.followup`，宿主进程必须活着；那一回合的 `source.kind==='schedule'`，本插件的召回/纪念日块**不会**运行，能看到的只有唤醒 prompt 自带的内容（这是设计，见 `docs/host-api.md` §6.6）。用户手删的任务会在下一轮 sweep 重建——同一天已 `ended` 的才清理。
 
-**守卫**：`tests/salient-wake.test.mjs`（默认 off 不问宿主、无服务只 warn 一次、今天/明天各一条且 prompt 自包含、二次 sweep 幂等、ended 清理、paused 不动、subagent/归档/其它错误只跳过该会话、年度 `MM-DD` 不提前、无效时区不抛错）。真机验收项单独记录：造一条明天到期的条目 → 宿主 schedule UI 出现 `memu:due:` → 到点会话被唤醒 → 次日 sweep 清理。
+**守卫**：`tests/salient-wake.test.mjs`（默认 off 不问宿主、无服务只 warn 一次、旧会话级 API 只 warn 一次且一次都不调用、`scheduleFlavor()` 两种形状、今天/明天各一条且 prompt 自包含、二次 sweep 幂等、ended 清理、paused 不动、subagent/归档/其它错误只跳过该会话、年度 `MM-DD` 不提前、无效时区不抛错）。真机验收项单独记录：造一条明天到期的条目 → 宿主 schedule UI 出现 `memu:due:` → 到点会话被唤醒 → 次日 sweep 清理。
 
 ### 3.22 时效提示没出现（S6 注入）
 
@@ -309,13 +309,17 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **症状**：整理提醒里出现「整理超时 · fork f-xxxxxx · timeout：consolidation timed out after Ns」，而对话本身一切正常、库里也可能已经多了几条记忆。
 
-**落点**：整理是一次**整段会话的 fork**——种子是截止快照的全部事件，worker 先读完整段转录才开始写，所以耗时随会话长度涨。2026-11-02 的真实读数（935 条事件的会话）：开始后 **125 s 才写出第一条**，180 s 到点时只写完 3 条 → 超时；退避重试 131 s 完成。也就是说 180 s 的固定预算对大会话必然偏紧，**不是卡死、不是死锁，也不会丢已写入的记忆**。
+**落点**：整理是一次**会话 fork**。2026-11-02 的真实读数（935 条事件的会话）：开始后 **125 s 才写出第一条**，180 s 到点时只写完 3 条 → 超时；退避重试 131 s 完成。也就是说固定预算对大会话必然偏紧，**不是卡死、不是死锁，也不会丢已写入的记忆**。
 
-**现在的做法**：预算按范围大小推（`consolidationWaitBudget(eventCount)`，政策 `120 s + 0.35 s/事件`，夹在 `[180 s, 600 s]`；斜率取自上面实测的 0.14–0.2 s/事件并留约 2 倍余量）。显式传 `maxWaitMs` 的调用方（测试、工具）仍然完全由调用方决定。「整理已开始」那条日志现在会写「预算 Ns」，失败行也会写「over N events」，所以下次看到超时能直接判断是不是范围太大。**超时仍然不会推进 `lastSleepSeq`**（没有回执就不算整理过），重试会重读同一段——这是 `§14.8`「先证明覆盖范围再推进」的代价，不能为了省时间改成部分推进。
+**现在（2026-11-05 起）不再把整段转录种进 fork**：每次只种一个窗口（`CONSOLIDATION_WINDOW_EVENTS = 300` 事件，尾部按完整回合对齐），种子只保留真人消息 / 助手正文 / 工具调用与结果，去掉 reasoning、`source.replayState`、`data.stream`、插件召回、运行时上下文、`request/header` 等后台事件；工具结果截断到 1600 字并去重，重复角色卡只留第一份。窗口开头再放一条 `[memory-catalog]` 已有记忆目录（id + 标题 + layer + status），worker 用它去重/合并，不需要为了解旧库再读整段历史。剩余事件留给下一次扫描，游标只在回执对账后前进。
 
-**还能再快的两条路（未做，需拍板）**：① 把 fork 的种子换成脱敏压缩后的转录（远端路径 `condenseEvents` 已有先例，但 fork 的种子来自 `dsh-session.buildForkSeed`，要动得先确认能替换）；② 常驻 MemU 进程，替掉「每次工具调用新起 python（导入链 2.05 s）」——这条同时能提速每轮召回与迁移重建。
+**触发与频率**：默认 `sleepAfterIdleMinutes = 2`；每 5 分钟扫描时还可能因为「pending ≥ 200 事件 / ≥10 个真人回合」的**水位**触发，不依赖空闲。新活动但水位不足时会做一次**探针**（读转录、评估，不起 fork），探针之间至少隔 15 分钟。寒暄 / 无新事件是终态：写入 `lastSleepAt`，下一条真人消息到达前不再重扫。同一快照连续失败 2 次后跳过（`snapshot-failed`），新事件会改变快照哈希，重新获得机会。
 
-**守卫**：`tests/consolidation-fork.test.mjs` 的 `the consolidation wait budget scales with the transcript`（0/100/200/935/5000/非法值）与既有的 `a fork still running at the deadline reports a timeout instead of silence`（显式 30 ms 仍生效、超时不得推进游标）。
+**预算**：按**这一窗**的事件数推（`consolidationWaitBudget(windowEvents)`，政策 `120 s + 0.35 s/事件`，夹在 `[180 s, 600 s]`）。显式传 `maxWaitMs` 的调用方（测试、工具）仍然完全由调用方决定。「整理已开始」日志会写「窗口 N 条 / 父会话 M 条 / 新 F 条 / 还余 R / 预算 Ns」，失败行写「over N events」。**超时仍然不会推进 `lastSleepSeq`**（没有回执就不算整理过），重试只重跑当前窗口，不会再重读整段历史。
+
+**常驻 MemU 进程（2026-11-05）**：本地向量模式（`memoryBackend=api` + `vectorSource=local`）下只起一个 Python 解释器，`import memu.cli` 只付一次，`retrieve` / `list-files` / `commit` 走 JSON 行协议复用；每条命令结束显式关闭 database，不把 sqlite 句柄留到空闲期。远端 API 路由仍是每命令一个进程。插件卸载与引擎安装/切换前会关闭常驻进程；进程异常退出后下一条命令冷启动，召回照旧 fail-open。
+
+**守卫**：`tests/consolidation-fork.test.mjs` 的 `the consolidation wait budget scales with the transcript`、`the seed keeps conversation only, renumbers from zero, and strips replay/stream noise`、`a long tail is cut to one closed-turn window with a remainder`、`the same failed snapshot stops re-forking after the failure cap`，以及 `a fork still running at the deadline reports a timeout instead of silence`。
 
 
 ## 守卫索引表
@@ -345,7 +349,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.18 | 聊很久一条记忆都没写 | `tests/cycle.test.mjs`（阈值 / 启动补偿 / `sessionGone` 只标一次 / 寒暄不 fork / fork 失败必须退避）+ `tests/consolidation-value.test.mjs`（评估边界）+ `tests/consolidation-fork.test.mjs`（继承父模型路由 / 失败 turn 不推进 `lastSleepSeq`）；手工看 `state.json` 的 `lastSleepAt`/`lastSleepSeq`/`sessionGone`/`sleepAttempts`/`lastSleepError`/`sleepRetryAt`。 |
 | §3.19 | 人格预设会话里完全没有记忆 | `tests/preset-scope.test.mjs`（同树跳过 / 兄弟树挂上 / 只挂一次 / agent 消失就卸载 / 子 agent 跳过）；日志 `attached memory injection to preset conversation`；`state.json` 里该会话出现 binding。 |
 | §3.20 | 鉴权矩阵 / 401/403 副作用 | `tests/webui-auth.test.mjs`：两前缀各自 handler、401/403/放行、正文零拉取、`DSH_MEMU_HOME` 读写探针为 0、库/附件快照不变；真机凭据与宿主路由层未验证。 |
-| §3.21 | 日期到点没唤醒 | `tests/salient-wake.test.mjs`；活动日志 `kind:'wake'` 的 `detail.stage`（service/timezone/index/list/cleanup/create/pass）就是排查线，`state.json` 里先确认 `salientWake` 真的存下了。 |
+| §3.21 | 日期到点没唤醒 | `tests/salient-wake.test.mjs`；活动日志 `kind:'wake'` 的 `detail.stage`（service/schedule-api/timezone/index/list/cleanup/create/pass）就是排查线，`state.json` 里先确认 `salientWake` 真的存下了；`0.2.0–0.2.1` 的会话级 schedule API 会以 `schedule-api` 降级，属预期。 |
 | §3.22 | 时效提示没出现 | `tests/freshness.test.mjs` + `tests/injection-chain.test.mjs`；前置条件（真有召回、开关、预算装得下）少一个就不出，不是 bug。 |
 | §3.23 | 实体合并 / 担心丢记忆 | `tests/entity-merge.test.mjs`（链接改指、别名 cap、快照冲突取舍、拒绝形状）；合并只改指向，正文与条数不变。 |
 | §3.24 | 失败一轮后锚点/日期再不出现 | `tests/injection-rollback.test.mjs`（6 条：撤回+重投、completed 不重复、迟到事件撤不动、已进转录的 500 类失败不误撤、投放前取消撤回、纪念日复提时钟一起撤）。 |
@@ -458,7 +462,7 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 
 ## 1. 硬规则（不放宽）
 
-1. **不改 DSH 源码**，只用插件、公开 service、RPC、slot；只用公开扩展点。
+1. **不改 DSH 源码**，只用插件、公开 service、RPC、slot；只用公开扩展点。宿主差异一律用能力探测（新方法/字段存在性、返回值形状、逐级回退），不写版本号比较；旧宿主上的可选能力宁可降级并留一行日志，也不 fail closed。流程见 `docs/host-adaptation.md`。
 2. **不让主 agent 写全局记忆**：全局只由 curator 写，主 agent 只读。
 3. **记忆规则与动态记忆都走 plugin 消息**：当前版本不再注册 system prompt 段；静态 guide 在回合首步以 `<memory-guide rules="…">` 投放（`rulesKey` 处理切域/改稿/压缩丢失），动态记忆走独立 plugin 消息，保护 KV cache 并让注入可折叠。
 4. **不每步注入**：普通回合首步注入；长工具回合只在出现尚未处理的真实人类消息批次时追加一次。工具日志、心跳不算人类消息。

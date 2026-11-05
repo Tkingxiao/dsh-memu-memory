@@ -1,10 +1,10 @@
 # 宿主事实与 API 速查 — dsh-memu-memory
 
-2026-10-27 实测，DSH 0.2.1-rc.3。查的时候才翻。
+2026-10-27 实测，DSH 0.2.1-rc.3。2026-11-05 在 DSH 0.2.2-rc.1 上复核了核心面；版本适配流程见 `docs/host-adaptation.md`。
 
 > §6.3「取 sessionId 的三种形状」是排错高频项，放在 `docs/troubleshooting.md` 附录 D。
 
-## 6. 宿主事实与 API 速查（2026-10-27 实测，DSH 0.2.1-rc.3）
+## 6. 宿主事实与 API 速查（2026-10-27 基线；2026-11-05 在 0.2.2-rc.1 复核）
 
 
 ### 6.1 DSH 没有 embedding 能力
@@ -39,9 +39,9 @@
 
 ### 6.6 定时器
 
-`ctx.schedule`（`@deepseek-ai/dsh-schedule`：create/list/catalog/history/delete/update，`every_seconds | daily | weekly | cron`，最小 60s）**绑定单个 sessionId、往该会话投递 prompt**、需要 sessionPersistence、且拒绝 subagent 会话——**不适合插件级全局清扫**。插件自己的清扫用 `ctx.interval`（cordis 随作用域回收），没有才退回 unref 的 `setInterval`。
+`ctx.interval`（cordis 随作用域回收；没有才退回 unref 的 `setInterval`）是插件级周期清扫用的那一把。`ctx.schedule` 是**宿主任务表**，有两代 API，先探测再调用（`lib/salient-wake.js` 的 `scheduleFlavor()`）。
 
-**一次性到点任务（1.2.3 工单 E 用到的形状，2026-11-01 对照宿主源码核实）：**
+**0.2.2+ 宿主级任务表（日期唤醒使用这一代；2026-11-05 在 rc.1 核对）**
 
 ```js
 schedule.create({
@@ -55,10 +55,22 @@ schedule.edit({ id, action: 'delete' })    // 已结束的任务同样可以删
 ```
 
 - `ScheduleTiming` 另有 `after/at/every/daily/weekly/cron/rrule`；`at` 是 `AtInput = string | {date,time,time_zone}`，结构化形式三个字段都必填。
+- 任务状态是 `active | paused | ended`；`paused` 是用户的显式暂停，不恢复。
 - 投递是 `agent.followup(...)`，**会新开一整回合**，冷会话由 `sessionController.resolveAgent` 自动 resume；`source.kind === 'schedule'`，所以本插件的注入管线（只认真实 `user` 消息）不会在那一回合跑召回——prompt 必须自带全部上下文。
-- `ctx.get('schedule')` 是**可选服务**：desktop 组合里有，别的宿主可能是 `undefined` 或抛错，必须 warn 后降级，不能让周期失败。
+- `ctx.get('schedule')` 是**可选服务**：desktop / web 组合里有，别的宿主可能是 `undefined` 或抛错，必须 warn 后降级，不能让周期失败。
 - 投递是 at-least-once，receipt 只证明进了 inbox；任务持久化在宿主的 `storages/schedule.json`，用户在宿主 schedule UI 里看得见、也能手删。
 - subagent 会话被 `validateTarget` 拒绝（错误码 `subagent_session`），已归档会话是 `invalid_rule`。
+
+**0.2.0–0.2.1 会话级提醒（日期唤醒不支持，探测后跳过）**
+
+```js
+schedule.create(sessionId, { title, prompt, at: { ... } })
+schedule.list({ sessionId })               // -> 数组
+schedule.delete({ sessionId, id })
+```
+
+- 任务绑定单个会话；没有 `edit`，状态只有 `active | inactive`。`scheduleFlavor()` 用「有没有 `edit`」区分两代：有 → `global`，否则有 `delete` → `session`。
+- 旧宿主上 `runSalientWakePass()` 返回 `{ skipped: 'schedule-api' }`，写一条 `stage:'schedule-api'` 的活动日志并只 warn 一次；被动注入不受影响。**不要**把新 API 的 `{title,prompt,timing,target}` 直接喂给旧 API——旧 `list` 必须逐会话调用。
 
 事件：`ctx.on("agent/status", { agent, status })`，`AgentStatus = idle | running`；另有 `session/created`、`session/disposed`、`session/flush`；事件类型含 `turn/start`、`turn/end`（`step/*`、`user/message…`）与 `compaction/*`。**`turn/end` 不 await flush，不要在那里读存储；判 fork 成败只读事件对象本身。**
 
@@ -109,5 +121,17 @@ ctx.inject([sidebarRightTabs], ...) + ctx.slots.register({ name: sidebar.right.p
 - **guide 有 `<memory-guide>` ≠ 有 `memu_*`。** 正文自带“若本会话的工具列表里没有 `memu_*` 工具，请忽略本段”，它只声明规则可用性，不证明工具存在。
 
 复核方法：用 `zlib.zstdDecompressSync` 逐 frame 解压 `~/.dsh/sessions/<bucket>/<id>/session.v4.jsonl.zstd`；只统计 `request/header` 的工具名、`session.v4` 消息 id 和 `<memory-guide`/`===== memory anchor =====` 标签。不要打印会话正文，不要把同一消息在快照中的重复出现计成多次投放。
+
+### 6.9 宿主版本适配记录
+
+完整流程与真机命令见 `docs/host-adaptation.md`；这里只留结论。
+
+| 宿主构建 | 日期 | 结论 |
+|---|---|---|
+| `0.2.1-rc.3` | 2026-10-27 | 本文档的基线事实；但 §6.6 当时的 schedule 形状实际属于 `0.2.2`，1.2.6 已更正 |
+| `0.2.2-alpha.3` | 2026-11-03 | vendor（cordis 4.1 / timer 1.2 / include 1.1）与新 schedule API 在这一版定型 |
+| `0.2.2-rc.1` | 2026-11-05 | 真机通过：13 个 `memu_*` 工具、guide 注入 1 次、设置页/侧栏/RPC/新会话弹窗、0 console error；alpha.3→rc.1 在 memu 用到的宿主 `src` 上零改动 |
+
+当前客户端启动图事实（0.2.2-rc.1 页面实测）：`{"id":"dsh-memu-memory","inject":["@deepseek-ai/dsh-client-store","@deepseek-ai/dsh-client-locale","@deepseek-ai/dsh-client-connection","@deepseek-ai/dsh-client-ui-settings","@deepseek-ai/dsh-client-ui-sidebar-right"],"immediately":true}`；`inject` 里没有启动图行的包会被忽略，不是错误。
 
 ---

@@ -51,6 +51,7 @@ npm run replay
 - `memu-cli` 是 **PyPI 上的 Python 包，不是 npm 包**；锁定 `0.11.0b3`。
 - 发布版 `memu --help` 只有 `retrieve, search, list-files, commit`；源码里的 `memorize prepare/commit` **尚未发布**，**不要依赖 `memorize`**——当可选能力（启动探测 `memu memorize --help`，成功才注册入口，失败隐藏不报错）。
 - 必需命令 `retrieve` / `list-files` / `commit`；必需 flag `--json` / `--db` / `--provider` / `--embed-model` / `--api-key` / `--base-url`。**所有 CLI 字符串只在 `lib/memu.js`**。
+- 本地向量模式下插件**常驻一个解释器**（`lib/memu.js` 的 resident engine）：启动时 `import memu.cli` 一次，随后 `retrieve` / `list-files` / `commit` 通过 JSON 行协议调用同一个 `main(argv)`，省掉每条命令约 2 s 的导入链；每条命令结束显式 `database.close()`，空闲期不占 sqlite 句柄。远端 API 路由仍按命令新起进程；插件卸载或引擎安装/切换前关闭常驻进程，异常退出时下一条命令冷启动（见 `docs/troubleshooting.md` §3.26）。
 
 ```bash
 python -m memu retrieve "query" --json --db <db>

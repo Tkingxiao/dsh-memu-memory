@@ -22,7 +22,8 @@ globalThis.__curatorLinkTest = {
 }
 const memuSource = 'const bridge = globalThis.__curatorLinkTest;'
   + 'export const commit = (args) => bridge.commit(args), forget = (args) => bridge.forget(args),'
-  + 'retrieve = (args) => bridge.retrieve(args), listFiles = (args) => bridge.listFiles(args);'
+  + 'retrieve = (args) => bridge.retrieve(args), listFiles = (args) => bridge.listFiles(args),'
+  + 'closeMemuResident = () => 0, prewarmMemuResident = async () => false;'
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === './memu.js') return { url: 'data:text/javascript,' + encodeURIComponent(memuSource), shortCircuit: true }

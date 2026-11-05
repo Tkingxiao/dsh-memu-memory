@@ -1,5 +1,37 @@
 # 更新日志 / Changelog
 
+## [1.2.6] - 2026-11-05
+
+> 一版「宿主适配」：在 DSH `0.2.2-rc.1` 上完成真机核对，核心行为无需改动；旧宿主（`0.2.0`–`0.2.1`）的会话级 schedule API 现在被结构性识别并明确跳过，不再每 5 分钟刷一条失败日志。新增 `docs/host-adaptation.md`，把下一次宿主升级变成一份可重复的检查表。
+
+### DSH 0.2.2-rc.1 适配
+
+- **真机核对**（launcher 的 `versions/0.2.2-rc.1` + 独立 home）：13 个 `memu_*` 工具进入 `request/header`；`<memory-guide>` 首轮注入 1 次；`turn/end` 为 `completed`；设置页「MemU 记忆」、右侧栏「MemU 记忆」、新会话弹窗、`/dsh-memu-memory` RPC 全部正常；浏览器控制台 0 error、0 warning。
+- **源码面**：`0.2.2-alpha.3 → 0.2.2-rc.1` 在 memu 用到的宿主 `src` 上零改动；rc.1 的 cordis 4.1 / timer 1.2 / include 1.1 升级没有影响本插件。工具 DSL、`agent/pre-step`、`sessionQuery`、`subagents.startActivation`、`attachments.readImage`、客户端 slots / sessions / RPC 契约均保持兼容。
+- **`ctx.schedule` 有两代 API**：`0.2.2+` 是宿主级任务表（`create(request)` / `list→{items}` / `edit`），`0.2.0–0.2.1` 是会话级提醒（`create(sessionId,request)` / `list({sessionId})` / `delete`）。新增 `scheduleFlavor()` 结构探测：旧宿主上 `runSalientWakePass()` 返回 `{skipped:'schedule-api'}`、写一条 `stage:'schedule-api'` 的活动日志并只 warn 一次；被动注入不受影响。
+- **文档**：新增 `docs/host-adaptation.md`（事实来源、memu 的宿主面清单、检查流程、隔离真机搭法、0.2.2-rc.1 实测记录、踩坑）；`docs/host-api.md` §6.6 更正 schedule 的版本事实并新增 §6.9 版本记录；`docs/troubleshooting.md` §3.21 补 `schedule-api` 降级口径；`AGENTS.md` 索引与硬规则同步。
+- **守卫**：`tests/salient-wake.test.mjs` 新增「旧会话级 API 只 warn 一次且一次都不调用」与 `scheduleFlavor()` 两种形状两条用例，共 19 条。
+
+### 本地向量模式常驻 MemU 引擎
+
+- `memoryBackend=api` 且 `vectorSource=local` 时，`lib/memu.js` 只启动一个常驻 Python 解释器：`import memu.cli` 付一次，之后 `retrieve` / `list-files` / `commit` 通过 JSON 行协议复用，去掉每条命令约 2 s 的导入链；每条命令结束显式 `database.close()`，空闲期不占 sqlite 句柄。
+- 远端 API 路由不变（每条命令一个进程）。插件卸载、引擎安装/切换前关闭常驻进程；进程异常退出后下一条命令冷启动，召回照旧 fail-open。
+
+### 私有整理：增量窗口、水位触发与清噪
+
+- **不再整段重种**：`requestPrivateConsolidation` 每次只取 `lastSleepSeq` 之后的增量，切成 ≤300 事件、尾部对齐完整回合的一窗（`selectConsolidationWindow`）；`lastSleepSeq` 随回执前进，剩余事件留给下一次扫描。56 回合、3233 事件的群聊不再每次重读全史。
+- **种子清噪 + 已有记忆目录**：`compactSeedEvents` 只保留真人消息 / 助手正文 / 工具调用与结果，删 reasoning、`source.replayState`、`data.stream`、插件召回、`runtime-context`、`request/header`；工具结果截 1600 字、重复输出只留一份；窗口开头插 `[memory-catalog]`（id + 标题 + layer + status）供 worker 去重/合并。
+- **水位触发**：`runSleepPass` 新增「pending ≥ 200 事件」的 backlog 腿和 15 分钟一次的探针腿，不再只等空闲；候选排序 backlog → idle → probe。`sleepAfterIdleMinutes` 默认 3 → **2**。
+- **small-talk 结案**：`small-talk` / `no-human-turn` / `no-new-events` 返回 `settled: true` 并推进 `lastSleepAt`，不再每 5 分钟重扫同一段寒暄；政策跳过不计入 `ran`。
+- **失败上限**：`failJob` 按窗口 `snapshotHash` 记失败次数；连续 2 次后返回 `skipped: 'snapshot-failed'`，同段转录不再无限重跑，新事件会改变哈希重新获得机会。
+- **守卫**：`tests/consolidation-fork.test.mjs` 新增 seed 清噪、窗口切分、失败上限三条；`tests/cycle.test.mjs` 的寒暄用例改为断言终态。
+
+### 验证口径（本机 2026-11-05 实测）
+
+`npm test` 1349 tests / 1347 pass / 0 fail / 2 skipped；`acceptance-local` 50/50；`npm run check` 全绿。真机：0.2.2-rc.1 headless + mock LLM 一轮，13 个 `memu_*` 工具、guide=1、`turn/end completed`；web 页面 boot graph 含 `dsh-memu-memory`，设置页与右侧栏均出现「MemU 记忆」。未测：0.2.2 桌面壳、全局整理/历史 fork 的完整真机作业、日期唤醒的真实到点投递。
+
+---
+
 ## [1.2.5] - 2026-11-05
 
 > 一版把「同一个开关到底管多大一片」讲清楚：跨库召回不再只管记忆——词典的锚点摘要、本回合匹配与 `memu_lexicon_search` 走同一条作用域，并新增一本**全局词典**；节点图的范围选择器加上全局记忆。另一侧是本地向量运行时的下载体验：npmjs / npmmirror 双源、百分比与 MB/s、暂停 / 停止 / 续传。RPC 方法数仍是 **95**（全局图与全局词典都复用既有端点，加的是 payload 而不是方法）。

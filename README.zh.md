@@ -30,7 +30,7 @@
 > [!WARNING]
 > **早期版本提示。** 本插件仍处于早期阶段，可能存在无法预见的错误、bug 或不兼容变更。请先备份数据；欢迎[提交 Issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) 或 PR 帮助改进。
 
-> **状态：** 1.2.5。首个公开发布版本为 1.0.0。细节文档已迁到 [`docs/`](docs/)，[`AGENTS.md`](AGENTS.md) 只做索引。升级前请备份 `~/.dsh/dsh-memu-memory`；如果要存无法重建的数据，请先读[兼容性与边界](#兼容性与边界)。
+> **状态：** 1.2.6。首个公开发布版本为 1.0.0。细节文档已迁到 [`docs/`](docs/)，[`AGENTS.md`](AGENTS.md) 只做索引。升级前请备份 `~/.dsh/dsh-memu-memory`；如果要存无法重建的数据，请先读[兼容性与边界](#兼容性与边界)。
 
 ## 界面
 
@@ -150,7 +150,7 @@
 
 | | |
 |---|---|
-| DSH | `>=0.2.0-rc.1`（web profile） |
+| DSH | `>=0.2.0-rc.1`（web profile；2026-11-05 在 `0.2.2-rc.1` 上实测） |
 | Node.js | `>=20.9` |
 | 操作系统 | Windows / macOS / Linux（跟随 DSH web 宿主） |
 | 可选引擎 | 仅在选择向量后端时需要 Python 3.11+。默认后端不需要 Python、embedding 服务或 API key。 |
@@ -319,7 +319,7 @@ return { content: originalContent, meta: { ...originalMeta, memoryInbound: batch
 
 ## 兼容性与边界
 
-- **宿主：** DSH `>=0.2.0-rc.1`，只使用公开扩展点（工具、注入、会话查询、子代理、slot、带前缀的 HTTP 路由），不修改宿主源码。
+- **宿主：** DSH `>=0.2.0-rc.1`，只使用公开扩展点（工具、注入、会话查询、子代理、slot、带前缀的 HTTP 路由），不修改宿主源码。核心面（13 个 `memu_*` 工具、guide 注入、设置页、右侧栏、前缀 RPC）已在 2026-11-05 的 `0.2.2-rc.1` 上实测，核对表见 [`docs/host-adaptation.md`](docs/host-adaptation.md)。可选的日期唤醒使用 `0.2.2` 起的宿主级 `ctx.schedule` 任务表；在 `0.2.0`–`0.2.1`（会话级提醒 API）上会识别出旧形状、跳过并只警告一次，不会每轮重试。
 - **召回质量：** 默认后端是词法检索。语义召回取决于可选引擎和你选择的 embedding 模型；插件无法提升一个它不拥有的模型。没有跑过 LongMemEval、长期群聊/RP A/B 或「拟人度」评分——测试数量不是质量分数。
 - **没有云同步、账号或跨设备同步。** 这是本地插件，没有服务端身份。
 - **没有视觉时：** 图片记忆只是「指针 + 人写的描述」。插件不会声称看过像素。

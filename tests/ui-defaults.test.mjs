@@ -49,7 +49,7 @@ test('the audited numeric fields are covered by that gate', () => {
     ['dedupeTurns', 16],
     ['globalEveryNTurns', 6],
     ['randomCueChance', 0.02],
-    ['sleepAfterIdleMinutes', 3],
+    ['sleepAfterIdleMinutes', 2],
   ]) {
     assert.equal(fallbacks.get(key), expected, 'settings.' + key + ' fallback')
     assert.equal(state.DEFAULT_SETTINGS[key], expected, 'DEFAULT_SETTINGS.' + key)

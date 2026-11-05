@@ -30,7 +30,7 @@ It is **local-first by default**. The default `agent` backend stores full text i
 > [!WARNING]
 > **Early-stage software.** This plugin is still early and may contain unforeseen errors, bugs or breaking changes. Back up your data, and please [report an issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) or send a pull request — feedback helps the project improve.
 
-> **Status:** 1.2.5. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
+> **Status:** 1.2.6. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
 
 ## Screenshots
 
@@ -152,7 +152,7 @@ Updated defaults never overwrite custom text. The default-update notice remains 
 
 | | |
 |---|---|
-| DSH | `>=0.2.0-rc.1` (web profile) |
+| DSH | `>=0.2.0-rc.1` (web profile; verified on `0.2.2-rc.1`, 2026-11-05) |
 | Node.js | `>=20.9` |
 | OS | Windows, macOS or Linux, wherever DSH's web host runs |
 | Optional engine | Python 3.11+ **only** if you choose the vector backend. The default backend needs no Python, no embedding service and no API key. |
@@ -332,7 +332,7 @@ the idle window starts from real message activity or the agent's return to idle.
 
 ## Compatibility & limits
 
-- **Host:** DSH `>=0.2.0-rc.1`, using public extension points only (tools, injection, session query, subagents, slots, a prefixed HTTP route). No host source modifications.
+- **Host:** DSH `>=0.2.0-rc.1`, using public extension points only (tools, injection, session query, subagents, slots, a prefixed HTTP route). No host source modifications. The core surfaces (13 `memu_*` tools, guide injection, settings page, right-sidebar tab, prefixed RPC) were verified on `0.2.2-rc.1` on 2026-11-05; the check table lives in [`docs/host-adaptation.md`](docs/host-adaptation.md). The optional dated-wake feature uses the host-wide `ctx.schedule` task API introduced in `0.2.2`; on `0.2.0`–`0.2.1` (session-scoped reminders) it detects the older shape and skips with one warning instead of retrying every sweep.
 - **Recall quality:** the default backend is lexical. Semantic recall depends on the optional engine and the embedding model you choose; the plugin cannot improve a model it does not own. LongMemEval, long-running group-chat A/B and "human-likeness" scores have **not** been run — test counts are not a quality score.
 - **No cloud sync, no accounts, no cross-device sync.** This is a local plugin with no server-side identity.
 - **Images without vision:** without an optional caption/vision endpoint, an image memory is a pointer plus what a person wrote about it. The plugin does not claim to see pixels.

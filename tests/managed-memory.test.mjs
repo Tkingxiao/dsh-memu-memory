@@ -48,7 +48,7 @@ globalThis.__managedMemoryTest = {
   },
   async listFiles() { throw new Error('unexpected list engine call') },
 }
-const engineSource = 'const bridge = globalThis.__managedMemoryTest; export const commit = bridge.commit, retrieve = bridge.retrieve, forget = bridge.forget, listFiles = bridge.listFiles;'
+const engineSource = 'const bridge = globalThis.__managedMemoryTest; export const commit = bridge.commit, retrieve = bridge.retrieve, forget = bridge.forget, listFiles = bridge.listFiles, closeMemuResident = () => 0, prewarmMemuResident = async () => false;'
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === './memu.js') {

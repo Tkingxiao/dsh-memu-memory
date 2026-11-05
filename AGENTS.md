@@ -12,7 +12,7 @@
 
 ## 1. 硬规则（不放宽）
 
-1. **不改 DSH 源码**，只用插件、公开 service、RPC、slot；只用公开扩展点。
+1. **不改 DSH 源码**，只用插件、公开 service、RPC、slot；只用公开扩展点。宿主差异用能力探测（方法/字段存在性），不写版本号比较；宁可降级并留一行日志，也不 fail closed（→ `docs/host-adaptation.md`）。
 2. **不让主 agent 写全局记忆**：全局只由 curator 写，主 agent 只读。
 3. **记忆规则与动态记忆都走 plugin 消息**：当前版本不再注册 system prompt 段；静态 guide 在回合首步以 `<memory-guide rules="…">` 投放（`rulesKey` 处理切域/改稿/压缩丢失），动态记忆走独立 plugin 消息，保护 KV cache 并让注入可折叠。
 4. **不每步注入**：普通回合首步注入；长工具回合只在出现尚未处理的真实人类消息批次时追加一次。工具日志、心跳不算人类消息。
@@ -31,6 +31,7 @@
 |---|---|
 | 现象不对、有报错 | `docs/troubleshooting.md`（先看症状速查表） |
 | 改现有行为 / 加新东西 / 提交前自检 | `docs/contributing.md` |
+| **DSH 发新版本、要适配新宿主** | `docs/host-adaptation.md`（检查表 / 真机搭法 / 已知陷阱 / 版本记录） |
 | 忘了宿主 API 长什么样 | `docs/host-api.md`；三种 exec 形状在 `docs/troubleshooting.md` 附录 D |
 | 动 UI | `docs/client-conventions.md` |
 | 改记忆语义 / 提示词正文 | `docs/memory-semantics.md` |
@@ -75,6 +76,7 @@ npm run check                        # node --check + i18n + package.json + 文�
 | `docs/troubleshooting.md` | §3 全部症状/落点/守卫 + 症状速查表 + 守卫索引表 + 附录（模块地图 §2.1、调用链 §2.2、数据铁律 §2.3、三种 exec 形状 §6.3、硬规则全文 §1） |
 | `docs/contributing.md` | §4 改动流程（四步 / 验证三件套 / 连带清单 / 文档同步）+ §5 六个扩展点 + §10 提交前清单 |
 | `docs/host-api.md` | §6.1 / 6.2 / 6.4–6.8：embedding、workspaceRegistry、历史会话与标题、fork/followup、定时器、RPC+slot+折叠、预设工具面真机证据边界 |
+| `docs/host-adaptation.md` | 宿主版本适配手册：事实来源、memu 的宿主面清单、新版本检查流程、隔离真机搭法、0.2.2-rc.1 实测记录与陷阱 |
 | `docs/client-conventions.md` | §7：两个壳一份实现、颜色 token、控件纪律、数据与刷新、文案与结构 |
 | `docs/memory-semantics.md` | §8：三层、写入规则、全局记忆、注入（含预设会话首步 `<memory-guide>` 一次性投放）、提示词管理 |
 | `docs/env-and-commands.md` | §9：Windows 跑命令的 env、CRLF 补丁法、本地 link、引擎安装与回滚、本地向量受管运行时的安装/状态命令（§9.5）、MemU CLI 事实 |

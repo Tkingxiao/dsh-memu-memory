@@ -10,7 +10,7 @@ process.env.DSH_MEMU_HOME = home
 const state = await import('../lib/state.js')
 const wake = await import('../lib/salient-wake.js')
 const activity = await import('../lib/activity-log.js')
-const { fakeScheduleService, wakeContext, scheduleError } = await import('./stubs/dsh-schedule.js')
+const { fakeScheduleService, fakeSessionScheduleService, wakeContext, scheduleError } = await import('./stubs/dsh-schedule.js')
 
 test.after(() => {
   try { state.flushState() } catch {}
@@ -103,6 +103,33 @@ test('a host without a schedule service warns once and does not throw', async ()
   const events = activity.listEvents({ limit: 50 })
   assert.ok(events.some((event) => event.detail?.trigger === 'wake' && event.detail?.stage === 'service' && event.level === 'warn'))
   state.updateSettings({ salientWake: 'off' })
+})
+
+test('a session-scoped schedule API is skipped with one warning, never called', async () => {
+  state.updateSettings({ salientWake: 'schedule' })
+  const { binding } = newSession('wake-session-api')
+  putEntry(binding.libraryId, 'mem-session-api', { salientDate: '2026-11-02' })
+  const schedule = fakeSessionScheduleService()
+  const logs = []
+  const log = (message) => logs.push(String(message))
+  assert.deepEqual(await run(schedule, local(2026, 11, 2), log), { skipped: 'schedule-api' })
+  assert.equal(schedule.calls.list.length, 0, 'the old list needs a sessionId; calling it with { limit } would be a wrong-shaped request')
+  assert.equal(schedule.calls.create.length, 0)
+  assert.equal(schedule.calls.delete.length, 0)
+  assert.equal(logs.length, 1)
+  assert.match(logs[0], /host-wide schedule API/)
+
+  const events = activity.listEvents({ limit: 50 })
+  assert.ok(events.some((event) => event.detail?.trigger === 'wake' && event.detail?.stage === 'schedule-api' && event.level === 'warn'))
+  state.updateSettings({ salientWake: 'off' })
+})
+
+test('scheduleFlavor distinguishes the host-wide and session-scoped APIs structurally', () => {
+  assert.equal(wake.scheduleFlavor(null), null)
+  assert.equal(wake.scheduleFlavor({}), null)
+  assert.equal(wake.scheduleFlavor({ create() {}, list() {} }), null)
+  assert.equal(wake.scheduleFlavor(fakeScheduleService()), 'global')
+  assert.equal(wake.scheduleFlavor(fakeSessionScheduleService()), 'session')
 })
 
 test('today and tomorrow each get one task whose prompt is self-contained', async () => {

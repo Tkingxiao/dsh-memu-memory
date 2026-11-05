@@ -50,7 +50,8 @@ const realStateUrl = new URL('../lib/state.js', import.meta.url).href
 const realMemuUrl = new URL('../lib/memu.js', import.meta.url).href
 const memuSource = 'const bridge = globalThis.__curatorCommitTest;'
   + 'export const commit = (args) => bridge.commit(args), forget = (args) => bridge.forget(args),'
-  + 'retrieve = (args) => bridge.retrieve(args), listFiles = (args) => bridge.listFiles(args);'
+  + 'retrieve = (args) => bridge.retrieve(args), listFiles = (args) => bridge.listFiles(args),'
+  + 'closeMemuResident = () => 0, prewarmMemuResident = async () => false;'
 const stateSource = [
   `import * as real from ${JSON.stringify(realStateUrl)}`,
   'const hook = globalThis.__curatorIndexHook',

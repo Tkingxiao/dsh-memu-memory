@@ -103,3 +103,38 @@ export function wakeContext(schedule) {
     },
   }
 }
+
+/**
+ * The 0.2.0 / 0.2.1 session-scoped reminder API: every task belongs to one
+ * Session, `list` needs that Session, and there is no `edit` method. The wake
+ * pass probes for `edit` to tell this shape from the 0.2.2 host-wide task table,
+ * so this fake exists to pin that the old API is skipped instead of being
+ * called with the wrong argument shape.
+ */
+export function fakeSessionScheduleService() {
+  const tasks = []
+  const calls = { create: [], list: [], delete: [] }
+  let seq = 0
+
+  return {
+    tasks,
+    calls,
+    async create(sessionId, request) {
+      calls.create.push({ sessionId, request })
+      const entry = { id: `sess-sched-${++seq}`, sessionId, title: request.title, status: 'active' }
+      tasks.push(entry)
+      return entry
+    },
+    async list(request) {
+      calls.list.push(request)
+      return tasks.filter((task) => task.sessionId === request.sessionId)
+    },
+    async delete(request) {
+      calls.delete.push(request)
+      const index = tasks.findIndex((task) => task.id === request.id && task.sessionId === request.sessionId)
+      if (index < 0) return { id: request.id, deleted: false }
+      tasks.splice(index, 1)
+      return { id: request.id, deleted: true }
+    },
+  }
+}

@@ -224,7 +224,7 @@ test('a conversation the host says is gone is marked once and never retried', as
   assert.equal(binding.sleepRetryAt, null, 'nothing to retry later')
   assert.ok(logs.some((m) => /no longer exists/.test(m)), 'explained once: ' + logs.join(' | '))
   const quiet = await cycle.runSleepPass(fakeCtx({ live: ['cycle-ghost'] }))
-  assert.equal(quiet.considered, 0, 'the next sweep does not even read the transcript')
+  assert.equal(quiet.ran, 0, 'the next sweep does not consolidate a deleted session again')
 })
 
 test('a policy greeting skip does not claim a completed worker check', async () => {
@@ -238,7 +238,7 @@ test('a policy greeting skip does not claim a completed worker check', async () 
   const out = await cycle.runSleepPass(ctx)
   assert.equal(out.ran, 0, 'a policy skip is not a verified worker receipt')
   assert.equal(ctx.created.length, 0, 'no fork for small talk')
-  assert.equal(state.getLastSleepAt('cycle-smalltalk'), null)
+  assert.ok(state.getLastSleepAt('cycle-smalltalk'), 'a terminal skip is recorded so the same greetings are not re-read every sweep')
 })
 
 test('auto curation stays off unless an interval is set', async () => {

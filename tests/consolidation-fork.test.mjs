@@ -9,7 +9,7 @@ process.env.DSH_MEMU_HOME = home
 
 const state = await import('../lib/state.js')
 const activity = await import('../lib/activity-log.js')
-const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY } = await import('../lib/private.js')
+const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY, CONSOLIDATION_WINDOW_EVENTS, compactSeedEvents, selectConsolidationWindow, selectTailTurnWindow } = await import('../lib/private.js')
 
 test.after(() => {
   try { fs.rmSync(home, { recursive: true, force: true }) } catch {}
@@ -100,9 +100,15 @@ function host({ live = false, whenIdle = null, parentOptions = { provider: 'test
                   rec.forkFollowups.push({ child: spec.sessionId, message })
                   if (emitTurnEnd) {
                     if (turnReason?.kind === 'completed') {
-                      const throughSeq = 2 + extraEvents.length + padding
+                      // The worker receipt must match the window the fork was seeded
+                      // with, not the whole parent transcript.
+                      const child = state.getSessionBinding(spec.sessionId)
+                      const fromSeq = Number.isSafeInteger(child?.snapshotFromSeq) ? child.snapshotFromSeq : 0
+                      const throughSeq = Number.isSafeInteger(child?.snapshotThroughSeq)
+                        ? child.snapshotThroughSeq
+                        : 2 + extraEvents.length + padding
                       for (const handler of rec.sessionHandlers) {
-                        handler(childSession, { type: 'assistant/message', seq: 99, data: { message: { content: [{ type: 'text', text: receiptFence({ fromSeq: 0, throughSeq }, state.getSessionBinding(spec.sessionId)) }] } } })
+                        handler(childSession, { type: 'assistant/message', seq: 99, data: { message: { content: [{ type: 'text', text: receiptFence({ fromSeq, throughSeq }, child) }] } } })
                       }
                     }
                     for (const handler of rec.sessionHandlers) {
@@ -213,7 +219,7 @@ test('a closed session inherits the last request/header event', async () => {
   const result = await requestPrivateConsolidation(ctx, 'fork-closed')
   assert.equal(result.ok, true)
   const spec = ctx.rec.created[0]
-  assert.equal(spec.inheritedEventCount, 5, 'the header events are part of the inherited log')
+  assert.equal(spec.inheritedEventCount, 3, 'only conversation events are seeded; request/header is noise')
   assert.deepEqual(spec.agentOptions, { provider: 'latest', model: 'latest-model', reasoningEffort: 'low', maxTokens: 4096 })
 })
 
@@ -349,9 +355,9 @@ test('a large transcript with nothing new since the cursor does not refork', asy
   const result = await requestPrivateConsolidation(ctx, 'fork-large-thin')
   assert.equal(result.ok, true)
   assert.equal(result.skipped, 'no-human-turn', 'the increment carries no human turn to consolidate')
-  assert.equal(result.settled, false, 'nothing was consolidated, so the cursor must not move')
+  assert.equal(result.settled, true, 'a policy skip is terminal: the idle sweep stops re-reading the same greetings')
   assert.equal(ctx.rec.created.length, 0, 'no fork when the pending increment has no evidence')
-  assert.equal(state.getSessionBinding('fork-large-thin').lastSleepSeq, 5905, 'the cursor must not advance')
+  assert.equal(state.getSessionBinding('fork-large-thin').lastSleepSeq, 5912, 'a terminal policy skip advances the coarse cursor so the same thin tail is not rescanned')
 })
 
 test('a large transcript that was never consolidated does fork, because the backlog is real', async () => {
@@ -365,6 +371,75 @@ test('a large transcript that was never consolidated does fork, because the back
   assert.equal(result.ok, true, 'the backlog bound lets this one through')
   assert.equal(ctx.rec.created.length, 1, 'a large unconsolidated backlog is worth exactly one fork')
 })
+// ---------------------------------------------------------------- window & seed
+test('the seed keeps conversation only, renumbers from zero, and strips replay/stream noise', () => {
+  const plugin = { seq: 0, type: 'user/message', data: { source: { kind: 'plugin:dsh-memu-memory', form: 'recall' }, content: [{ type: 'text', text: '旧召回' }] } }
+  const runtime = { seq: 1, type: 'user/message', data: { source: { kind: 'runtime-context', form: 'snapshot' }, content: [{ type: 'text', text: '运行时快照' }] } }
+  const header = { seq: 2, type: 'request/header', data: { header: {} } }
+  const user = { seq: 3, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '记住：我不吃香菜' }] } }
+  const assistant = { seq: 4, type: 'assistant/message', data: {
+    message: {
+      source: { provider: 'p', model: 'm', replayState: { huge: 'x'.repeat(400) } },
+      content: [{ type: 'reasoning', text: '思考过程' }, { type: 'text', text: '好的' }, { type: 'tool-call', name: 'read', arguments: 'x'.repeat(2000) }],
+    },
+    stream: { blob: 'y'.repeat(400) },
+  } }
+  const repeated = 'R'.repeat(4000)
+  const tool1 = { seq: 5, type: 'tool/result', data: { message: { content: [{ type: 'text', text: repeated }] } } }
+  const tool2 = { seq: 6, type: 'tool/result', data: { message: { content: [{ type: 'text', text: repeated }] } } }
+  const catalog = {
+    type: 'user/message', seq: 0, time: 1, surfaceOp: 'append',
+    data: { role: 'user', source: { kind: 'plugin:dsh-memu-memory', form: 'notice' }, content: [{ type: 'text', text: '已有记忆目录' }] },
+  }
+  const seed = compactSeedEvents([plugin, runtime, header, user, assistant, tool1, tool2], catalog)
+  assert.deepEqual(seed.map(event => event.seq), [0, 1, 2, 3, 4], 'contiguous from zero, catalog at 0')
+  assert.match(seed[0].data.content[0].text, /已有记忆目录/)
+  assert.equal(seed[1].data.source.kind, 'user', 'only real user messages survive')
+  const msg = seed[2].data.message
+  assert.equal(msg.content.some(block => block.type === 'reasoning'), false, 'reasoning is not evidence')
+  assert.equal(msg.source.replayState, undefined, 'replay state duplicates the body')
+  assert.equal(seed[2].data.stream, undefined, 'the raw chunk log is not the message')
+  assert.match(msg.content.find(block => block.type === 'tool-call').arguments, /已截断/)
+  assert.match(seed[3].data.message.content[0].text, /已截断/)
+  assert.match(seed[4].data.message.content[0].text, /与前面相同的工具输出/, 'identical tool output is deduped')
+})
+
+test('a long tail is cut to one closed-turn window with a remainder', () => {
+  const events = Array.from({ length: CONSOLIDATION_WINDOW_EVENTS + 180 }, (_, seq) => ({ seq, type: 'todo/write', data: {} }))
+  const window = selectConsolidationWindow(events)
+  assert.equal(window.fromSeq, 0)
+  assert.ok(window.events.length <= CONSOLIDATION_WINDOW_EVENTS, 'the window stays bounded')
+  assert.ok(window.remaining > 0, 'the rest is left for the next sweep')
+  assert.ok(window.throughSeq < events.length - 1)
+})
+
+test('a manual re-check starts at a complete turn instead of mid-step', () => {
+  const events = [
+    { seq: 0, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '旧回答' }] } } },
+    { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '最后一问' }] } },
+    { seq: 2, type: 'turn/start', data: { turn: 2 } },
+    { seq: 3, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '最后回答' }] } } },
+    { seq: 4, type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } },
+  ]
+  const window = selectTailTurnWindow(events)
+  assert.equal(window.fromSeq, 1, 'the user message that opened the turn is included')
+  assert.equal(window.throughSeq, 4, 'the window ends on a closed turn')
+})
+
+test('the same failed snapshot stops re-forking after the failure cap', async () => {
+  state.ensureSession('fork-failcap', { cwd: path.join(home, 'proj-failcap'), agentPreset: 'coding' })
+  const ctx = host({ live: true, turnReason: { kind: 'error', error: { message: 'provider refused' } } })
+  const first = await requestPrivateConsolidation(ctx, 'fork-failcap', { force: true })
+  const second = await requestPrivateConsolidation(ctx, 'fork-failcap', { force: true })
+  assert.equal(first.ok, false)
+  assert.equal(second.ok, false)
+  assert.equal(ctx.rec.created.length, 2, 'two real attempts happen')
+  const third = await requestPrivateConsolidation(ctx, 'fork-failcap', { force: true })
+  assert.equal(third.ok, true)
+  assert.equal(third.skipped, 'snapshot-failed')
+  assert.equal(ctx.rec.created.length, 2, 'the third call does not pay for the same snapshot again')
+})
+
 // ---------------------------------------------------------------- PTC 兼容
 // 现场（2026-10-31，yuike-ptc 会话）：PTC 模式下 request/header 的工具表只有 run_code，
 // probe 曾据此判 unavailable（worker-tools-ptc-only），PTC 会话永远不被整理。宿主的
