@@ -75,7 +75,7 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 
 ### 5.3 新增一个 RPC 方法
 
-<!-- rpc-method-count: 95 -->
+<!-- rpc-method-count: 97 -->
 
 1. `lib/rpc.js` 的 `switch` 加 case（共 95 个方法，按功能分组，别乱插）。
 2. 返回**形状稳定**：客户端 `call()` 直接解构，列表类给 `{items, total}` 而不是裸数组。

@@ -851,7 +851,8 @@ html[data-standalone] .dshm-root input[type="radio"] {
 
 /* The tuning form is a long single column in the host. On a desktop page it reads
    as a sparse list with half a card empty; two columns put the knobs side by side
-   without splitting each row's label from its control. */
+   without splitting each row's label from its control. Rows share one min-height so
+   a 24px toggle or a bare checkbox lines up with a 32px input in the neighbour cell. */
 html[data-standalone] .dshm-settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -861,15 +862,30 @@ html[data-standalone] .dshm-settings-grid {
 html[data-standalone] .dshm-settings-grid > label {
   margin: 5px 0;
   min-width: 0;
+  min-height: 42px;
 }
 html[data-standalone] .dshm-settings-grid input:not([type="checkbox"]):not([type="radio"]),
 html[data-standalone] .dshm-settings-grid select {
   width: 100%;
   max-width: 280px;
 }
+html[data-standalone] .dshm-settings-grid input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+/* The tool allowlist input arrives without S.input; give it the same height and
+   radius as its neighbours so the grid reads as one control size. */
+html[data-standalone] .dshm-settings-grid .dshm-inbound-tools {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 9px;
+}
 html[data-standalone] .dshm-settings-note {
   grid-column: 1 / -1;
   margin-top: 8px !important;
+  white-space: pre-line;
 }
 @media (max-width: 1250px) {
   html[data-standalone] .dshm-settings-grid {

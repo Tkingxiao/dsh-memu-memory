@@ -61,7 +61,7 @@
 - **只有三个 key 分域**：`system-guide`、`private-policy`、`private-consolidation`；`global-curator` 不分域。
 - **远程与本地共用一份 `private-consolidation`**：正文讲「记什么、字段怎么填」，差异只有输出协议（`CONSOLIDATION_CONTRACTS.local` 调工具 / `.remote` 返回 JSON，代码追加）。不要拆第二份。
 - **1.2.2 起整理稿负责标题质量**：title 按「只看标题就知道具体事实」写（8–40 字、具体关键词、集合稿覆盖全部来源），`global-curator` 同一口径。词典/关联的工具调用属于**本地工作流**：领域整理稿与远程 JSON 路径共用，因此不写 `memu_*` 工具名；领域稿只保留「可抽什么词」的差异，稳定复用的黑话/梗/术语先 `memu_lexicon_search` 再 `memu_lexicon_propose`、写完用 `memu_private_link_suggest` 裁决候选的工具流程只出现在 local worker brief。远程契约明确「没有工具」，title 长度同样是 8–40 字。
-- RP 与 coding 是**内容**差异：coding 记事实（决定、约束、踩过的坑、工程偏好），召回当「可能过期的事实」，与代码冲突时以代码为准；rp 记经验（具体瞬间、半句原话、身体感觉、没说出口的话），允许模糊记错，不确定就标低 `confidence`。
+- RP 与 coding 是**内容**差异：coding 记事实（决定、约束、踩过的坑、工程偏好），召回当「可能过期的事实」，与代码冲突时以代码为准；rp 记经验（具体瞬间、半句原话、身体感觉、没说出口的话），允许模糊记错，不确定就标低 `confidence`。rp/mixed 同时收对方主动给出的**现实生活事实**（作息、行程、口味、健康、家人朋友、在忙的事）：`about_user` 平实短条（30–80 字），不需要「瞬间+影响」模板，剧情与现实条分开写、不互相合并；单次提及低 confidence 或 `short_term`，重复出现才升 `long_term`（`寒暄不留`的口径只拦寒暄本身，不拦寒暄里夹带的事实）。
 - **KV cache**：section 文本随 domain 变，但同一会话内恒定，缓存不受影响；中途改 domain 会让该会话失效一次缓存。别在文档里写「文本恒定」。
 
 ### 8.6 可见范围只剩两档，它决定「自动浮现」而不是「谁能读」
@@ -145,6 +145,8 @@
 受管召回只在候选阶段把词法结果与 MemU semantic retrieve 结果按 RRF（k=60）融合：先按 `isMemoryEligible`、`visibleToSession`、自动召回的 `secret` 排除及 context/scope 过滤，再按 canonical id 去重与候选上限处理。显式与自动召回共用候选融合；`touchAccessMany` 仍只对显式召回执行。精确记忆 id 走直达路径，切库期间中止以避免混合两个库。
 
 服务不可用时仅回退词法并保留可见错误信号；不暗切远端、不调用 LLM。真实 embedding 质量、延迟和跨模型收益仍需单独评测；W8（助手重复提示）已决定不做，结论与理由见 `AGENTS.md`。
+
+**语义召回缓存（1.2.7）**：`managedRecall` 的成功语义召回段被 `lib/recall-cache.js` 的进程内 LRU 缓存（max=256、TTL 120s）包住，命中直接复用融合结果，词面 localRecall 仍每轮计算。只缓存成功路径：`byId` 直达、local-fallback、带 `errors` 的降级结果一律不缓存（fail-open 信号不能被缓存吞掉）。缓存键含 `memoryRevision()`（state.js 的每次索引/状态落盘自增，自动覆盖 remember/update/整理提交/graph/迁移全部写路径）+ 向量代数 token + query/topK/libraryId/domain/sessionId/context/automatic，写记忆后下一轮键即变化、无 stale；跨进程写入靠 TTL 兜底（revision 是进程内的）。缓存自身故障按未命中处理并 `warn` 留痕（`stats()` 暴露 hits/misses/errors）。显式召回（`memu_private_recall`）命中率为 ~0 是正确行为：其 `touchAccess` 写会推进 revision 使键失效，accessCount 参与 decay 加成不能被缓存短路。
 
 模型下载、进度与 profile 切换/迁移已有实现，但真实模型/runtime 下载、原生推理及切换全链路在本轮仍未验证。candidate / `pending` artifact 不是可用制品，必须通过制品、校验与迁移门槛后才可进入可用/激活状态。
 

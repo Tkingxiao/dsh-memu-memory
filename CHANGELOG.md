@@ -1,5 +1,27 @@
 # 更新日志 / Changelog
 
+## [1.2.7] - 2026-11-06
+
+> 召回管线升级（分层分词、动态融合、召回缓存、子句级冲突检测）+ 整理模型可选（宿主 provider 或自定义接入点）+ 设置页分组重构 + 修复 0.2.2-rc.1 整理 fork 种子校验拒绝。
+
+### 召回管线升级（P0/P1）
+
+- **智能分词器（`lib/tokenizer-v2.js`）**：CJK unigram+bigram+trigram 三层特征 + 日期/数字/邮箱/URL 实体保护（数字边界规则：紧邻标识符的数字不拆出噪声 token）。**分层消费纪律**：三层 token 只进 BM25 的 tf/idf 流；idf 盲集合运算（blocking 共享计数、`tokenJaccard`、候选簇倒排）固定 V1 口径（bigram+latin）——unigram 对 idf 盲通道是稀释源，实测混用时 Recall@10 掉 13 个百分点。双轨开关 `TOKENIZER_V2` 默认开，关闭路径字节级不变。
+- **动态 RRF 权重（`computeRRFWeights`）**：近期语义词查询启用第四路 recency 排名（`{bm25:0.3, dice:0.3, entity:0.2, recency:0.2}`），coding 域 entity 提权；每通道 clamp [0.05,0.6] 后归一化，异常输入回退静态。开关 `RRF_DYNAMIC` 默认开；候选簇构建保持静态三路。
+- **RRF 切片边界带**：`rankPairCandidates` 前 20 切片的准入从 RRF 代理换 pairScore 真尺——与切点 rrf 之差 ≤`RRF_SLICE_BAND`(2.5e-4) 的候选并入评分集（≤`RRF_SLICE_BAND_CAP`×max），按真分数终选。修复近重复簇里 len 归一噪声把 pairScore 更优候选挤出切片的刀锋误伤。
+- **召回缓存（`lib/recall-cache.js`）**：`managedRecall` 成功语义召回段进程内 LRU（256 条 / 120s），键含 `memoryRevision()`（全部索引/状态落盘自增，写后无 stale）+ 向量代数 + domain/sessionId/context 等九分量；fail-open + `warn` 留痕，降级/fallback 结果一律不缓存。显式召回命中率 ~0 属正确行为（touchAccess 参与 decay 加成）。文档见 `docs/memory-semantics.md` §8.12。
+- **冲突检测增强**：新增 `polarityAt` 子句级否定作用域（双重否定、对比结构分段、无关子句隔离），`globalConflictCheck` 改用共享锚点双侧极性对比（无共享词回退整文本口径）；修复「截止日期 5月1日，别忘了」类无关子句否定与「不是不喜欢」双重否定两类误报。`negationPolarity` 原口径与导出不变。
+- **修复：整理 fork 在 DSH 0.2.2-rc.1 上必挂**——rc.1 的种子校验（`assertAssistantSettlementShape`）要求 `assistant/message.data.stream` 是数组，而插件种子清噪曾直接删除该字段，导致 0.2.2-rc.1 上每个整理 fork 种子被拒（"invalid settlement fields"；**1.2.6 已发布版同样中招**——`host-adaptation.md` §5.4 声明的未测面被内部真机评测实证）。修复：种子携带**空 stream 数组**（清噪初衷不变——分块日志不进种子；旧宿主不校验该字段，惰性兼容）。新增 `scripts/check-seed-compat.mjs`（用目标宿主自己的 dsh-session 包验证种子兼容性），列入宿主适配检查表必跑项。
+- **基准台（`scripts/bench-recall.mjs`）**：确定性合成语料前后对照。终局：全量 **1406 tests / 1404 pass / 0 fail / 2 skipped**、acceptance 50/50；簇构建较 1.2.6 快约 3%（5041→~4900ms）；Recall@10 与基线持平（0.7650 vs 0.7675，差 1/400 条，MRR 0.4200 vs 0.4218）——合成基准只能当回归门。
+- **守卫**：新增 4 个测试文件共 58 条（tokenizer-v2 17、dynamic-rrf 11、recall-cache 14、negation-polarity 14、边界带守卫 2）；阈值常量零改动。
+
+### RP/混合提示词：生活日常采集线
+
+- **寒暄口径收紧为「寒暄不留，寒暄里夹的事实要留」**：对方主动说出的现实生活事实（作息、行程、口味、健康、家人朋友、正在忙的事）要求独立成条——`owner=about_user`、30–80 字平实短条、不需要「瞬间+影响」模板；剧情与现实条分开写、不互相合并吸收。单次提及低 confidence 或 `short_term`，重复出现才升 `long_term`；「一次客套不推导长期偏好」护栏原样保留。
+- **落点**：`private-policy.rp.md`（写入口径）、`private-consolidation.rp.md`（整理采集线）及各自 `.mixed` 变体；`docs/memory-semantics.md` §8.5 同步口径。
+- **动机**：真机会话核查（QQ 陪伴场景）发现日常事实被三道闸门里的前两道拦掉（写入口径的「瞬间」标准、整理稿的活人感框架）；第三道注入偏置是刻意设计不动，靠本版分词升级（P0-1）改善生活事实的主题召回。
+- **守卫**：`tests/prompts.test.mjs`（变体加载/回退）与 `tests/doc-drift.test.mjs` 通过；提示词默认哈希启动时现算，已自定义提示词的安装会在下次启动标记 `defaultUpdated` 供复核。
+
 ## [1.2.6] - 2026-11-05
 
 > 一版「宿主适配」：在 DSH `0.2.2-rc.1` 上完成真机核对，核心行为无需改动；旧宿主（`0.2.0`–`0.2.1`）的会话级 schedule API 现在被结构性识别并明确跳过，不再每 5 分钟刷一条失败日志。新增 `docs/host-adaptation.md`，把下一次宿主升级变成一份可重复的检查表。

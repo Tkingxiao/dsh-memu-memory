@@ -202,7 +202,13 @@ test('>12 clusters are truncated by avg_score desc', () => {
   assert.equal(clusters.length, 12)
   const avgs = clusters.map((c) => c.avg_score)
   assert.deepEqual([...avgs].sort((a, b) => b - a), avgs, 'output stays avg_score-descending')
-  for (const cluster of clusters) assert.equal(cluster.suggested_op, 'link')
+  // P0-1 分数漂移：pair-1 与 pair-11（仅数字位数不同的变体）在 V2 的 unigram
+  // 层下 tokenJaccard 升高，跨对分数过 0.82 合法并簇（charDice 主导的真相似，
+  // 不是噪声）→「15 对收成 12 簇、avg 降序截断」的意图不变；op 断言放宽为
+  // 「link 或更好」。
+  for (const cluster of clusters) {
+    assert.ok(['link', 'absorb'].includes(cluster.suggested_op), `cluster in link-or-better band, got ${cluster.suggested_op}`)
+  }
 })
 
 test('recentLimit cuts the pool to the most recent entries and flags truncation', () => {

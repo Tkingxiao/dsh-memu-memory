@@ -9,9 +9,11 @@ process.env.DSH_MEMU_HOME = home
 
 const state = await import('../lib/state.js')
 const activity = await import('../lib/activity-log.js')
+const forkModel = await import('../lib/fork-model.js')
 const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY, CONSOLIDATION_WINDOW_EVENTS, compactSeedEvents, selectConsolidationWindow, selectTailTurnWindow } = await import('../lib/private.js')
 
 test.after(() => {
+  forkModel.disposeConsolidationRoute()
   try { fs.rmSync(home, { recursive: true, force: true }) } catch {}
 })
 
@@ -53,7 +55,7 @@ function assertHostCreateAccepts(spec = {}) {
   }
 }
 
-function host({ live = false, whenIdle = null, parentOptions = { provider: 'test-provider', model: 'test-model' }, requestConfig = null, extraEvents = [], transcriptSize = 0, turnReason = { kind: 'completed' }, emitTurnEnd = true, headerTools = null, childCtxFactory = null } = {}) {
+function host({ live = false, whenIdle = null, parentOptions = { provider: 'test-provider', model: 'test-model' }, requestConfig = null, extraEvents = [], transcriptSize = 0, turnReason = { kind: 'completed' }, emitTurnEnd = true, headerTools = null, childCtxFactory = null, llm = null } = {}) {
   const rec = { liveFollowups: [], created: [], forkFollowups: [], disposed: [], sessionHandlers: [], workerToolRegistrations: [], workerToolDisposals: [] }
   const childContexts = new Map()
   const tick = String.fromCharCode(96)
@@ -123,6 +125,9 @@ function host({ live = false, whenIdle = null, parentOptions = { provider: 'test
           },
         }
       }
+      // 整理 fork 的模型选择（lib/fork-model.js）按需探测的宿主 llm service；
+      // 缺省没有 = custom 模式必须降级回 inherit 的宿主形态。
+      if (name === 'llm') return llm
       if (name === 'sessionQuery') {
         return {
           readSession: async () => ({
@@ -398,7 +403,7 @@ test('the seed keeps conversation only, renumbers from zero, and strips replay/s
   const msg = seed[2].data.message
   assert.equal(msg.content.some(block => block.type === 'reasoning'), false, 'reasoning is not evidence')
   assert.equal(msg.source.replayState, undefined, 'replay state duplicates the body')
-  assert.equal(seed[2].data.stream, undefined, 'the raw chunk log is not the message')
+  assert.deepEqual(seed[2].data.stream, [], 'the raw chunk log is emptied, not deleted — 0.2.2-rc.1 seed validation requires the array')
   assert.match(msg.content.find(block => block.type === 'tool-call').arguments, /已截断/)
   assert.match(seed[3].data.message.content[0].text, /已截断/)
   assert.match(seed[4].data.message.content[0].text, /与前面相同的工具输出/, 'identical tool output is deduped')
@@ -576,4 +581,116 @@ test('the consolidation wait budget scales with the transcript, not a fixed 180 
   assert.equal(consolidationWaitBudget(undefined), CONSOLIDATION_WAIT_POLICY.minMs)
   assert.equal(consolidationWaitBudget('not-a-number'), CONSOLIDATION_WAIT_POLICY.minMs)
   assert.ok(CONSOLIDATION_WAIT_POLICY.minMs <= CONSOLIDATION_WAIT_POLICY.maxMs)
+})
+
+// ---------------------------------------------------------------- 整理 fork 的模型选择（三模式接线）
+// lib/fork-model.js 的解析与 route 生命周期在 fork-model.test.mjs 单测；这里钉住接线行为：
+// fork 真正拿到的 agentOptions、被拒时的 reasonCode、以及 inherit 模式与旧路径逐字节一致。
+
+function servingLlm() {
+  const llm = {
+    registerAdapter: (routes) => {
+      const handle = () => {}
+      handle.replace = () => {}
+      return handle
+    },
+    listModels: async (provider) => [{ provider, id: 'any', name: 'route serves models', inputModalities: ['text'] }],
+  }
+  return llm
+}
+
+const CUSTOM = {
+  consolidationModelMode: 'custom',
+  consolidationCustomBaseURL: 'http://127.0.0.1:9100/v1',
+  consolidationCustomModel: 'gateway-model',
+  consolidationCustomApiKey: '',
+}
+
+function restoreSettings() {
+  state.updateSettings({
+    consolidationModelMode: 'inherit',
+    consolidationModel: null,
+    consolidationCustomBaseURL: '',
+    consolidationCustomApiKey: '',
+    consolidationCustomModel: '',
+    consolidationCustomApi: 'openai-completions',
+  })
+}
+
+test('custom mode puts the fork on the registered dsh-memu-custom route', async () => {
+  state.updateSettings(CUSTOM)
+  try {
+    state.ensureSession('fork-mode-custom', { cwd: path.join(home, 'proj-mode-custom'), agentPreset: 'coding' })
+    const ctx = host({ live: true, llm: servingLlm() })
+    const result = await requestPrivateConsolidation(ctx, 'fork-mode-custom')
+    assert.equal(result.ok, true, String(result.error || ''))
+    assert.equal(result.settled, true)
+    assert.equal(ctx.rec.created.length, 1)
+    assert.deepEqual(ctx.rec.created[0].agentOptions, { provider: 'dsh-memu-custom', model: 'gateway-model' }, 'the fork names the plugin-owned custom route')
+    const started = startedEntryFor(ctx, 'fork-mode-custom')
+    assert.equal(started.detail.modelMode, 'custom')
+  } finally {
+    forkModel.disposeConsolidationRoute()
+    restoreSettings()
+  }
+})
+
+test('custom mode falls back to the inherited route when the host cannot serve the custom route', async () => {
+  state.updateSettings(CUSTOM)
+  try {
+    state.ensureSession('fork-mode-fallback', { cwd: path.join(home, 'proj-mode-fallback'), agentPreset: 'coding' })
+    // 没有 llm service 的宿主：custom 不可用，降级回父会话 route，整理照常完成。
+    const ctx = host({ live: true, parentOptions: { provider: 'fallback-prov', model: 'fallback-model' } })
+    const result = await requestPrivateConsolidation(ctx, 'fork-mode-fallback')
+    assert.equal(result.ok, true, String(result.error || ''))
+    assert.deepEqual(ctx.rec.created[0].agentOptions, { provider: 'fallback-prov', model: 'fallback-model' }, 'the fork falls back to the parent route instead of dying')
+    const started = startedEntryFor(ctx, 'fork-mode-fallback')
+    assert.equal(started.detail.modelMode, 'inherit-fallback')
+  } finally {
+    restoreSettings()
+  }
+})
+
+test('custom mode without a usable custom route and without a parent route is refused', async () => {
+  state.updateSettings(CUSTOM)
+  try {
+    state.ensureSession('fork-mode-custom-dead', { cwd: path.join(home, 'proj-mode-dead'), agentPreset: 'coding' })
+    const ctx = host({ live: true, parentOptions: null })
+    const result = await requestPrivateConsolidation(ctx, 'fork-mode-custom-dead')
+    assert.equal(result.ok, false)
+    assert.equal(result.reasonCode, 'custom-route-unavailable')
+    assert.match(result.error, /custom consolidation route is unavailable/)
+    assert.equal(ctx.rec.created.length, 0)
+  } finally {
+    restoreSettings()
+  }
+})
+
+test('host mode resolves consolidationModel the same way the curator does', async () => {
+  state.updateSettings({ consolidationModelMode: 'host', consolidationModel: 'host-prov/host-model/nested' })
+  try {
+    state.ensureSession('fork-mode-host', { cwd: path.join(home, 'proj-mode-host'), agentPreset: 'coding' })
+    const ctx = host({ live: true, parentOptions: { provider: 'other', model: 'other-model' } })
+    const result = await requestPrivateConsolidation(ctx, 'fork-mode-host')
+    assert.equal(result.ok, true, String(result.error || ''))
+    assert.deepEqual(ctx.rec.created[0].agentOptions, { provider: 'host-prov', model: 'host-model/nested' }, 'everything after the first slash is the model id')
+    assert.equal(startedEntryFor(ctx, 'fork-mode-host').detail.modelMode, 'host')
+  } finally {
+    restoreSettings()
+  }
+})
+
+test('a bad host consolidationModel is refused with its own reason, not the parent one', async () => {
+  state.updateSettings({ consolidationModelMode: 'host', consolidationModel: 'no-slash' })
+  try {
+    state.ensureSession('fork-mode-host-bad', { cwd: path.join(home, 'proj-mode-host-bad'), agentPreset: 'coding' })
+    const ctx = host({ live: true })
+    const result = await requestPrivateConsolidation(ctx, 'fork-mode-host-bad')
+    assert.equal(result.ok, false)
+    assert.equal(result.reasonCode, 'invalid-consolidation-model')
+    assert.match(result.error, /consolidation model \(/, 'the new reasons name the bad configuration face, not the parent route')
+    assert.equal(ctx.rec.created.length, 0)
+  } finally {
+    restoreSettings()
+  }
 })

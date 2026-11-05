@@ -22,8 +22,16 @@ test('tokenize: latin runs of >=2 chars keep ._ - joins, single chars drop', () 
   assert.deepEqual(tokenize('per-turn retry'), ['per-turn', 'retry'])
 })
 
-test('tokenize: CJK runs become overlapping bigrams, isolated chars stay single', () => {
-  assert.deepEqual(tokenize('部署窗口'), ['部署', '署窗', '窗口'])
+// P0-1 双轨切换（TOKENIZER_V2=true 默认）：CJK 从「只出 bigram」升级为
+// unigram+bigram+trigram 三层，4 字 run 另收完整串——断言按新口径更新，
+// 「孤立单字保留、跨标点 run 独立」的意图不变。
+test('tokenize: CJK runs become layered n-grams (V2), isolated chars stay single', () => {
+  assert.deepEqual(tokenize('部署窗口'), [
+    '部', '署', '窗', '口',
+    '部署', '署窗', '窗口',
+    '部署窗', '署窗口',
+    '部署窗口',
+  ])
   assert.deepEqual(tokenize('猫'), ['猫'])
   // two CJK runs separated by latin/punct stay separate runs
   assert.deepEqual(tokenize('猫。狗'), ['猫', '狗'])
@@ -31,7 +39,8 @@ test('tokenize: CJK runs become overlapping bigrams, isolated chars stay single'
 
 test('tokenize: NFKC folds full-width forms, lowercases, dedupes', () => {
   assert.deepEqual(tokenize('ＲＩＳＣＶ ＣＡＣＨＥ CACHE'), ['riscv', 'cache'])
-  assert.deepEqual(tokenize('缓存 缓存'), ['缓存'])
+  // V2 去重后仍只保留一次出现；unigram 是新增层（'缓存' bigram 依旧在）
+  assert.deepEqual(tokenize('缓存 缓存'), ['缓', '存', '缓存'])
 })
 
 // —— §4.1 buildCorpus + bm25 ——
@@ -173,7 +182,7 @@ function bigCorpus({ withTarget = true } = {}) {
   if (withTarget) {
     entries.push({ id: 'target', track: 'memory', domain: 'general', title: '缓存过期', content: 'Redis 缓存统一设置 30 秒过期，命中直接返回，不做全量。', appliesTo: ['deploy'], updatedAt: '2026-01-02T00:00:00.000Z' })
     entries.push({ id: 'title-only', track: 'memory', domain: 'general', title: '缓存过期', content: '完全不同的词汇组织起来的另一段内容。', updatedAt: '2026-01-03T00:00:00.000Z' })
-    entries.push({ id: 'single-token', track: 'memory', domain: 'elsewhere', title: '项目排期', content: '安排下季度的路线图评审。', updatedAt: '2026-01-04T00:00:00.000Z' })
+    entries.push({ id: 'single-token', track: 'memory', domain: 'elsewhere', title: '咖啡豆', content: 'sync 每周补货一次。', updatedAt: '2026-01-04T00:00:00.000Z' })
   }
   return buildCorpus(entries)
 }
@@ -192,18 +201,20 @@ test('rankPairCandidates: blocking finds the shared-token target in a >300 corpu
 
 test('rankPairCandidates: exact-title entries enter even without shared tokens', () => {
   const corpus = bigCorpus()
-  const proposal = { id: 'p', track: 'memory', domain: 'general', title: '缓存过期', content: '完全无重叠词元的新内容组合安排。', appliesTo: [] }
+  const proposal = { id: 'p', track: 'memory', domain: 'general', title: '缓存过期', content: '完全无重叠词元的新内容组合安排 sync。', appliesTo: [] }
   const found = rankPairCandidates({ corpus, proposal, limit: 20 })
   assert.ok(found.some((c) => c.id === 'title-only'))
 })
 
 test('rankPairCandidates: a one-shared-token candidate outside the proposal domain stays out', () => {
   const corpus = bigCorpus()
-  const proposal = { id: 'p', track: 'memory', domain: 'general', title: '缓存过期', content: '完全无重叠词元的新内容组合安排。', appliesTo: [] }
+  const proposal = { id: 'p', track: 'memory', domain: 'general', title: '缓存过期', content: '完全无重叠词元的新内容组合安排 sync。', appliesTo: [] }
   const found = rankPairCandidates({ corpus, proposal, limit: 20 })
-  // 'single-token' shares exactly one rare token (安排) with the proposal and
+  // 'single-token' shares exactly one rare token (sync) with the proposal and
   // sits in a different domain: blocking needs >=2 shared tokens and the
-  // same-domain backfill never reaches a foreign domain.
+  // same-domain backfill never reaches a foreign domain. 共享词刻意选 latin——
+  // V2 分词会把 CJK 共享词拆出 unigram（安排 → 安排+安+排），latin token 不拆，
+  // 「只共享一个词不进候选」的意图在两种分词口径下都成立。
   assert.ok(!found.some((c) => c.id === 'single-token'))
 })
 
@@ -225,6 +236,39 @@ test('rankPairCandidates: deterministic — same input, same output', () => {
   const run1 = rankPairCandidates({ corpus, proposal, limit: 20 })
   const run2 = rankPairCandidates({ corpus, proposal, limit: 20 })
   assert.deepEqual(run1, run2)
+})
+
+// —— §4.3 边界带（P0-1 回归修复的守卫）：代理切分 → pairScore 真尺终选 ——
+//
+// 手算秩结构（可复现 fixture，文本两两相同造成 bm25/dice 精确并列，en 路由的
+// containment tiebreak 由 cand-c/d 的逐字包含 0.92 垫高）：
+//   cand-a: bm1, di1, en4 → rrf = 0.5/61 + 0.3/61 + 0.2/64 = 1.6240e-2（rank 1，切点）
+//   cand-b: bm2, di2, en1 → rrf = 0.5/62 + 0.3/62 + 0.2/61 = 1.6183e-2（rank 2，带内：
+//           与切点差 (0.5+0.3)×(1/61−1/62) − 0.2×(1/61−1/64) = 5.78e-5 ≤ RRF_SLICE_BAND）
+//   cand-c/d: rrf 更低，带外（仅作 en 路由 containment 垫脚）。
+// pairScore：cand-b 0.9894（entity 匹配）≫ cand-a 0.8394（appliesTo 不相交）。
+// 修复前 pre-cut=limit=1 只评分 cand-a，返回 ['cand-a']；边界带把 cand-b 并入
+// 评分集，真尺终选翻到 cand-b——准入从 RRF 代理换成 pairScore 真尺的直接证据。
+test('rankPairCandidates: the slice boundary band admits a better-pairScore candidate the RRF proxy dropped', () => {
+  const twin = 'Redis 缓存统一设置 30 秒过期，命中直接返回。Redis 缓存统一设置 30 秒过期，命中直接返回。'
+  const tail = '。另有运维值班轮换表与告警升级路径的完整说明，这里补足长度让长度剪枝生效并保持逐字包含。'
+  const proposal = { title: '缓存过期', content: 'Redis 缓存统一设置 30 秒过期，命中直接返回。', appliesTo: ['deploy'], track: 'memory', domain: 'general' }
+  const corpus = buildCorpus([
+    { id: 'cand-a', title: '缓存过期', content: twin, appliesTo: [], track: 'memory', domain: 'general' },
+    { id: 'cand-b', title: '缓存过期', content: twin, appliesTo: ['deploy'], track: 'memory', domain: 'general' },
+    { id: 'cand-c', title: '缓存过期', content: proposal.content + tail, appliesTo: [], track: 'memory', domain: 'general' },
+    { id: 'cand-d', title: '缓存过期', content: proposal.content + tail, appliesTo: [], track: 'memory', domain: 'general' },
+  ])
+  const found = rankPairCandidates({ corpus, proposal, limit: 1 })
+  // 真尺终选：数量语义不变（≤max），赢家是带内 rescue 的高 pairScore 候选
+  assert.equal(found.length, 1)
+  assert.equal(found[0].id, 'cand-b')
+  // 赢家的 rrf 严格低于切点（cand-a 的手算 rrf）——证明它来自边界带而非 pre-cut
+  const cutRrf = 0.5 / (60 + 1) + 0.3 / (60 + 1) + 0.2 / (60 + 4)
+  assert.ok(found[0].rrf < cutRrf, `winner rrf ${found[0].rrf} must sit below the pre-cut line ${cutRrf}`)
+  // 被切掉的 cand-a 在真尺上确实更差（低 pairScore 者按 pairScore 出局）
+  const loserScore = pairScore(pairFeatures(proposal, corpus.docs.get('cand-a').entry))
+  assert.ok(found[0].score > loserScore, `band winner ${found[0].score} must beat the displaced candidate ${loserScore}`)
 })
 
 // —— §4.8 全局冲突预筛 ——

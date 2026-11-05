@@ -91,6 +91,8 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **守卫**：同库连续两次写后条目数对不上即可确认；并发用例见 `tests/storage.test.mjs`。
 
+**召回缓存（1.2.7）不是本症状的成因**：写路径（remember/update/整理提交）都会推进 `memoryRevision()`，缓存键随之变化，同进程写后立即召回不会命中旧键。唯一残留窗口是**跨进程写**（第二窗口/独立进程改库）：revision 是进程内的，另一进程最多多看 120s（TTL）旧召回，之后自动刷新；`bumpGeneration()` 可手动清。
+
 ### 3.5 面板不自动刷新（S8 心跳）
 
 **症状**：侧边栏 / 设置页要手点刷新才更新，心跳却一直在跑。
@@ -360,7 +362,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 ### 2.1 模块地图
 
-<!-- rpc-method-count: 95 -->
+<!-- rpc-method-count: 97 -->
 
 | 文件 | 职责 / 什么时候碰它 |
 |---|---|

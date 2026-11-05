@@ -253,7 +253,7 @@ headless 会禁用 `deepseek-account`；没有配假模型时会以 `MISSING_CRE
 ### 5.4 没测的
 
 - 桌面壳（Windows 标题栏、原生按钮区）——本插件不写 DOM app-region，但仍未在 0.2.2 桌面上跑过。
-- 全局整理（`subagents.startActivation`）与历史会话 fork（`agents.create` + `followup`）只核对了类型/源码，没有在 0.2.2 真机上跑完一整次作业。
+- ~~全局整理（`subagents.startActivation`）与历史会话 fork（`agents.create` + `followup`）只核对了类型/源码，没有在 0.2.2 真机上跑完一整次作业。~~ **1.2.7 实证补记**：这条漏测面被内部真机评测击中——rc.1 的种子校验（`assertAssistantSettlementShape`）要求 `assistant/message.data.stream` 是数组，而插件种子清噪曾直接删除该字段，**0.2.2-rc.1 上每个整理 fork 种子必被拒**（1.2.6 已发布版中招）。已修：种子携带**空 stream 数组**（`lib/private.js` compactSeedEvents），并用 `node scripts/check-seed-compat.mjs --session-pkg <宿主 dsh-session 的 lib/index.js>` 固化为**每个新宿主版本适配检查表的必跑项**（PASS 后再跑完整整理作业）。全局整理（startActivation）仍属源码核对面。
 - 日期唤醒的**真实投递**没有等 5 分钟周期；只核对了 `ctx.schedule` 的 rc.1 类型与单测。
 - 从 0.2.1 升级上来的旧库/旧 state.json：未在 0.2.2 上做迁移回归（数据格式未变，但不宣称已测）。
 
