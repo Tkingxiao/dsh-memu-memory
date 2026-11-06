@@ -34,7 +34,7 @@
 
 ## 基准测试
 
-公开的 [chat-memory-benchmark](https://github.com/Ornn8/chat-memory-benchmark) 714 题完整卷（2026-11-06，`dys-router / deepseek-v4.1-flash`，high 思考强度）通过 **653 / 714（91.46%）**。同一轮实测记忆成本为 **75,517,851 tokens、谷价 ¥24.45**，是端到端实际花费，不是按单次会话外推。
+公开的 [chat-memory-benchmark](https://github.com/Ornn8/chat-memory-benchmark) 714 题完整卷（2026-11-06，`dys-router / deepseek-v4.1-flash`，high 思考强度）通过 **653 / 714（91.46%）**。同一轮**实测记忆成本为 ¥16.05**；包含非记忆开销的总成本为 **¥24.45**（总 token 75,517,851，谷价），均为端到端实测，不是按单次会话外推。
 
 ## 界面
 

@@ -34,7 +34,7 @@ It is **local-first by default**. The default `agent` backend stores full text i
 
 ## Benchmark
 
-The public [chat-memory-benchmark](https://github.com/Ornn8/chat-memory-benchmark) full 714-question run (2026-11-06, `dys-router / deepseek-v4.1-flash`, high reasoning) passed **653 / 714 (91.46%)**. The same run's actual measured memory cost was **75,517,851 tokens in total and ¥24.45 at the provider's off-peak rate** — end to end, not extrapolated from a single session.
+The public [chat-memory-benchmark](https://github.com/Ornn8/chat-memory-benchmark) full 714-question run (2026-11-06, `dys-router / deepseek-v4.1-flash`, high reasoning) passed **653 / 714 (91.46%)**. The run's actual measured memory cost was **¥16.05**; the full run, including non-memory overhead, cost **¥24.45** (75,517,851 tokens total, at the provider's off-peak rate) — measured end to end, not extrapolated from a single session.
 
 ## Screenshots
 

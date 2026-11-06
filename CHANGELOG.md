@@ -28,7 +28,7 @@
 
 ### 评测
 
-- [chat-memory-benchmark](https://github.com/Ornn8/chat-memory-benchmark) 714 题完整卷（2026-11-06，`dys-router / deepseek-v4.1-flash`，high 思考强度）：通过 **653 / 714（91.46%）**；同轮实测总 token **75,517,851**、成本 **¥24.45（谷价）**。
+- [chat-memory-benchmark](https://github.com/Ornn8/chat-memory-benchmark) 714 题完整卷（2026-11-06，`dys-router / deepseek-v4.1-flash`，high 思考强度）：通过 **653 / 714（91.46%）**；同轮**实测记忆成本 ¥16.05**，含非记忆开销的总成本 ¥24.45（谷价，总 token 75,517,851）。
 - 全量 **1473 tests / 1471 pass / 0 fail / 2 skipped**、acceptance 50/50、`npm run check` 全绿。
 - 升级兼容：旧条目缺新字段按空处理，不强制迁移；`disclosure` 行为有变（`never_say` / `only_if_asked` 不再自动注入），需要它们自动出现的旧用法请改回 `can_tell`。
 
