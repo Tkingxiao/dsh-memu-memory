@@ -1,5 +1,37 @@
 # 更新日志 / Changelog
 
+## [1.2.8] - 2026-11-06
+
+> 记忆语义升级：时间落绝对日期、同一事实保留多版本、说话人/来源可区分、承诺可追踪；召回按查询意图取数，注入按边界过滤。另修复本地向量「切换并重建」的 `residentRecord is not defined`。
+
+### 时间、版本、来源与承诺
+
+- **时间规范化（`lib/temporal.js`）**：写入时按本轮 `sceneTime`（其次 `context.occurredAt`）解析今天/明天/后天/下周X/月底/年初/N天后等相对日期，落 `event_time` / `observed_at` / `absolute_date` / `date_precision` / `date_source`；无法解析不猜，标 `date_precision=unknown`。原文保留在 `content`。`valid_from` / `valid_to` 作为可选有效窗口参与召回过滤；查询里的相对日期先解析成绝对日期再检索，时间题按 `absolute_date` 最近优先注入。
+- **版本化事实（`lib/memory.js`）**：新条目落 `fact_key` 与 `version`。显式 `conflicts_with` 或同一显式 `fact_key` 的再次写入让新旧两条都保持 active、互指并成对召回，注入为一张 200 字内冲突卡；显式 `supersedes` 才退休旧条（正文与标题不删，落 `valid_to`）。兼容补充仍走 `memu_private_update`，保留原 id。旧的无关系字段冲突仍进 `pending_review`。
+- **说话人与来源**：新增 `speaker_id` / `source_kind` / `quote_span` / `storyline_id` / `branch_id` / `known_by`；来源枚举增加 `assistant_said` 与 `tool`。助手自己的承诺和计划不再被记成用户原话；查询「我说过/你说过/他说的」按 speaker 过滤，缺字段的旧条目保留。
+- **承诺与 open loop（`lib/commitment.js`）**：新增 `commitment = {counterparty, action, due_at, status, closed_by, evidence_seq}`，`status` 为权威，`open_loop` 兼容跟随。逾期/今天/明天到期的未完成承诺最多 3 条按 `due_at` 注入；`dueOpenLoops` 也以 commitment 为准。
+
+### 召回、注入与提示词
+
+- **查询意图（`detectQueryIntent` / `decomposeQuery`）**：区分 `date` / `entity` / `conflict` / `commitment` / `boundary` / `general`，拆分绝对日期与引号/`@`/已知实体名；按意图提高候选上限（时间/实体 8、冲突 6、承诺/边界 5，封顶 20）。命中条目沿显式 `links` 扩展一跳。
+- **注入边界**：`never_say` 不再进入任何自动注入面（锚点、自动召回、纪念日/到期提醒、cue）；`only_if_asked` 只在 boundary 意图的查询里自动放行；显式 `memu_private_recall` 仍可读两者。
+- **提示词**：RP guide/policy/consolidation 与整理 worker 任务书补上绝对日期、`conflicts_with` / `supersedes`、`speaker_id` / `source_kind`、`commitment` 与「助手说过的话也要写」的字段要求。
+- **可观测性**：召回缓存增加 `staleSkipped`，`getState` 暴露 `recallCache` 段（hits/misses/evictions/errors/staleSkipped）。
+
+### 修复与稳定性
+
+- **修复：本地向量「切换并重建」必报 `residentRecord is not defined`**——`lib/memu.js` 的常驻引擎进程级单例从 1.2.6 起只在 `stopResident` / `ensureResident` / `closeMemuResident` 等处被引用、却漏了模块级声明；ESM 严格模式下只有真正拉起 resident 进程时才抛 `ReferenceError`，普通召回与状态读取不触发。修复为模块顶部的 `let residentRecord = null`，新增 `tests/memu-resident.test.mjs`（声明位置守卫 + close/prewarm 不再抛错）。
+- 整理等待预算下限从 180s 调整到 420s，慢推理模型的单次 worker 回合不会必然撞墙；上限仍为 600s。
+- 本地向量切换支持显式 `force`：同一个 profile 已 active 时也可重建一代，用于库集合变化后把索引追平；`switchLocalVectorProfile` 与 RPC 均透传。
+- 整理触发支持显式 `force` / `trigger`：手动按钮仍强制，积压口径可用 `trigger=backlog` 验证水位触发。
+- 整理回执 `heldIds` 恢复「仅 pending_review」口径；已 active 的矛盾条目应放进 `createdIds/updatedIds`。
+
+### 评测
+
+- [chat-memory-benchmark](https://github.com/Ornn8/chat-memory-benchmark) 714 题完整卷（2026-11-06，`dys-router / deepseek-v4.1-flash`，high 思考强度）：通过 **653 / 714（91.46%）**；同轮实测总 token **75,517,851**、成本 **¥24.45（谷价）**。
+- 全量 **1473 tests / 1471 pass / 0 fail / 2 skipped**、acceptance 50/50、`npm run check` 全绿。
+- 升级兼容：旧条目缺新字段按空处理，不强制迁移；`disclosure` 行为有变（`never_say` / `only_if_asked` 不再自动注入），需要它们自动出现的旧用法请改回 `can_tell`。
+
 ## [1.2.7] - 2026-11-06
 
 > 召回管线升级（分层分词、动态融合、召回缓存、子句级冲突检测）+ 整理模型可选（宿主 provider 或自定义接入点）+ 设置页分组重构 + 修复 0.2.2-rc.1 整理 fork 种子校验拒绝。

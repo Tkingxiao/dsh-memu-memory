@@ -1,4 +1,4 @@
-// 召回基准台（1.3.0 P1-3）：对比 HEAD 基线与施工后 lib 的检索质量与延迟。
+// 召回基准台（1.2.8 P1-3）：对比 HEAD 基线与升级后 lib 的检索质量与延迟。
 //
 // 用法：
 //   node scripts/bench-recall.mjs                     # 测当前仓库 lib
@@ -9,7 +9,7 @@
 // - 指标：rankPairCandidates 延迟（N=300 精确两两 / N=2000 blocking 两档）、
 //   buildCandidateClusters 延迟、Recall@10 / MRR（查询 → 目标条目是否进前 10）。
 // - 不引入任何依赖；被测导出（buildCorpus/rankPairCandidates/buildCandidateClusters）
-//   是 curator.js/global-graph.js 的既有公共面，任何施工都不应改动其签名。
+//   是 curator.js/global-graph.js 的既有公共面，任何改动都不应改动其签名。
 
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'

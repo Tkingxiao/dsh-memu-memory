@@ -23,14 +23,18 @@
 
 ---
 
-`dsh-memu-memory` is built for long-form RP and companion chats. It gives a DSH conversation a memory that behaves like memory instead of a log: three retention layers that fade, a first-turn anchor plus at most one per-turn recall, provenance that cannot be quietly upgraded from "I inferred it" to "they said it", contradictions that wait for a decision instead of both being read as true, near-identical facts collapse to one entry and one recall seat, and an optional relationship graph with evidence. Speakers, characters, worlds and story branches form hard boundaries, and what a character is allowed to know stays separate from what actually happened.
+`dsh-memu-memory` is built for long-form RP and companion chats. It gives a DSH conversation a memory that behaves like memory instead of a log: three retention layers that fade, a first-turn anchor plus at most one per-turn recall, provenance that cannot be quietly upgraded from "I inferred it" to "they said it", contradictions that either wait for a decision or — when explicitly versioned — stay side by side with a conflict card instead of being silently merged, near-identical facts collapse to one entry and one recall seat, and an optional relationship graph with evidence. Speakers, characters, worlds and story branches form hard boundaries, and what a character is allowed to know stays separate from what actually happened.
 
 It is **local-first by default**. The default `agent` backend stores full text in JSON indexes and recalls lexically — no Python, no embedding service, no API key. The `api` backend switches recall to the optional, pinned MemU engine (vector search). MemU is a plugin for people who want it, not a requirement for the plugin to start.
 
 > [!WARNING]
 > **Early-stage software.** This plugin is still early and may contain unforeseen errors, bugs or breaking changes. Back up your data, and please [report an issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) or send a pull request — feedback helps the project improve.
 
-> **Status:** 1.2.6. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
+> **Status:** 1.2.8. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
+
+## Benchmark
+
+The public [chat-memory-benchmark](https://github.com/Ornn8/chat-memory-benchmark) full 714-question run (2026-11-06, `dys-router / deepseek-v4.1-flash`, high reasoning) passed **653 / 714 (91.46%)**. The same run's actual measured memory cost was **75,517,851 tokens in total and ¥24.45 at the provider's off-peak rate** — end to end, not extrapolated from a single session.
 
 ## Screenshots
 
@@ -60,10 +64,10 @@ All screenshots are the real WebUI on isolated example data, not anyone's memori
 - **Recall is a moment, not a dump.** The first turn after a session starts (or after compaction) gets an anchor block with budgets for pinned, core and global memory. After that, each user turn gets at most one recall. Deduplication and a token budget are enforced in code, not left to the prompt. Anchor and recall entries are **title cards**: title, id and semantic tags only. The body stays in the drawer and behind `memu_private_recall` / `memu_global_recall`, so the same budget exposes far more memories without pasting text the model never asked for.
 - **A private lexicon writes itself.** The consolidation worker extracts stable, evidenced slang, memes and project terms with one term per entry. Ordinary entries become active immediately (no human review queue), while sensitive triggers and sensitive edits stay user-only. The lexicon page is a card flow with active/archived tabs, edit, archive/restore and two-step permanent delete. A **global lexicon** sits beside the per-library ones: every conversation reads it, only you write it. With same-domain cross-library recall on, the anchor, this-turn match and `memu_lexicon_search` merge those libraries too — the page still browses one book at a time.
 - **Private links are algorithm-first.** After consolidation, a zero-token pass connects memories that share a rare name or alias in the same context/track and creates/reuses an entity hub (for example `yuike`). Uncertain pairs are handed to the consolidation worker for an evidence-based decision. Links are metadata (`source: 'auto'`), shown with an “Auto” badge in the graph and removable; they never rewrite a body, write a vector or delete anything.
-- **A date is either an anniversary or one day.** `MM-DD` recurs every year (a birthday); `YYYY-MM-DD` fires the day before and the day itself, then is spent. A memory that says "tomorrow" is stored as the dated form, so an appointment does not come back every year.
+- **A date is either an anniversary or one day.** `MM-DD` recurs every year (a birthday); `YYYY-MM-DD` fires the day before and the day itself, then is spent. Relative wording (今天 / 明天 / 下周X / 月底) is resolved against the turn's scene time and stored as an absolute date; a memory that says "tomorrow" is stored as the dated form, so an appointment does not come back every year.
 - **Memory fades unevenly.** Recency, access count, peak and end effects, primacy, habituation and flashbulb accuracy feed one strength score. Mood is described by four components (joy / anger / sorrow / fear, summing to 1) plus arousal (intensity) and dominance (sense of control); a compound mood such as jealousy is a named mix of the four, not a new axis. Mood only reorders recall: it never enters the injected text and never rewrites a memory body. Gating is the OR of three independent conditions — the dominant share is >= 0.35, |arousal - 0.35| >= 0.1, or |dominance| >= 0.25; when none holds, both multipliers are exactly 1. Older entries carry no emotion and keep the old valence path; the four axes are never inferred back from valence. A vivid memory can be more confident than it is accurate, and the UI says so.
-- **Provenance is a fact, not a style.** Every entry carries `source` (`user_said` / `inferred` / `imagined` / `told`), `confidence`, `accuracy`, and disclosure rules. A vague recollection cannot impersonate a quote.
-- **Contradictions wait.** A write that rewrites or contradicts an existing entry lands as `pending_review`: it is not injected, not recalled, and appears in a review queue until someone accepts or rejects it.
+- **Provenance is a fact, not a style.** Every entry carries `source` / `source_kind` (`user_said` / `assistant_said` / `told` / `imagined` / `inferred` / `tool`), `speaker_id`, `confidence`, `accuracy`, and disclosure rules. A vague recollection cannot impersonate a quote, and the assistant's own promises or plans cannot be filed as something the user said.
+- **Contradictions do not get silently merged.** An ordinary contradiction still lands as `pending_review`: it is not injected, not recalled, and appears in a review queue until someone accepts or rejects it. When the writer explicitly marks two statements as versions of one fact (`conflicts_with`), both stay active, are recalled together and surface as a conflict card; an explicit `supersedes` retires the old row without deleting its text.
 - **Secrets stay excluded.** `secret` visibility, group-chat channels, characters, worlds, branches and `knownBy` all constrain reads and edits. Automatic recall never injects a `secret` memory, and a `secret` is still readable by an explicit recall from the same folder — it hides a memory from the prompt, it is not a lock. What actually separates two conversations in one folder is the `context` scope (`channelId` / `characterId` / `worldId` / `branchId`); a blank scope on both sides means one shared scope, which is the point of a folder. The old `visibility: 'session'` level is gone — reading turns it into `shared` with its `context` untouched, and `node scripts/migrate-visibility.mjs` rewrites libraries that still store it (`--apply`, backs up first).
 - **People and stories are structured.** Group chat uses stable `speakerId` / `channelId`, not display names. RP uses `characterId` / `worldId` / `branchId`. Relationships are edges with a note and confidence, entities can be renamed without rewriting memory bodies, and the current relationship state (familiarity, trust, warmth, boundaries, promises) is a snapshot that keeps its history and evidence.
 - **Images are pointers and captions, not pretend vision.** Attachments are deduplicated by SHA-256, quota-limited and tiered; an image without a description is remembered as "received an image", never as a scene the model did not see.
@@ -86,16 +90,7 @@ Four real long sessions from this machine were replayed read-only (no new chat) 
 
 Below-threshold turns on the two small sessions can still wake through starvation; on the 2,000+ event sessions they do not. None of the four had new human input after its real cursor, so none would fork again immediately.
 
-Provider-reported usage from real forks: one consolidation costs about **41k–217k input tokens** (including cache reads; it depends on memory-tool steps) and **0.8k–3.4k output**. At one 4-hour long session per day and 2–6 effective consolidations:
-
-| Consolidations/day | Monthly input | Monthly output |
-|---|---:|---:|
-| 2 | ~5.6M | ~0.11M |
-| 4 | ~11M | ~0.23M |
-| 6 | ~17M | ~0.34M |
-| 6 (worst measured fork each) | ~39M | ~0.7M |
-
-For scale, the whole 4-hour session tree measured here consumed 132M input and 1.28M output in one day, so active-memory forks are about **0.2%–1%** of the total. These are token counts, not money; cache reads are usually billed at a lower rate. The exact figure depends on turn count, memory-tool steps and how often the session actually goes idle.
+End-to-end accuracy and the measured cost of the 714-question run are in [Benchmark](#benchmark).
 
 ## One WebUI
 

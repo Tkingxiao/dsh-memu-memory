@@ -1,4 +1,4 @@
-// 词典频率先验（施工稿 §6.3 包 C）：Wilson 下界、effective 因子进入 stableRank、
+// 词典频率先验：Wilson 下界、effective 因子进入 stableRank、
 // hitCounts 写入 clamp、以及生命周期（active/archived）对频率证据的影响。所有断言
 // 只依赖落盘数据，不依赖当前时间——排序的确定性在这里与 lexicon-inject 各钉一遍。
 // 面板/卡片流（§2.4）的 UI 断言在 tests/lexicon-ui.test.mjs（G2b 重写），本文件只管

@@ -573,9 +573,9 @@ test('a non-PTC header without write tools still refuses to fork', async () => {
 // 超时预算按范围大小推：935 条事件那次实测「180 s 到点只写了 3 条，退避重试 131 s 完成」，
 // 约 0.14–0.2 s/事件；政策取 0.35 s/事件（≈2 倍余量）并夹在 [180 s, 600 s]。
 test('the consolidation wait budget scales with the transcript, not a fixed 180 s', () => {
-  assert.equal(consolidationWaitBudget(0), CONSOLIDATION_WAIT_POLICY.minMs, 'an empty range still gets the old floor')
-  assert.equal(consolidationWaitBudget(100), 180_000, 'small sessions keep the original three minutes')
-  assert.equal(consolidationWaitBudget(200), 190_000)
+  assert.equal(consolidationWaitBudget(0), CONSOLIDATION_WAIT_POLICY.minMs, 'an empty range still gets the floor')
+  assert.equal(consolidationWaitBudget(100), 420_000, 'small sessions get the slow-reasoning floor')
+  assert.equal(consolidationWaitBudget(200), 420_000)
   assert.equal(consolidationWaitBudget(935), 447_250, 'the session that timed out gets ~7.5 minutes')
   assert.equal(consolidationWaitBudget(5_000), CONSOLIDATION_WAIT_POLICY.maxMs, 'a wedged fork still dies inside ten minutes')
   assert.equal(consolidationWaitBudget(undefined), CONSOLIDATION_WAIT_POLICY.minMs)

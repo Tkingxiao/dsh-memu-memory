@@ -2,7 +2,7 @@
 //
 //   node scripts/check-seed-compat.mjs --session-pkg <@deepseek-ai/dsh-session/lib/index.js 路径>
 //
-// 背景（1.3.0 实测）：DSH 0.2.2-rc.1 的种子校验（assertAssistantSettlementShape）
+// 背景（1.2.7 实测）：DSH 0.2.2-rc.1 的种子校验（assertAssistantSettlementShape）
 // 要求 assistant/message 的 data.stream 是数组，而插件曾直接 delete 该字段，导致
 // 0.2.2-rc.1 上每个整理 fork 种子都被拒（"invalid settlement fields"）。修复后种子
 // 携带空数组。本脚本把「compactSeedEvents 产物 → 宿主 Session.create」这一环固化成

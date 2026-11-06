@@ -34,7 +34,7 @@ const hooks = registerHooks({
   },
 })
 
-const { createRecallCache, recallCache, recallCacheKey } = await import('../lib/recall-cache.js')
+const { createRecallCache, recallCache, recallCacheKey, recallCacheStats } = await import('../lib/recall-cache.js')
 const state = await import('../lib/state.js')
 const vp = await import('../lib/vector-profile.js')
 const paths = await import('../lib/paths.js')
@@ -65,6 +65,7 @@ test('TTL 过期：注入假时钟，到点即失效并计逐出', () => {
   now = 1_100
   assert.equal(cache.get('k'), null, 'now >= 存入时刻+ttl 即过期')
   assert.equal(cache.stats().evictions, 1, '过期即逐出')
+  assert.equal(cache.stats().staleSkipped, 1, '过期同时计为 staleSkipped')
   assert.equal(cache.stats().misses, 1)
 })
 
@@ -177,7 +178,8 @@ test('模块级单例存在且具备全部公开方法', () => {
     assert.equal(typeof recallCache[method], 'function', method)
   }
   assert.deepEqual(Object.keys(recallCache.stats()).sort(),
-    ['errors', 'evictions', 'generations', 'hits', 'inflight', 'lastError', 'misses', 'size'])
+    ['errors', 'evictions', 'generations', 'hits', 'inflight', 'lastError', 'misses', 'size', 'staleSkipped'])
+  assert.deepEqual(recallCacheStats(), recallCache.stats(), 'the stats reader is a snapshot of the singleton')
 })
 
 // ---------------------------------------------------------------- 接线部分

@@ -372,7 +372,9 @@ test('standard and preset mounts render the same rules body', async () => {
 })
 
 test('the guide is included in injectionTotalTokens, not added on top of it', async () => {
-  state.updateSettings({ injectionTotalTokens: 900, turnTokens: 800, randomCueChance: 0, habitsInjection: false })
+  // 1.2.8 的 RP guide 增加了时间/版本/来源三条规则，整段约 930 token；预算抬到 1000，
+  // 仍然是“guide 先落、锚点被裁”的同一条口径。
+  state.updateSettings({ injectionTotalTokens: 1000, turnTokens: 800, randomCueChance: 0, habitsInjection: false })
   const sessionId = 'guide-budget'
   const cwd = path.join(home, 'project-guide-budget')
   const binding = state.ensureSession(sessionId, { cwd, agentPreset: 'coding' })
@@ -387,6 +389,6 @@ test('the guide is included in injectionTotalTokens, not added on top of it', as
   const guides = guideMessages(out.messages)
   assert.equal(guides.length, 1, 'the guide still lands')
   const used = pluginMessages(out.messages).reduce((sum, message) => sum + budget.estTokens(messageTextOf(message)), 0)
-  assert.ok(used <= 900, `guide + anchor must stay inside injectionTotalTokens, got ${used}`)
-  assert.ok(used < 900 + 200, 'sanity: the anchor was clipped rather than the guide silently dropped')
+  assert.ok(used <= 1000, `guide + anchor must stay inside injectionTotalTokens, got ${used}`)
+  assert.ok(used < 1000 + 200, 'sanity: the anchor was clipped rather than the guide silently dropped')
 })

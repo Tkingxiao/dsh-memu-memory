@@ -20,7 +20,7 @@
 - 移出永久记忆 = **边缘化**：`marginalized=true`、`strength × 0.2`、召回排序里 `marginalized` 乘以 0.35（`recallPenalty` 字段仅作历史记录，当前不参与排序），**不删除**；条目仍在库里，`marginalReason` 在侧边栏可见（替代人类闸门的**事后**监督）。
 - **unpin 由模型自己判断，侧边栏没有标记按钮、用户不参与。** 三重护栏：① `reason` 必填、第一人称、去空白后 ≥ 20 字符；② 每会话配额 `unpinBudgetPerSession`（默认 2）；③ 冷却 `unpinCooldownMinutes`（默认 3）。放行后记 `unpinnedBy: model`、`unpinnedAt`、`originalPinSource`（保留原 pinSource 以便复 pin）。
 - 正当的 unpin 只有两种：想起它本身正在伤人；它已经不再是我的一部分。不正当的：inconvenient、不想面对、用户这轮没提、永久记忆快满了。**这个区别要写进提示词。**
-- 矛盾检测：同库同题改写或说法相反 → 新条挂 `pending_review` + `reviewReason` + `conflictingWith`，**不进注入不进召回**，等 `listReviews` / `resolveReview` 裁决（§3.9）。
+- 矛盾检测：同库同题改写或说法相反 → 新条挂 `pending_review` + `reviewReason` + `conflictingWith`，**不进注入不进召回**，等 `listReviews` / `resolveReview` 裁决（§3.9）。写入方显式用 `conflicts_with`（或同一显式 `fact_key` 再次写入）声明“同一事实的两个版本”时是例外：两条都保持 active、互指并成对召回，注入为冲突卡（§8.17）；明确取代用 `supersedes`。
 
 ### 8.3 全局记忆
 
@@ -40,7 +40,7 @@
 
 - 静态 guide 与动态记忆都走 plugin 消息；当前版本不再注册本插件的 system prompt 段。所有会话（含 `persona` `complete: true`）统一由 `lib/inject.js` 的 `ensureUnifiedGuide` 在**回合首步**投放一条 `<memory-guide rules="…">` 插件消息；`rulesKey` 由协议版本、domain 和实际渲染正文计算，domain/覆盖/默认稿变化或压缩丢失（`guideLost`）时在下一个合法首步替换，同一规则不逐回合重复。旧 binding 只有 `guideMessageAt`、没有 `guideRulesKey` 时视为旧版，补投一次；失败 fail-open，不写新版本。
 - 首轮锚点 + 每用户回合最多一次；长工具回合仅有新的真实人类消息批次时追加一次，普通工具步骤不触发。私有优先、全局补充；冲突时私有胜。
-- **锚点和本回合召回只放标题卡**（1.2.2）：`formatPrivateTitle` / `formatGlobalTitle` 输出 `[id]`、标题、`source`、owner、layer、日期/年龄、marginalized/open_loop、accuracy/uncertainty/disclosure 与附件计数，**不输出正文与附件 caption**。工具返回、记忆抽屉与浏览器仍是全文；要正文就按标题关键词或方括号里的 id 调 `memu_private_recall` / `memu_global_recall`。标题为空时回退正文前 40 字；`imagined`、`never_say` 等语义标签不能因为标题化而丢失。跨库召回开启时（§8.15），private 标题卡可能来自其它同领域库；id 仍全局唯一，按 id 取正文仍走 `memu_private_recall`，写入仍只落在当前库。
+- **锚点和本回合召回只放标题卡**（1.2.2）：`formatPrivateTitle` / `formatGlobalTitle` 输出 `[id]`、标题、`source`、owner、layer、日期/年龄、marginalized/open_loop、accuracy/uncertainty/disclosure 与附件计数，**不输出正文与附件 caption**。工具返回、记忆抽屉与浏览器仍是全文；要正文就按标题关键词或方括号里的 id 调 `memu_private_recall` / `memu_global_recall`。标题为空时回退正文前 40 字；`imagined` 等语义标签不能因为标题化而丢失。`never_say` 不进入自动注入面，`only_if_asked` 只在 boundary 查询里自动放行（§8.17）；显式召回仍可读两者。跨库召回开启时（§8.15），private 标题卡可能来自其它同领域库；id 仍全局唯一，按 id 取正文仍走 `memu_private_recall`，写入仍只落在当前库。
 - **条件式时效提示（工单 D）**：本回合召回块已经生成后，若其中至少一条真正进入文本的条目带时间敏感信号——`salientDate` 是已过去的 `YYYY-MM-DD`（年度 `MM-DD` 不算）、标题/正文命中固定词表 `最新|最近|现在|目前|今年|版本|价格|天气|新闻|比分|汇率`、或 `updatedAt||createdAt` 距现在 ≥ `freshnessDays`（`owner=about_project` 的工程事实不算年龄）——且 `freshnessHint !== false`、用户文本长度 ≥ `minUserChars`，就在最后一个 `</memory-context>` 之后追加**一个** `<memory-freshness>` 块，N 为去重后的 stale 条数。提示与召回共用 `turnTokens` 预算：放不下就丢弃提示，召回本身仍成功（fail-open，计算异常只 `warn`）。它只说「若你的会话里有可用的搜索工具就先核实」，**不声称** `web_search` 一定存在（工具面不确定性见 `docs/host-api.md` §6.8），也不改 `<memory-guide>`/`rulesKey`。`freshnessDays` 默认 30，范围 `[1,3650]`；`freshnessHint` 默认开。
 - **rule 是前言，不是页脚**：`buildAnchor` 先输出锚点头与 `[rule]`，再输出 private/global/short_term 各段；inbound 路径的锚点之后直接衔接 `<memory-context>`，中间不再隔一条规则。
 - **`injectedIds` 只能记真正进入文本的条目**，否则从未展示的记忆被白白压制 8 轮。
@@ -79,7 +79,7 @@
 | 附件像素 | ✅ | ❌（`hidden: true`；`never_say` 的 caption 也不回显） |
 
 - 所以 `secret` 的实际边界是「**不被自动注入、不当回响源、附件不出像素**」；同一文件夹里另一个会话**主动检索时照样能拿到**。它挡的是「自己冒出来」，不是「别人查到」。要「跨会话绝不外泄」，靠 §8.7 的上下文边界，不是 `secret`。
-- 「只有我知道」= `disclosure: never_say`（不许说出口）+ `secret`（不许自动浮现）两个字段的组合，不是加密。侧边栏和记忆墙始终能看到正文——这是**事后监督**的设计，不是疏漏。
+- 「只有我知道」= `disclosure: never_say`（不进入任何自动注入面，显式召回仍可读）+ `secret`（不自动浮现、附件不出像素）两个字段的组合，不是加密。侧边栏和记忆墙始终能看到正文——这是**事后监督**的设计，不是疏漏。
 - 全局 curator 读的是会话日志与全局库，不读私有库条目（`compactGlobalIndex`），所以 `secret` 不会被复制进「每会话都注入」的全局记忆；跨文件夹（不同库）之间的私有召回**默认隔离**，只有显式打开 `crossLibraryRecall` 才会合并同领域库，且只读——见 §8.15。
 
 ### 8.7 上下文作用域：`channelId / characterId / worldId / branchId` + `knownBy`
@@ -201,3 +201,23 @@
 
 ---
 
+
+---
+
+### 8.17 1.2.8：时间、版本、来源、承诺与召回意图
+
+这一节只描述新增字段与策略，不改原有三层、可见范围与注入纪律。所有字段对旧数据都是**可选**：缺字段按空处理，不强制迁移，写入时补齐。
+
+**时间**：写入时按这一轮的逻辑时间解析相对日期，落在 `event_time` / `observed_at`（ISO）、`absolute_date`（YYYY-MM-DD）、`date_precision`（`day|month|year|unknown`）、`date_source`（`explicit|relative`）。逻辑时间优先 `context.occurredAt`，其次会话 `sceneTime`，最后才是墙上时钟；解析失败不猜，只有确实出现相对时间词时才标 `date_precision=unknown`。原文保留在 `content`，不改写用户原话。`valid_from` / `valid_to` 是可选的有效窗口（`valid_from <= 今天 <= valid_to`），缺字段的旧条目照常召回；旧复核路径写的 `validFrom/validTo` 也会被识别。召回查询里的“明天/下周三/月底”同样先解析成绝对日期再检索，时间题注入按 `absolute_date` 最近优先排序。
+
+**版本与冲突**：每条新记忆都有 `fact_key`（显式传入或由 `owner + 标题` 归一化）与 `version`。显式 `conflicts_with` 或“同一显式 fact_key 的再次写入”会让新旧两条都保持 `active`、互指 `conflicts_with`，召回命中一侧时另一侧成对带回，注入成一张 200 字内的冲突卡（“未确认哪版为准”）。显式 `supersedes` 才是取代：旧条 `status=superseded`、`valid_to` 落日期、正文与标题不删不改。兼容补充仍走 `memu_private_update`，保留原 id，不增加版本。旧的无关系字段的冲突仍按原路径进入 `pending_review`，行为不变。
+
+**来源**：新增 `speaker_id`、`source_kind`（`user_said|assistant_said|told|imagined|inferred|tool`）、`quote_span`（`{seq, turn, textHash}`）、`storyline_id`、`branch_id`、`known_by`。`speaker_id` 显式 > `context.speakerId` > 按 `source_kind` 的 `user/assistant/tool/unknown`；不猜。助手自己的承诺、计划、事实用 `assistant_said`，不能记成用户说的。查询“我说过/你说过/他说的”时按说话人过滤：只排除明确属于别人的条目，缺 speaker 的旧条目保留。注入标题卡会显示非默认的 `speaker=`。
+
+**承诺**：`commitment = {counterparty, action, due_at, status, closed_by, evidence_seq}`，`status` 是 `open|done|cancelled|expired`，也是权威；`open_loop` 只做兼容并随 `status` 同步。`open_loop=true` 的旧写法会派生一条 `open` 承诺，`due_at` 取本轮已解析日期。到期/临期（逾期、今天、明天）的未完成承诺最多 3 条、按 `due_at` 升序进一张 `[commitment]` 小卡；远期承诺不占每回合预算。`dueOpenLoops` 也优先看 `commitment.status` 与 `due_at`。
+
+**召回意图**：`lib/text-retrieval.js` 的 `detectQueryIntent` / `decomposeQuery` 把查询分成 `date|entity|conflict|commitment|boundary|general`；日期与引号/`@`/已知实体名会被拆成可检索词。各意图的候选上限见 `lib/budget.js` 的 `RECALL_INTENT_TOPK`（general 5、date/entity 8、conflict 6、commitment/boundary 5），调用方显式给的更大 topK 不被压低，封顶 20。命中条目沿 `links` 扩展一跳（最多 2 条，实体题 3 条），只沿显式关系走。`disclosure` 现在是“何时能自动出现”的门：`never_say` 不进任何自动注入面（锚点、自动召回、提醒），`only_if_asked` 只在 `boundary` 意图的查询里自动放行；显式 `memu_private_recall` 仍可读两者。
+
+**可观测性**：`getState` 增加 `recallCache` 段（`hits/misses/evictions/errors/staleSkipped/generations/...`）；`staleSkipped` 统计 TTL 过期、代数清理与按 query 失效时被丢弃的缓存条目。
+
+守卫：`tests/temporal.test.mjs`、`tests/memory-fields.test.mjs`、`tests/fact-version.test.mjs`、`tests/inject-conflict.test.mjs`、`tests/speaker-provenance.test.mjs`、`tests/commitment.test.mjs`、`tests/query-decompose.test.mjs`、`tests/recall-intent.test.mjs`、`tests/injection-intent-budget.test.mjs`、`tests/memory-chain.test.mjs`。

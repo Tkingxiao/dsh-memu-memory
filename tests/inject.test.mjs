@@ -98,7 +98,7 @@ test('title-card lines keep source, disclosure, accuracy and the attachment coun
     title: '他编的那个故事',
     content: '他说那是真的，但那只是他想出来的。',
     source: 'imagined',
-    disclosure: 'never_say',
+    disclosure: 'can_tell',
     accuracy: 0.3,
     confidence: 0.9,
     attachments: [
@@ -115,7 +115,7 @@ test('title-card lines keep source, disclosure, accuracy and the attachment coun
   const line = anchor.text.split('\n').find((row) => row.includes('[mem-labels]'))
   assert.ok(line, 'the title card exists')
   assert.ok(line.includes('source=imagined'), 'an imagined memory must not read as a fact')
-  assert.ok(line.includes('记得，但别直接说出口'), 'never_say survives on a title card')
+  assert.equal(line.includes('别直接说出口'), false, 'can_tell carries no disclosure suffix')
   assert.ok(line.includes('细节未必准'), 'accuracy still rides on the line')
   assert.ok(line.includes('附件2'), 'attachments are counted')
   assert.equal(anchor.text.includes('CAPTION-MUST-NOT-EXPAND'), false, 'captions are expanded only by the full renderer')

@@ -87,7 +87,7 @@ test('a backup can be deleted, and only that one', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Retention, staging and recovery (本地向量施工文档 §14.9).
+// Retention, staging and recovery.
 // Every test below runs in its own temporary data root: no real user backup is
 // created, pruned or restored by this file.
 // ---------------------------------------------------------------------------
@@ -468,7 +468,7 @@ test('the backup manifest carries identity, never a credential', () => {
   } finally { releaseRoot(root) }
 })
 // ---------------------------------------------------------------------------
-// Live SQLite snapshotting (本地向量施工文档 §14.9, rule 2).
+// Live SQLite snapshotting (rule 2).
 //
 // A non-empty database may only be snapshotted by SQLite's own backup API, run
 // by the plugin's isolated engine/<version>/venv interpreter. These tests prove
