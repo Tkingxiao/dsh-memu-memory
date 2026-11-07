@@ -90,6 +90,27 @@ test('dice fallback: a fuzzy variant inside the prefix bucket hits with score >=
   assert.deepEqual(lexicon.matchLexiconHits(binding.libraryId, '今天天气不错', binding.memoryContext), [])
 })
 
+test('dice fallback: a typo at the end of a long message still recalls the term (windows by hit count, not order)', () => {
+  const binding = setupSession('dice-tail', { terms: [{ term: '糖刀文学', kind: 'term', meaning: '又甜又虐的写法' }] })
+  // 40 字闲聊 + 末尾错字变体：旧实现按出现顺序只取前 16 个不同窗口，糖刀这个
+  // 前缀窗口落在第 17 个之后，模糊层收不到候选；现在窗口按命中词条数排序。
+  const chatter = '今晚的雾夜灯桥边茶铺霜露未散他忽然提起那些旧梗台词接得毫无痕迹我们笑作一团后来月影移过柳岸'
+  const text = `${chatter}糖刀文雪`
+  const normalized = lexicon.normalizeLexeme(text)
+  const windows = []
+  for (let i = 0; i + 2 <= normalized.length; i++) {
+    const key = normalized.slice(i, i + 2)
+    if (!windows.includes(key)) windows.push(key)
+  }
+  assert.ok(!windows.slice(0, lexicon.LEXICON_MAX_BUCKETS).includes('糖刀'),
+    'fixture guard: the matching window must sit beyond the old 16-window cut')
+  const hits = lexicon.matchLexiconHits(binding.libraryId, text, binding.memoryContext)
+  assert.equal(hits.length, 1)
+  assert.equal(hits[0].term, '糖刀文学')
+  assert.equal(hits[0].kindOfHit, 'dice')
+  assert.ok(hits[0].score >= lexicon.LEXICON_DICE_THRESHOLD)
+})
+
 test('active and restored terms match; archived and rejected never match or search', () => {
   const binding = setupSession('status', {})
   const lib = binding.libraryId

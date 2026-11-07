@@ -1,5 +1,44 @@
 # 更新日志 / Changelog
 
+## [1.2.9] - 2026-11-07
+
+> 召回质量与运维硬化：本地词法腿换 BM25、槽位感知去重；图扩展只补空位、事实账本排序；记忆包校验/整批回滚、删除可预演可恢复、绑定与向量代际 GC；并修复大屏/全屏 MemU WebUI 切换记忆库时的闪烁与卡片丢失。无新增 LLM 调用、提示词或注入 token，topK 与预算默认值不变。
+
+### 召回与去重
+
+- **本地 BM25 词法腿**（`lib/text-retrieval.js` / `lib/memory.js`）：本地 `localRecall` 的 `includes` 计数换成 BM25（IDF、长度归一、dfCap、按库语料缓存，60s TTL 兜底外部编辑）；`DSH_MEMU_RECALL_LEXICAL=includes` 可回退旧口径。对照：8 个罕见词 MRR 0.188→1.000、Recall@5 2/8→8/8；2000 条语料 p95 +4%。
+- **槽位感知去重**（`lib/text-similarity.js`）：数字/日期/时间/星期/引号人名形成槽位签名；槽位不同不再按近重复折叠，子集视为补充、替换/不相交视为冲突。否定口径仍由 `findConflict` 判断，避免「免费 / 不用付费」这类误报。
+- **预算内图扩展**：关联扩展只填未满的 topK 座位，topK 已满时不再追加，不增加注入 token。
+- **事实账本**：写入派生 `fact_authority` / `fact_evidence`；冲突卡只按 authority → observed_at → id 调整 A/B 顺序，不增加卡片文字。
+- **可选动态阈值**：`cutWeakScores` 支持 percentile，仅 `DSH_MEMU_RECALL_PERCENTILE=1` 启用，默认关闭，且不会保底塞满。
+
+### 数据安全与生命周期
+
+- **记忆包完整性**：v2 包 `memories.json` 写 SHA-256，导入强制校验；旧 v1 包保持可导入。导入批次记录 `bundleId`，`importMemories({ revertBatchId })` 可整批回滚。
+- **删除可预演/可恢复**：`deleteMemory({ preview: true })` 只返回计划；永久删除写本地 `.deleted.json` 撤销缓冲，`restore: true` 恢复为 active；同时清理其他条目的 `duplicateOf`。撤销缓冲不进入备份。
+- **向量降级**：managed-local 提交失败时仍写索引并标 `vectorPending`，下一次成功提交自动清除，不再出现「索引成功但向量永远缺席」的静默状态。
+- **关系生命周期**：关系快照增加 `retention_strength` / `last_access_at` / `next_review_at`；关系 history 上限 50。
+- **GC 工具**：`state.pruneSessionBindings`（默认 dry-run）+ `scripts/prune-sessions.mjs`；`vectorGcCandidates` / `pruneVectorArtifacts`（保留活动与待切换路径、最后 N 代、时间窗）+ `scripts/prune-vectors.mjs`，默认 dry-run，显式确认才删除。
+
+### 稳定性与性能
+
+- 下载/安装 fetch 增加总超时；备份与引擎切换改用异步子进程，不再用 `spawnSync` 冻结事件循环。
+- 整理簇构建增加 dfCap，消除 N=500 时的 O(N²) 卡顿；MMR 只在命中集合上运行，空查询不再返回全库。
+- 召回缓存键修正，避免每轮必然失效；本地词料缓存按库失效。
+- `clearActivityLog` 要求 `confirmed: true`；永久删除不再让正文通过自动备份扩散。
+
+### 界面
+
+- **修复全屏/最大化 MemU WebUI 切换记忆库后鼠标移动闪烁、卡片成片消失**：墙卡片移除逐卡 `backdrop-filter`，屏外行改用 `content-visibility`；覆盖层去掉全屏 `backdrop-filter` 并使用不透明主题底色；鼠标聚光灯只在独立标签页启用，且只更新聚光灯元素，不再整文档失效样式。
+- 记忆墙/浏览器/复核/统计的请求加单调代次，快速切换记忆库后旧响应不会覆盖新结果；403 回退不再把用户刚选的新库改回第一个库。
+- 记忆设置页所有布尔勾选统一为开关；跨库召回说明收进开关同一行的短提示（完整说明在悬停提示里）；图片描述服务改为与其他设置一致的字段布局。
+- 设置保存失败不再把失败值写回后续心跳快照，改为「未保存」标记 + 重试/丢弃；901–1120px 导航遮挡、卡片圆角、宿主颜色 token 与稳定 key 等界面问题一并修正。
+
+### 门禁
+
+- `npm test`：**1524 tests / 1522 pass / 0 fail / 2 skipped**；`node scripts/acceptance-local.mjs`：**50/50**；`npm run check`：全部通过。
+- 未新增任何 LLM 调用、rerank、提示词或注入 token；`anchorTokens` / `turnTokens` / `injectionTotalTokens` / topK 默认值不变。
+
 ## [1.2.8] - 2026-11-06
 
 > 记忆语义升级：时间落绝对日期、同一事实保留多版本、说话人/来源可区分、承诺可追踪；召回按查询意图取数，注入按边界过滤。另修复本地向量「切换并重建」的 `residentRecord is not defined`。

@@ -383,7 +383,12 @@ test('an archived memory can be deleted for good, and leaves the browser', async
   const before = await dispatch({}, 'browseLibrary', { libraryId: lib.id })
   assert.equal(before.files.length, 2)
 
-  const out = await dispatch({}, 'deleteMemory', { libraryId: lib.id, id: 'mem-gone' })
+  await assert.rejects(
+    () => dispatch({}, 'deleteMemory', { libraryId: lib.id, id: 'mem-gone' }),
+    /explicit confirmation/,
+    'erasing a memory for good needs consent, not just an archived status',
+  )
+  const out = await dispatch({}, 'deleteMemory', { libraryId: lib.id, id: 'mem-gone', confirmed: true })
   assert.equal(out.deleted, true)
   assert.equal(out.libraryId, lib.id)
 

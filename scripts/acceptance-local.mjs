@@ -626,7 +626,7 @@ await auto('F-1', 'the engine can be listed, switched and pruned', async () => {
 await auto('F-2', 'a backup restore brings a deleted memory back', async () => {
   const lib = makeLibrary('f2')
   seed(lib.id, 'mem-f2keep', { title: 'written before the backup' })
-  const made = state.backupDatabases()
+  const made = await state.backupDatabases()
   assert.ok(made, 'a backup was taken')
   const backups = (await dispatch({}, 'listBackups', {})).backups
   assert.ok(backups.length >= 1, 'it shows up in the list')
@@ -894,7 +894,7 @@ await auto('H-7', 'an archived memory can be deleted, and only an archived one',
   await memory.privateArchive({ libraryId: lib.id, id: live.id })
   const archivedRow = (await dispatch({}, 'browseLibrary', { libraryId: lib.id })).files.find((item) => item.id === live.id)
   assert.equal(archivedRow.status, 'archived', 'archiving keeps it, so the archived tab has something to show')
-  const gone = await dispatch({}, 'deleteMemory', { id: live.id, libraryId: lib.id })
+  const gone = await dispatch({}, 'deleteMemory', { id: live.id, libraryId: lib.id, confirmed: true })
   assert.equal(gone.deleted, true)
   assert.ok(!(await dispatch({}, 'browseLibrary', { libraryId: lib.id })).files.some((item) => item.id === live.id), 'and then it is really gone')
   let needsLib = ""

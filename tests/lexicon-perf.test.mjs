@@ -280,7 +280,10 @@ function naiveBucketKeysOf(entry) {
   return [...keys]
 }
 
-function naiveTextBuckets(normalizedText, maxBuckets = LEXICON_MAX_BUCKETS) {
+// 窗口顺序与 lib 的 textBuckets 同口径：按桶命中词条数降序（A-8），而不是
+// 按出现顺序取前 16 个。bucketSizeOf 用全量词条桶（含不可见词条）计算，与
+// 索引里的 prefixBuckets.size 一致。
+function naiveTextBuckets(normalizedText, bucketSizeOf, maxBuckets = LEXICON_MAX_BUCKETS) {
   const keys = []
   const seen = new Set()
   for (let i = 0; i + BUCKET_WIDTH <= normalizedText.length; i++) {
@@ -288,9 +291,12 @@ function naiveTextBuckets(normalizedText, maxBuckets = LEXICON_MAX_BUCKETS) {
     if (seen.has(key)) continue
     seen.add(key)
     keys.push(key)
-    if (keys.length >= maxBuckets) break
   }
   return keys
+    .map((key, order) => ({ key, order, hits: bucketSizeOf(key) }))
+    .sort((a, b) => b.hits - a.hits || a.order - b.order)
+    .slice(0, maxBuckets)
+    .map(item => item.key)
 }
 
 function naiveDiceFallback(normalizedText, candidates, { threshold = LEXICON_DICE_THRESHOLD, maxCandidates = LEXICON_MAX_CANDIDATES, maxTerms = LEXICON_MAX_TERMS } = {}) {
@@ -383,7 +389,11 @@ function naiveMatch(terms, userText, memoryContext) {
   if (!normalizedText) return []
   const visibleIds = []
   const byBucket = new Map()
+  const allBucketSizes = new Map()
   for (const [termId, entry] of Object.entries(terms)) {
+    for (const key of naiveBucketKeysOf(entry)) {
+      allBucketSizes.set(key, (allBucketSizes.get(key) || 0) + 1)
+    }
     if ((entry.status || 'active') !== 'active') continue
     if (!contextVisible(entry.context, memoryContext)) continue
     visibleIds.push(termId)
@@ -394,15 +404,33 @@ function naiveMatch(terms, userText, memoryContext) {
   }
   const exact = naiveExactHits(terms, normalizedText, visibleIds)
   const exactIds = new Set(exact.map(hit => hit.termId))
-  const candidateIds = []
-  for (const key of naiveTextBuckets(normalizedText)) {
-    for (const termId of byBucket.get(key) || []) {
-      if (!exactIds.has(termId) && !candidateIds.includes(termId)) candidateIds.push(termId)
+  // 候选按「与 query 共享的 gram 数」降序（A-8）；strength 与 termId 只做
+  // 确定性 tiebreak。共享 gram 按整段 query 与每个词面计算（与 lib 同口径）。
+  const candidateIds = new Set()
+  for (const key of naiveTextBuckets(normalizedText, k => allBucketSizes.get(k) || 0)) {
+    for (const termId of new Set(byBucket.get(key) || [])) {
+      if (exactIds.has(termId)) continue
+      candidateIds.add(termId)
     }
   }
-  const candidates = candidateIds
-    .map(termId => naiveHitOf(terms[termId], termId, 'dice', 0))
-    .sort((a, b) => (Number(b.strength) || 0) * (Number(b.confidence) || 0) - (Number(a.strength) || 0) * (Number(a.strength) || 0))
+  const textGrams = bigrams(normalizedText)
+  const sharedGramCount = termId => {
+    let best = 0
+    for (const surface of [terms[termId].normalizedTerm, ...(terms[termId].normalizedAliases || [])]) {
+      if (!surface) continue
+      let shared = 0
+      for (const gram of bigrams(surface)) if (textGrams.has(gram)) shared += 1
+      if (shared > best) best = shared
+    }
+    return best
+  }
+  const weightOf = termId => (Number(terms[termId].strength) || 0) * (Number(terms[termId].confidence) || 0)
+  const candidates = [...candidateIds]
+    .map(termId => ({ termId, shared: sharedGramCount(termId) }))
+    .sort((a, b) => b.shared - a.shared
+      || weightOf(b.termId) - weightOf(a.termId)
+      || String(a.termId).localeCompare(String(b.termId)))
+    .map(({ termId }) => naiveHitOf(terms[termId], termId, 'dice', 0))
   const fuzzy = naiveDiceFallback(normalizedText, candidates)
   return naiveStableRank([...exact, ...fuzzy])
 }

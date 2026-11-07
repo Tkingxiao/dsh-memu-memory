@@ -33,7 +33,7 @@ if (argv.includes('--help') || argv.includes('-h')) {
 const apply = argv.includes('--apply')
 const json = argv.includes('--json')
 
-function main() {
+async function main() {
   const pending = scanLegacyLibraries()
   const report = { ok: true, applied: false, dataDir: dataDir(), pending, backup: null, libraries: [] }
 
@@ -44,7 +44,7 @@ function main() {
   if (apply) {
     // A rewrite that cannot be undone is not a repair; the same backup the panel's
     // maintenance button takes, with a manifest the restore path understands.
-    report.backup = state.backupDatabases()
+    report.backup = await state.backupDatabases()
     report.applied = true
     report.libraries = migrateLibraries()
     state.flushState()
@@ -56,7 +56,7 @@ function main() {
 
 let report
 try {
-  report = main()
+  report = await main()
 } catch (error) {
   const failed = { ok: false, error: String(error?.message || error) }
   if (json) console.log(JSON.stringify(failed, null, 2))

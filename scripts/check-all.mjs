@@ -43,7 +43,9 @@ const budget = (rel, limit) => {
 budget('AGENTS.md', 60000)
 
 check('i18n', process.execPath, ['scripts/check-i18n.mjs'])
-check('package.json', process.execPath, ['-e', 'JSON.parse(require("fs").readFileSync("package.json","utf8"))'])
+// npm silently de-duplicates `files` on pack, so a repeated entry only rots in
+// source without any failing check. Pin the whitelist shape here instead.
+check('package.json', process.execPath, ['-e', 'const p=JSON.parse(require("fs").readFileSync("package.json","utf8"));if(!Array.isArray(p.files)||new Set(p.files).size!==p.files.length)throw new Error("package.json: files must be an array with no duplicates")'])
 
 // W2 防漂移闸门：RPC 方法数标记、tests 跟踪状态、loader/stub 完整性。
 // 这三项由 scripts/check-doc-drift.mjs 实现，返回 ok / skipped / fail 三态：

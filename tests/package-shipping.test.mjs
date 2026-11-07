@@ -43,6 +43,10 @@ function runCheckAll(root) {
 test('package.json ships tests/ so the packaged suite is not silently empty', () => {
   assert.ok(Array.isArray(pkg.files), 'package.json needs a files whitelist')
   assert.ok(pkg.files.includes('tests'), 'files must include "tests" or npm test finds 0 test files')
+  // G-1 in the packaged acceptance suite reads CHANGELOG.md. If it does not ship,
+  // the installed package reports a 49/50 acceptance run while the repo is 50/50.
+  assert.ok(pkg.files.includes('CHANGELOG.md'), 'files must include "CHANGELOG.md" for packaged acceptance G-1')
+  assert.equal(new Set(pkg.files).size, pkg.files.length, 'files must not contain duplicate entries')
   // The suite is only runnable if its harness (loader + stubs) travels with it.
   for (const rel of ['loader-register.mjs', 'loader.mjs', 'stubs/dsh-llm.js']) {
     assert.ok(fs.existsSync(path.join(REPO, 'tests', rel)), 'tests/' + rel + ' must ship with the package')

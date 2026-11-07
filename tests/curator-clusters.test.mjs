@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { registerHooks } from 'node:module'
+import { performance } from 'node:perf_hooks'
 
 // Candidate clusters (spec §4.4) + curator context packing (§4.5).
 //
@@ -105,6 +106,23 @@ test('N=301 switches to inverted blocking: the same pair shares only 1 token and
   ]
   const { clusters } = buildCandidateClusters(index(entries))
   assert.equal(clusters.length, 0, 'shared token count 1 < blockMinShared 2 keeps the pair out')
+})
+
+test('N=800 blocking with corpus-wide shared text stays well under 3s (dfCap prunes postings first)', () => {
+  // 复现 A-1 的病态形态：每条都带一段完全相同的中文闲聊，再各带一个独有的
+  // 后缀。旧实现把每个高频 bigram 的 posting 展开成 800²/2 个对，再对 32 万个
+  // 对跑 similarityDetail + 双向 BM25（实测 N=500 需 5.8s）。dfCap 在倒排层
+  // 跳过这些 posting，共享 token 预筛再挡掉 0 共享的对。
+  const chatter = '今晚的雾夜灯桥边茶铺霜露未散他忽然提起那些旧梗台词接得毫无痕迹我们笑作一团后来月影移过柳岸鹤鸣惊起溪桥下打盹的猫谁也没接话只是把茶续上'
+  const entries = []
+  for (let i = 0; i < 800; i += 1) {
+    entries.push(entryOf(`bulk-${i}`, 'x', `${chatter}第${i}号独有后缀`))
+  }
+  const started = performance.now()
+  const result = buildCandidateClusters(index(entries))
+  const elapsed = performance.now() - started
+  assert.equal(result.scanned, 800)
+  assert.ok(elapsed < 3000, `N=800 took ${elapsed.toFixed(0)}ms (regression bound 3000ms)`)
 })
 
 // —— all-pairs clique growth ——

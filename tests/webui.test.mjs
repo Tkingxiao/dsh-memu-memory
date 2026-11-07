@@ -135,6 +135,33 @@ test('wall heartbeat retries failed paints, pauses hidden and shares the metadat
   assert.match(source, /data\.type === "memory-write"/)
 })
 
+test('fullscreen wall avoids the WebView2 compositor traps that dropped cards', () => {
+  const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  // The overlay is a full-viewport iframe over the host app. A backdrop-filter on
+  // that wrapper (and a transparent iframe background) made WebView2 re-blur the
+  // whole host on every repaint; at fullscreen it started dropping wall tiles.
+  const overlay = client.slice(client.indexOf('function toggleWebUiOverlay'), client.indexOf('function glyph'))
+  assert.ok(!/backdrop-filter\s*:/.test(overlay), 'the overlay wrapper must not blur the host behind the iframe')
+  assert.match(overlay, /background:var\(--dsw-alias-bg-base, #f4f5f9\)/, 'the iframe stays opaque while its page paints')
+  // Late replies must not repaint the wall/browser after a newer library was picked.
+  assert.match(client, /const requestId = \+\+browseRequest\.current/)
+  assert.match(client, /const requestId = \+\+browseLibraryRequest\.current/)
+  assert.match(client, /const requestId = \+\+statsRequest\.current/)
+  assert.match(client, /const requestId = \+\+reviewsRequest\.current/)
+  assert.match(client, /if \(!current\(\)\) return/, 'stale browseWall replies are dropped')
+
+  const css = fs.readFileSync(new URL('../lib/webui/standalone.css', import.meta.url), 'utf8')
+  const start = css.indexOf('html[data-standalone] .dshm-wall-item {')
+  const wall = css.slice(start, css.indexOf('html[data-standalone] .dshm-wall-item:hover'))
+  assert.ok(!/backdrop-filter\s*:/.test(wall), 'wall cards must not stack dozens of blur layers on screen')
+  assert.match(wall, /content-visibility: auto/, 'off-screen wall rows stay out of the paint path')
+
+  const standalone = fs.readFileSync(new URL('../lib/webui/standalone.js', import.meta.url), 'utf8')
+  assert.match(standalone, /var spot = document\.querySelector\('\.ambient-spot'\)/)
+  assert.match(standalone, /\(spot \|\| document\.documentElement\)\.style/, 'pointer moves only invalidate the spotlight element')
+  assert.match(standalone, /if \(!framed && !reduceMotion/, 'the iframe overlay does not repaint a full-screen spotlight')
+})
+
 test('single-library browseWall still carries global rows and F1/F2 metadata', async () => {
   const library = state.createLibrary({ name: 'wall-global-merge', cwd: path.join(home, 'wall-global-merge') })
   state.updatePrivateIndex(library.id, (index) => {

@@ -56,8 +56,8 @@ test('the unpin marker is gone from session bindings', () => {
   assert.equal(typeof state.consumeTrauma, 'undefined')
 })
 
-test('backup creates a timestamped directory', () => {
-  const dest = state.backupDatabases()
+test('backup creates a timestamped directory', async () => {
+  const dest = await state.backupDatabases()
   assert.ok(fs.existsSync(dest))
   assert.ok(fs.existsSync(path.join(dest, 'index')))
 })

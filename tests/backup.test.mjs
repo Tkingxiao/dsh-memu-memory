@@ -15,14 +15,14 @@ test.after(() => {
   try { fs.rmSync(home, { recursive: true, force: true }) } catch {}
 })
 
-test('a backup carries every store and a checksum manifest', () => {
+test('a backup carries every store and a checksum manifest', async () => {
   const binding = state.ensureSession('backup-session', { cwd: path.join(home, 'proj') })
   state.updatePrivateIndex(binding.libraryId, (index) => {
     index.entries['mem-keep'] = { id: 'mem-keep', content: '别丢', layer: 'long_term', status: 'active' }
   })
   state.setWorkspacePolicy(path.join(home, 'proj'), { useLibrary: true })
 
-  const dest = state.backupDatabases()
+  const dest = await state.backupDatabases()
   assert.ok(fs.existsSync(path.join(dest, 'state.json')))
   assert.ok(fs.existsSync(path.join(dest, 'index', `${binding.libraryId}.json`)))
 
@@ -32,7 +32,7 @@ test('a backup carries every store and a checksum manifest', () => {
   assert.ok(manifest.files[`index/${binding.libraryId}.json`].sha256)
 })
 
-test('restore puts the backed-up content back and keeps a safety copy', () => {
+test('restore puts the backed-up content back and keeps a safety copy', async () => {
   const binding = state.getSessionBinding('backup-session')
   const backups = state.listBackups()
   assert.ok(backups.length >= 1)
@@ -45,14 +45,14 @@ test('restore puts the backed-up content back and keeps a safety copy', () => {
   })
   assert.ok(state.loadPrivateIndex(binding.libraryId).entries['mem-after'])
 
-  const result = state.restoreBackup(target.name)
+  const result = await state.restoreBackup(target.name)
   assert.ok(result.safety, 'a restore backs the live data up first')
   const restored = state.loadPrivateIndex(binding.libraryId)
   assert.ok(restored.entries['mem-keep'], 'the backed-up entry is back')
   assert.equal(restored.entries['mem-after'], undefined, 'the later write is gone')
 })
 
-test('a backup with a broken checksum is refused', () => {
+test('a backup with a broken checksum is refused', async () => {
   const backups = state.listBackups()
   const target = backups[0]
   const manifestPath = path.join(target.dir, 'manifest.json')
@@ -60,24 +60,24 @@ test('a backup with a broken checksum is refused', () => {
   manifest.files['state.json'].sha256 = '0'.repeat(64)
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2))
 
-  assert.throws(() => state.restoreBackup(target.name), /corrupt|checksum/i)
+  await assert.rejects(async () => await state.restoreBackup(target.name), /corrupt|checksum/i)
 })
 
-test('an incomplete backup is refused', () => {
-  const dest = state.backupDatabases()
+test('an incomplete backup is refused', async () => {
+  const dest = await state.backupDatabases()
   const name = path.basename(dest)
   fs.rmSync(path.join(dest, 'state.json'))
-  assert.throws(() => state.restoreBackup(name), /incomplete/i)
+  await assert.rejects(async () => await state.restoreBackup(name), /incomplete/i)
 })
 
-test('backup names that try to escape the backups directory are rejected', () => {
-  assert.throws(() => state.restoreBackup('../../etc'), /invalid backup name/i)
+test('backup names that try to escape the backups directory are rejected', async () => {
+  await assert.rejects(async () => await state.restoreBackup('../../etc'), /invalid backup name/i)
   assert.throws(() => state.deleteBackup('../../etc'), /invalid backup name/i)
 })
 
-test('a backup can be deleted, and only that one', () => {
-  const keep = state.backupDatabases()
-  const drop = state.backupDatabases()
+test('a backup can be deleted, and only that one', async () => {
+  const keep = await state.backupDatabases()
+  const drop = await state.backupDatabases()
   const before = state.listBackups().length
   assert.equal(state.deleteBackup(path.basename(drop)).deleted, path.basename(drop))
   assert.equal(fs.existsSync(drop), false)
@@ -128,7 +128,7 @@ function statusOf(name) {
   return entry ? entry.status : null
 }
 
-test('retention keeps only the newest three complete backups', () => {
+test('retention keeps only the newest three complete backups', async () => {
   const root = tempRoot('keep3')
   try {
     seed(root, 'v0')
@@ -136,7 +136,7 @@ test('retention keeps only the newest three complete backups', () => {
     const made = []
     for (let round = 1; round <= 6; round += 1) {
       seed(root, 'v' + round)
-      made.push(backup.createBackup().name)
+      made.push((await backup.createBackup()).name)
       const complete = completeNames()
       assert.ok(complete.length <= 3, 'at most three complete backups after ' + round + ' creations')
       assert.deepEqual(complete.slice().sort(), made.slice(-3).slice().sort(), 'the newest three are the ones kept')
@@ -147,12 +147,12 @@ test('retention keeps only the newest three complete backups', () => {
   } finally { releaseRoot(root) }
 })
 
-test('backups created in the same millisecond stay distinct and ordered', () => {
+test('backups created in the same millisecond stay distinct and ordered', async () => {
   const root = tempRoot('samems')
   try {
     seed(root, 'same')
-    const first = backup.createBackup().name
-    const second = backup.createBackup().name
+    const first = (await backup.createBackup()).name
+    const second = (await backup.createBackup()).name
     assert.notEqual(first, second, 'the name is unique even within one millisecond')
     const entries = backup.scanBackups()
     assert.equal(entries.length, 2)
@@ -162,21 +162,21 @@ test('backups created in the same millisecond stay distinct and ordered', () => 
   } finally { releaseRoot(root) }
 })
 
-test('a failed creation publishes nothing and deletes no usable backup', () => {
+test('a failed creation publishes nothing and deletes no usable backup', async () => {
   const root = tempRoot('failed-create')
   try {
     seed(root, 'good')
-    const kept = backup.createBackup().name
+    const kept = (await backup.createBackup()).name
     // A directory where a file belongs: the copy must fail, not paper over it.
     fs.mkdirSync(path.join(root, 'prompts', 'manifest.json'), { recursive: true })
-    assert.throws(() => backup.createBackup(), /non-file|symbolic/i)
+    await assert.rejects(async () => await backup.createBackup(), /non-file|symbolic/i)
     assert.deepEqual(completeNames(), [kept], 'the previous backup is intact')
     assert.equal(backup.scanBackups().length, 1, 'nothing was published')
     assert.deepEqual(fs.readdirSync(path.join(root, 'backups', '.staging')), [], 'the staging directory was discarded')
   } finally { releaseRoot(root) }
 })
 
-test('leftovers of a crashed run are reclaimed, never published', () => {
+test('leftovers of a crashed run are reclaimed, never published', async () => {
   const root = tempRoot('crash')
   try {
     seed(root, 'crash')
@@ -188,7 +188,7 @@ test('leftovers of a crashed run are reclaimed, never published', () => {
     const unpublished = path.join(backups, '2020-01-01T00-00-00-000Z-powerloss')
     fs.mkdirSync(unpublished, { recursive: true })
     fs.writeFileSync(path.join(unpublished, 'state.json'), '{}')
-    const created = backup.createBackup()
+    const created = await backup.createBackup()
     assert.equal(fs.existsSync(abandoned), false, 'staging of a dead process is reclaimed')
     assert.equal(fs.existsSync(unpublished), true, 'an unpublished directory is reported, never deleted')
     assert.equal(statusOf(path.basename(unpublished)), 'unknown')
@@ -200,23 +200,23 @@ test('leftovers of a crashed run are reclaimed, never published', () => {
   } finally { releaseRoot(root) }
 })
 
-test('a backup whose bytes drifted is not counted as valid, and is not silently deleted', () => {
+test('a backup whose bytes drifted is not counted as valid, and is not silently deleted', async () => {
   const root = tempRoot('corrupt')
   try {
     seed(root, 'one')
-    const first = backup.createBackup({ keep: 10 }).name
+    const first = (await backup.createBackup({ keep: 10 })).name
     seed(root, 'two')
-    backup.createBackup({ keep: 10 })
+    await backup.createBackup({ keep: 10 })
     seed(root, 'three')
-    backup.createBackup({ keep: 10 })
+    await backup.createBackup({ keep: 10 })
     seed(root, 'four')
-    const newest = backup.createBackup({ keep: 10 }).name
+    const newest = (await backup.createBackup({ keep: 10 })).name
     const victim = path.join(root, 'backups', first, 'state.json')
     const original = fs.readFileSync(victim, 'utf8')
     const flipped = original.slice(0, -2) + (original.slice(-2) === '1}' ? '2}' : '1}')
     assert.equal(Buffer.byteLength(flipped), Buffer.byteLength(original), 'same size, different bytes')
     fs.writeFileSync(victim, flipped)
-    assert.throws(() => backup.restoreFromBackup(first, { keep: 10 }), /corrupt|checksum/i)
+    await assert.rejects(async () => await backup.restoreFromBackup(first, { keep: 10 }), /corrupt|checksum/i)
     const pruned = backup.pruneBackups()
     assert.equal(fs.existsSync(path.join(root, 'backups', first)), true, 'a corrupt backup is reported, not quietly removed')
     assert.ok(pruned.skipped.some((item) => item.name === first && item.status === 'corrupt'), 'it is reported as corrupt')
@@ -225,11 +225,11 @@ test('a backup whose bytes drifted is not counted as valid, and is not silently 
   } finally { releaseRoot(root) }
 })
 
-test('unknown and legacy directories survive retention untouched', () => {
+test('unknown and legacy directories survive retention untouched', async () => {
   const root = tempRoot('foreign')
   try {
     seed(root, 'x')
-    const good = backup.createBackup({ keep: 10 }).name
+    const good = (await backup.createBackup({ keep: 10 })).name
     const backups = path.join(root, 'backups')
     const handMade01 = path.join(backups, 'my-own-backup')
     fs.mkdirSync(handMade01, { recursive: true })
@@ -249,13 +249,13 @@ test('unknown and legacy directories survive retention untouched', () => {
   } finally { releaseRoot(root) }
 })
 
-test('a backup that cannot be deleted safely is reported and left in place', () => {
+test('a backup that cannot be deleted safely is reported and left in place', async () => {
   const root = tempRoot('delete-fail')
   try {
     seed(root, 'a')
-    const older = backup.createBackup({ keep: 10 }).name
+    const older = (await backup.createBackup({ keep: 10 })).name
     seed(root, 'b')
-    const newer = backup.createBackup({ keep: 10 }).name
+    const newer = (await backup.createBackup({ keep: 10 })).name
     const nested = path.join(root, 'backups', older, 'attachments')
     fs.mkdirSync(nested, { recursive: true })
     const outside = path.join(root, 'outside')
@@ -273,17 +273,17 @@ test('a backup that cannot be deleted safely is reported and left in place', () 
   } finally { releaseRoot(root) }
 })
 
-test('one lock serializes create, restore, delete and prune', () => {
+test('one lock serializes create, restore, delete and prune', async () => {
   const root = tempRoot('lock')
   try {
     seed(root, 'lock')
     // Reentrant: a restore makes its own safety backup while holding the lock.
-    const inner = backup.withBackupLock(() => backup.createBackup({ keep: 10 }).name)
+    const inner = await backup.withBackupLock(async () => (await backup.createBackup({ keep: 10 })).name)
     assert.ok(inner)
     const lock = path.join(root, 'backups', '.backup.lock')
     fs.writeFileSync(lock, String(process.pid))
     try {
-      assert.throws(() => backup.createBackup(), /busy/i)
+      await assert.rejects(async () => await backup.createBackup(), /busy/i)
     } finally { fs.rmSync(lock, { force: true }) }
     let deadPid = null
     for (let candidate = 999999; candidate < 1000100 && deadPid === null; candidate += 1) {
@@ -291,24 +291,24 @@ test('one lock serializes create, restore, delete and prune', () => {
     }
     if (deadPid !== null) {
       fs.writeFileSync(lock, String(deadPid))
-      const recovered = backup.createBackup({ keep: 10 })
+      const recovered = await backup.createBackup({ keep: 10 })
       assert.ok(fs.existsSync(recovered.dir), 'a lock left by a dead process is reclaimed')
       assert.equal(fs.existsSync(lock), false, 'the lock is released')
     }
   } finally { releaseRoot(root) }
 })
 
-test('restoring the oldest of four keeps the target and its safety backup', () => {
+test('restoring the oldest of four keeps the target and its safety backup', async () => {
   const root = tempRoot('restore-oldest')
   try {
     seed(root, 'oldest')
-    const target = backup.createBackup({ keep: 10, label: 'manual' }).name
+    const target = (await backup.createBackup({ keep: 10, label: 'manual' })).name
     for (const text of ['second', 'third', 'fourth']) {
       seed(root, text)
-      backup.createBackup({ keep: 10 })
+      await backup.createBackup({ keep: 10 })
     }
     assert.equal(completeNames().length, 4)
-    const result = backup.restoreFromBackup(target, { keep: 3 })
+    const result = await backup.restoreFromBackup(target, { keep: 3 })
     assert.equal(result.restored, target)
     assert.ok(result.safety, 'a safety backup was made')
     assert.equal(fs.existsSync(path.join(root, 'backups', path.basename(result.safety))), true)
@@ -321,36 +321,36 @@ test('restoring the oldest of four keeps the target and its safety backup', () =
   } finally { releaseRoot(root) }
 })
 
-test('a restore validates the whole inventory before it writes anything', () => {
+test('a restore validates the whole inventory before it writes anything', async () => {
   const root = tempRoot('restore-guard')
   try {
     seed(root, 'backup')
-    const name = backup.createBackup({ keep: 10 }).name
+    const name = (await backup.createBackup({ keep: 10 })).name
     seed(root, 'live')
     const liveBefore = fs.readFileSync(path.join(root, 'state.json'), 'utf8')
     const liveIndex = fs.readFileSync(path.join(root, 'index', 'lib-a.json'), 'utf8')
     fs.rmSync(path.join(root, 'backups', name, 'index', 'lib-a.json'))
-    assert.throws(() => backup.restoreFromBackup(name, { keep: 10 }), /incomplete/i)
+    await assert.rejects(async () => await backup.restoreFromBackup(name, { keep: 10 }), /incomplete/i)
     assert.equal(fs.readFileSync(path.join(root, 'state.json'), 'utf8'), liveBefore, 'the live root is untouched')
     assert.equal(fs.readFileSync(path.join(root, 'index', 'lib-a.json'), 'utf8'), liveIndex)
     assert.equal(fs.existsSync(path.join(root, 'backups', name, 'state.json')), true)
   } finally { releaseRoot(root) }
 })
 
-test('a restore that fails while writing stays recoverable through its safety backup', () => {
+test('a restore that fails while writing stays recoverable through its safety backup', async () => {
   const root = tempRoot('restore-fail')
   try {
     seed(root, 'backup')
     fs.mkdirSync(path.join(root, 'attachments'), { recursive: true })
     fs.writeFileSync(path.join(root, 'attachments', 'a.txt'), 'attachment')
-    const name = backup.createBackup({ keep: 10 }).name
+    const name = (await backup.createBackup({ keep: 10 })).name
     seed(root, 'live')
     fs.writeFileSync(path.join(root, 'attachments', 'a.txt'), 'attachment')
     // Make one restore target unwritable after the safety backup exists.
     fs.rmSync(path.join(root, 'attachments'), { recursive: true, force: true })
     fs.writeFileSync(path.join(root, 'attachments'), 'not a directory')
     let caught = null
-    try { backup.restoreFromBackup(name, { keep: 10 }) } catch (error) { caught = error }
+    try { await backup.restoreFromBackup(name, { keep: 10 }) } catch (error) { caught = error }
     assert.ok(caught, 'the restore failed')
     assert.equal(caught.code, 'DSH_MEMU_BACKUP_RESTORE_FAILED')
     assert.ok(caught.safety, 'the failure names the safety backup it kept')
@@ -360,17 +360,17 @@ test('a restore that fails while writing stays recoverable through its safety ba
     // Recovery: repair the obstacle, then roll back with the safety backup.
     fs.rmSync(path.join(root, 'attachments'), { force: true })
     fs.mkdirSync(path.join(root, 'attachments'), { recursive: true })
-    const rollback = backup.restoreFromBackup(caught.safety, { keep: 10 })
+    const rollback = await backup.restoreFromBackup(caught.safety, { keep: 10 })
     assert.equal(rollback.restored, caught.safety)
     assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'state.json'), 'utf8')).marker, 'live')
   } finally { releaseRoot(root) }
 })
 
-test('a backup from before the vector journal retires the stale live pointer', () => {
+test('a backup from before the vector journal retires the stale live pointer', async () => {
   const root = tempRoot('vector')
   try {
     seed(root, 'text-only')
-    const name = backup.createBackup({ keep: 10 }).name
+    const name = (await backup.createBackup({ keep: 10 })).name
     const live = path.join(root, 'index', 'vector-active.json')
     fs.writeFileSync(live, JSON.stringify({
       version: 1,
@@ -383,23 +383,23 @@ test('a backup from before the vector journal retires the stale live pointer', (
         databases: { global: { path: 'libraries/global.abcdef01.g2.sqlite3' }, libraries: {} },
       },
     }))
-    const result = backup.restoreFromBackup(name, { keep: 10 })
+    const result = await backup.restoreFromBackup(name, { keep: 10 })
     assert.equal(result.vectorActive, 'cleared')
     assert.equal(fs.existsSync(live), false, 'the stale pointer is gone')
     assert.ok(fs.readdirSync(path.join(root, 'index')).some((file) => file.indexOf('vector-active.json.stale-') === 0), 'it was moved aside, not lost')
   } finally { releaseRoot(root) }
 })
 
-test('retention and restore refuse paths that leave the data root', () => {
+test('retention and restore refuse paths that leave the data root', async () => {
   const root = tempRoot('traversal')
   try {
     seed(root, 'tv')
-    const name = backup.createBackup({ keep: 10 }).name
+    const name = (await backup.createBackup({ keep: 10 })).name
     const manifestPath = path.join(root, 'backups', name, 'manifest.json')
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
     manifest.files['../escaped.json'] = { bytes: 2, sha256: 'x' }
     fs.writeFileSync(manifestPath, JSON.stringify(manifest))
-    assert.throws(() => backup.restoreFromBackup(name, { keep: 10 }), /invalid backup manifest path/)
+    await assert.rejects(async () => await backup.restoreFromBackup(name, { keep: 10 }), /invalid backup manifest path/)
     assert.throws(() => backup.deleteBackupEntry('..'), /invalid backup name/)
     assert.throws(() => backup.deleteBackupEntry('.staging'), /invalid backup name/)
     const outside = path.join(root, 'outside')
@@ -415,17 +415,17 @@ test('retention and restore refuse paths that leave the data root', () => {
   } finally { releaseRoot(root) }
 })
 
-test('the state API keeps its shape and reports the retention policy', () => {
+test('the state API keeps its shape and reports the retention policy', async () => {
   const root = tempRoot('api')
   try {
     const binding = state.ensureSession('api-session', { cwd: path.join(root, 'proj') })
     state.updatePrivateIndex(binding.libraryId, (index) => {
       index.entries['mem-api'] = { id: 'mem-api', content: '接口', layer: 'long_term', status: 'active' }
     })
-    const dir = state.backupDatabases()
+    const dir = await state.backupDatabases()
     assert.equal(typeof dir, 'string')
     assert.ok(fs.existsSync(path.join(dir, 'manifest.json')))
-    for (let round = 0; round < 4; round += 1) state.backupDatabases()
+    for (let round = 0; round < 4; round += 1) await state.backupDatabases()
     const listed = state.listBackups()
     assert.ok(Array.isArray(listed))
     assert.ok(listed.length >= 1)
@@ -442,14 +442,14 @@ test('the state API keeps its shape and reports the retention policy', () => {
     assert.equal(report.action, 'create')
     assert.match(report.notice, /at most 3/)
     const oldest = listed[listed.length - 1]
-    const restored = state.restoreBackup(oldest.name)
+    const restored = await state.restoreBackup(oldest.name)
     assert.equal(restored.restored, oldest.name)
     assert.ok(restored.safety)
     assert.ok(state.loadPrivateIndex(binding.libraryId).entries['mem-api'], 'the restored library is readable')
   } finally { releaseRoot(root) }
 })
 
-test('the backup manifest carries identity, never a credential', () => {
+test('the backup manifest carries identity, never a credential', async () => {
   const root = tempRoot('secrets')
   try {
     seed(root, 'secret')
@@ -457,7 +457,7 @@ test('the backup manifest carries identity, never a credential', () => {
       version: 1,
       settings: { apiKey: 'sk-abcdef0123456789abcdef', endpoint: 'https://user:pw@example.invalid/v1' },
     }))
-    const name = backup.createBackup({ keep: 10 }).name
+    const name = (await backup.createBackup({ keep: 10 })).name
     const manifestText = fs.readFileSync(path.join(root, 'backups', name, 'manifest.json'), 'utf8')
     assert.equal(manifestText.indexOf('sk-abcdef0123456789abcdef'), -1, 'no key in the manifest')
     assert.equal(manifestText.indexOf('user:pw'), -1, 'no credential in a URL')
@@ -532,7 +532,7 @@ function stagedFiles(root) {
   return fs.readdirSync(path.join(root, 'backups', '.staging'))
 }
 
-test('a non-empty database is snapshotted by the engine, never copied', () => {
+test('a non-empty database is snapshotted by the engine, never copied', async () => {
   const root = tempRoot('engine-snapshot')
   try {
     seed(root, 'live')
@@ -540,7 +540,7 @@ test('a non-empty database is snapshotted by the engine, never copied', () => {
     seedDatabase(root, 'libraries/lib-a.sqlite3-wal', Buffer.alloc(64, 7))
     const engine = fakeEngine(root)
     const calls = []
-    const created = backup.createBackup({ keep: 10, pythonExec: fakeInterpreter(engine.venv, { calls }) })
+    const created = await backup.createBackup({ keep: 10, pythonExec: fakeInterpreter(engine.venv, { calls }) })
 
     const copy = fs.readFileSync(path.join(created.dir, 'libraries', 'lib-a.sqlite3'))
     assert.equal(copy.toString('latin1').includes('ENGINE-SNAPSHOT'), true, 'the published file is the engine snapshot')
@@ -559,14 +559,14 @@ test('a non-empty database is snapshotted by the engine, never copied', () => {
   } finally { releaseRoot(root) }
 })
 
-test('without a verified engine the backup fails and publishes nothing', () => {
+test('without a verified engine the backup fails and publishes nothing', async () => {
   const root = tempRoot('no-engine')
   try {
     seed(root, 'live')
     const live = seedDatabase(root, 'libraries/lib-a.sqlite3', sqliteFile('LIVE-BYTES'))
     const before = fs.readFileSync(live)
     let caught = null
-    try { backup.createBackup({ keep: 10 }) } catch (error) { caught = error }
+    try { await backup.createBackup({ keep: 10 }) } catch (error) { caught = error }
     assert.ok(caught, 'the backup refused')
     assert.equal(caught.code, 'DSH_MEMU_BACKUP_ENGINE_REQUIRED')
     assert.match(caught.message, /engine/)
@@ -577,7 +577,7 @@ test('without a verified engine the backup fails and publishes nothing', () => {
   } finally { releaseRoot(root) }
 })
 
-test('a global interpreter is never borrowed, and a shim is caught by sys.prefix', () => {
+test('a global interpreter is never borrowed, and a shim is caught by sys.prefix', async () => {
   const root = tempRoot('global-python')
   try {
     seed(root, 'live')
@@ -600,7 +600,7 @@ test('a global interpreter is never borrowed, and a shim is caught by sys.prefix
       return { status: 0, stdout: JSON.stringify({ ok: true, quickCheck: 'ok' }), stderr: '' }
     }
     let caught = null
-    try { backup.createBackup({ keep: 10, pythonExec: shim }) } catch (error) { caught = error }
+    try { await backup.createBackup({ keep: 10, pythonExec: shim }) } catch (error) { caught = error }
     assert.ok(caught, 'the backup refused')
     assert.equal(caught.code, 'DSH_MEMU_BACKUP_ENGINE_REQUIRED')
     assert.match(caught.message, /sys\.prefix/)
@@ -611,7 +611,7 @@ test('a global interpreter is never borrowed, and a shim is caught by sys.prefix
   } finally { releaseRoot(root) }
 })
 
-test('an engine that cannot prove its snapshot fails the whole backup', () => {
+test('an engine that cannot prove its snapshot fails the whole backup', async () => {
   for (const [snapshot, expected] of [
     ['io-error', /disk I\/O error/],
     ['bad-check', /quick_check/],
@@ -624,7 +624,7 @@ test('an engine that cannot prove its snapshot fails the whole backup', () => {
       seedDatabase(root, 'libraries/lib-a.sqlite3', sqliteFile('LIVE-BYTES'))
       const engine = fakeEngine(root)
       let caught = null
-      try { backup.createBackup({ keep: 10, pythonExec: fakeInterpreter(engine.venv, { snapshot }) }) } catch (error) { caught = error }
+      try { await backup.createBackup({ keep: 10, pythonExec: fakeInterpreter(engine.venv, { snapshot }) }) } catch (error) { caught = error }
       assert.ok(caught, snapshot + ': the backup refused')
       assert.equal(caught.code, 'DSH_MEMU_BACKUP_SNAPSHOT_FAILED', snapshot + ': the refusal names the snapshot step')
       assert.match(caught.message, expected)
@@ -635,12 +635,12 @@ test('an engine that cannot prove its snapshot fails the whole backup', () => {
   }
 })
 
-test('a zero-byte placeholder is copied and needs no engine', () => {
+test('a zero-byte placeholder is copied and needs no engine', async () => {
   const root = tempRoot('placeholder')
   try {
     seed(root, 'empty')
     seedDatabase(root, 'global.sqlite3', Buffer.alloc(0))
-    const created = backup.createBackup({ keep: 10 })
+    const created = await backup.createBackup({ keep: 10 })
     const manifest = JSON.parse(fs.readFileSync(path.join(created.dir, 'manifest.json'), 'utf8'))
     const snapshot = manifest.snapshot.databases.find((item) => item.file === 'global.sqlite3')
     assert.equal(snapshot.mode, 'empty-placeholder')
@@ -649,13 +649,13 @@ test('a zero-byte placeholder is copied and needs no engine', () => {
   } finally { releaseRoot(root) }
 })
 
-test('a non-empty file that is not SQLite is refused instead of copied', () => {
+test('a non-empty file that is not SQLite is refused instead of copied', async () => {
   const root = tempRoot('not-sqlite')
   try {
     seed(root, 'junk')
     seedDatabase(root, 'global.sqlite3', Buffer.alloc(4096, 65))
     let caught = null
-    try { backup.createBackup({ keep: 10 }) } catch (error) { caught = error }
+    try { await backup.createBackup({ keep: 10 }) } catch (error) { caught = error }
     assert.ok(caught)
     assert.equal(caught.code, 'DSH_MEMU_BACKUP_NOT_SQLITE')
     assert.match(caught.message, /neither an empty placeholder nor a SQLite database/)
@@ -663,7 +663,7 @@ test('a non-empty file that is not SQLite is refused instead of copied', () => {
   } finally { releaseRoot(root) }
 })
 
-test('even with an installed engine, force-unavailable sqlite refuses rather than copies', () => {
+test('even with an installed engine, force-unavailable sqlite refuses rather than copies', async () => {
   const root = tempRoot('no-python-switch')
   try {
     seed(root, 'live')
@@ -672,19 +672,19 @@ test('even with an installed engine, force-unavailable sqlite refuses rather tha
     process.env.DSH_MEMU_BACKUP_NO_PYTHON = '1'
     backup.resetBackupPythonProbe()
     let caught = null
-    try { backup.createBackup({ keep: 10, pythonExec: fakeInterpreter(engine.venv) }) } catch (error) { caught = error }
+    try { await backup.createBackup({ keep: 10, pythonExec: fakeInterpreter(engine.venv) }) } catch (error) { caught = error }
     assert.ok(caught, 'the forced-unavailable engine refuses')
     assert.equal(caught.code, 'DSH_MEMU_BACKUP_ENGINE_REQUIRED')
     assert.equal(backup.scanBackups().length, 0)
   } finally { releaseRoot(root) }
 })
 
-test('a refused backup is visible through the state API, not swallowed', () => {
+test('a refused backup is visible through the state API, not swallowed', async () => {
   const root = tempRoot('refusal-report')
   try {
     seed(root, 'live')
     seedDatabase(root, 'libraries/lib-a.sqlite3', sqliteFile('LIVE-BYTES'))
-    assert.throws(() => state.backupDatabases(), /engine/i)
+    await assert.rejects(async () => await state.backupDatabases(), /engine/i)
     const report = state.lastBackupReportView()
     assert.equal(report.action, 'create')
     assert.equal(report.status, 'failed')
@@ -698,7 +698,7 @@ test('a refused backup is visible through the state API, not swallowed', () => {
 // It is skipped by default for the same reason every other real-engine case in
 // this repo is: it needs a base Python to create the venv with (the venv is
 // built exactly the way lib/engine.js builds it) and it takes a few seconds.
-test('a real venv interpreter folds a real live WAL into the backup', (t) => {
+test('a real venv interpreter folds a real live WAL into the backup', async (t) => {
   if (process.env.DSH_MEMU_BACKUP_REAL_ENGINE !== '1') {
     t.skip('set DSH_MEMU_BACKUP_REAL_ENGINE=1 to run the real-engine case')
     return
@@ -739,7 +739,7 @@ test('a real venv interpreter folds a real live WAL into the backup', (t) => {
     assert.equal(made.status, 0, 'the live database was written: ' + String(made.stderr || ''))
     assert.ok(fs.statSync(db + '-wal').size > 0, 'the database really has a live WAL to fold in')
 
-    const created = backup.createBackup({ keep: 10 })
+    const created = await backup.createBackup({ keep: 10 })
     const manifest = JSON.parse(fs.readFileSync(path.join(created.dir, 'manifest.json'), 'utf8'))
     const snapshot = manifest.snapshot.databases.find((item) => item.file === 'libraries/lib-real.sqlite3')
     assert.equal(snapshot.mode, 'sqlite-backup-api')
@@ -761,7 +761,7 @@ test('a real venv interpreter folds a real live WAL into the backup', (t) => {
     assert.equal(lines[1], '3', 'every committed row made it in, including the WAL frames')
   } finally { releaseRoot(root) }
 })
-test('an engine still installing (venv.tmp-*) can take the snapshot too', () => {
+test('an engine still installing (venv.tmp-*) can take the snapshot too', async () => {
   // The repair path: lib/engine.js backs up with beforeSwitch while the new
   // venv is still `venv.tmp-*` and current.json still points at the broken one.
   const root = tempRoot('repair')
@@ -773,7 +773,7 @@ test('an engine still installing (venv.tmp-*) can take the snapshot too', () => 
     fs.mkdirSync(bin, { recursive: true })
     const python = path.join(bin, process.platform === 'win32' ? 'python.exe' : 'python3')
     fs.writeFileSync(python, '')
-    const created = backup.createBackup({ keep: 10, pythonExec: fakeInterpreter(venv) })
+    const created = await backup.createBackup({ keep: 10, pythonExec: fakeInterpreter(venv) })
     const manifest = JSON.parse(fs.readFileSync(path.join(created.dir, 'manifest.json'), 'utf8'))
     const snapshot = manifest.snapshot.databases.find((item) => item.file === 'libraries/lib-a.sqlite3')
     assert.equal(snapshot.mode, 'sqlite-backup-api')
@@ -781,7 +781,7 @@ test('an engine still installing (venv.tmp-*) can take the snapshot too', () => 
   } finally { releaseRoot(root) }
 })
 
-test('lib/backup.js cannot reach a global interpreter or a copy fallback', () => {
+test('lib/backup.js cannot reach a global interpreter or a copy fallback', async () => {
   const src = fs.readFileSync(path.join(process.cwd(), 'lib', 'backup.js'), 'utf8')
   assert.equal(src.includes('DSH_MEMU_PYTHON'), false, 'the env override is not consulted at all')
   assert.equal(src.includes('pythonCandidates'), false, 'the PATH/py-launcher candidate list is gone')

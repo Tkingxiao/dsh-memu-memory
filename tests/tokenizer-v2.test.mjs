@@ -5,9 +5,9 @@ import {
   tokenize,
   tokenizeStats,
   tokenizeV2,
-  TEST_CASES,
   tokenStreamV2,
 } from '../lib/tokenizer-v2.js'
+import { TEST_CASES } from './fixtures/tokenizer-cases.mjs'
 
 // —— 召回升级 P0-1：Tokenizer V2（CJK 三层 n-gram + 实体保护）——
 // 开关在 lib/curator-policy.js（TOKENIZER_V2）；这里测 V2 本身的行为契约。

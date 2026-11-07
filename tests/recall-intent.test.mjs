@@ -67,6 +67,29 @@ test('one-hop expansion follows an explicit link to a memory the query never mat
   assert.ok(recalled.files.find((file) => file.name === b.id).relatedTo === a.id)
 })
 
+test('graph expansion only fills empty topK seats, never adds injected entries', async () => {
+  const { exec, sessionId } = session('intent-multihop-budget')
+  const a = await memory.privateRemember({
+    exec, title: '码头灯塔记录', content: '林眠傍晚去了码头看灯塔。',
+  })
+  const b = await memory.privateRemember({
+    exec, title: '灯塔亮起时间', content: '码头边的灯塔亮了三次。',
+  })
+  const linked = await memory.privateRemember({
+    exec, title: '她带了一把旧伞', content: '那天她带着一把旧伞。',
+  })
+  const binding = state.getSessionBinding(sessionId)
+  state.updatePrivateIndex(binding.libraryId, (index) => {
+    index.entries[a.id].links = [{ to: linked.id, kind: 'event', note: 'same evening', confidence: 0.9 }]
+  })
+  const recalled = await memory.privateRecall({ exec, query: '码头 灯塔', topK: 2, relevanceThreshold: 0 })
+  const ids = recalled.files.map((file) => file.name)
+  assert.equal(recalled.files.length, 2, 'topK seats stay full; expansion cannot add a third')
+  assert.ok(ids.includes(a.id) && ids.includes(b.id))
+  assert.ok(!ids.includes(linked.id), 'the linked memory must wait until a seat is free')
+  assert.equal(recalled.expanded, undefined)
+})
+
 test('automatic recall hides never_say and only_if_asked; boundary questions release only_if_asked', async () => {
   const { exec } = session('intent-disclosure')
   const open = await memory.privateRemember({

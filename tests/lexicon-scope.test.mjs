@@ -230,9 +230,9 @@ test('lexiconAdd 带会话时给私有词条打领域戳', async () => {
   assert.equal(entryOf(libs.current.id, '面板词').domain, 'coding')
 })
 
-test('全局词典与私有词典同权进自动备份清单', () => {
+test('全局词典与私有词典同权进自动备份清单', async () => {
   world()
-  const created = backup.createBackup({ label: 'lexicon-scope-global' })
+  const created = await backup.createBackup({ label: 'lexicon-scope-global' })
   const manifest = JSON.parse(fs.readFileSync(path.join(created.dir, 'manifest.json'), 'utf8'))
   assert.ok(manifest.files[`lexicon/${GLOBAL_ID}.json`], 'global.json 是词典数据，必须在备份里')
 })

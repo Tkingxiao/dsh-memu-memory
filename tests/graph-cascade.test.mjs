@@ -81,6 +81,35 @@ test('deleteEntity deletes an unreferenced entity and refuses a referenced one u
   assert.equal(readStore().entities[kept.id], undefined)
 })
 
+test('deleteEntity tolerates a corrupt relationship key and never loses a readable snapshot', () => {
+  const target = graph.createEntity({ libraryId, name: 'CorruptTarget' })
+  const other = graph.createEntity({ libraryId, name: 'CorruptOther' })
+  const outsider = graph.createEntity({ libraryId, name: 'CorruptOutsider' })
+  const targetKey = JSON.stringify([target.id, other.id])
+  const unrelatedKey = JSON.stringify([other.id, outsider.id])
+  const corruptKey = 'not-json\u0000relationship'
+  const store = readStore()
+  store.relationships[targetKey] = { fromId: target.id, toId: other.id, state: { trust: 0.5 }, history: [], evidenceIds: ['mem-free'] }
+  store.relationships[unrelatedKey] = { fromId: other.id, toId: outsider.id, state: { trust: 0.4 }, history: [], evidenceIds: ['mem-free'] }
+  store.relationships[corruptKey] = { fromId: 'x', toId: 'y', state: {}, history: [], evidenceIds: [] }
+  fs.writeFileSync(entitiesFile, JSON.stringify(store))
+  // 未 force：损坏 key 只是读不懂的历史，不能把「仍被引用」的拒绝变成 SyntaxError。
+  assert.throws(() => graph.deleteEntity({ libraryId, entityId: target.id }), /relationship snapshot/)
+  // force：只删除可读且真的指向 target 的快照；损坏 key 与无关好边原样保留。
+  const forced = graph.deleteEntity({ libraryId, entityId: target.id, force: true })
+  assert.equal(forced.removedRelationships, 1)
+  const after = readStore()
+  assert.equal(after.relationships[targetKey], undefined, 'the readable edge to the target is gone')
+  assert.ok(after.relationships[unrelatedKey], 'an unrelated readable edge is never silently dropped')
+  assert.ok(after.relationships[corruptKey], 'the corrupt key is preserved, not deleted as a side effect')
+  // 清理，避免坏 key 影响本文件后续的 prune/list 断言。
+  delete after.relationships[unrelatedKey]
+  delete after.relationships[corruptKey]
+  delete after.entities[other.id]
+  delete after.entities[outsider.id]
+  fs.writeFileSync(entitiesFile, JSON.stringify(after))
+})
+
 test('force-delete drops relationship snapshots with the entity, and the freed endpoint is collectable', () => {
   const p = graph.createEntity({ libraryId, name: 'P' })
   const q = graph.createEntity({ libraryId, name: 'Q' })

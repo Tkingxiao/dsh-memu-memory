@@ -13,6 +13,7 @@ import {
   tokenize,
 } from '../lib/text-retrieval.js'
 import { similarityDetail, similarTexts, bigrams, dice } from '../lib/text-similarity.js'
+import { RRF_K, RRF_W_BM25, RRF_W_DICE, RRF_W_ENTITY } from '../lib/curator-policy.js'
 
 // —— §4.1 tokenize ——
 
@@ -82,6 +83,34 @@ test('bm25: queries wider than 64 terms keep the matching terms (junk never evic
   assert.equal(bm25(query, corpus.docs.get('b'), corpus), bm25(hits, corpus.docs.get('b'), corpus))
   assert.ok(bm25(hits, corpus.docs.get('b'), corpus) > 0)
 })
+test('bm25: a corpus-wide high-frequency character is dropped from the query instead of pulling the whole library in', () => {
+  const entries = []
+  for (let i = 1; i <= 40; i += 1) {
+    entries.push({
+      id: `freq-${i}`,
+      title: `记录 ${i}`,
+      content: `第 ${i} 条记录的内容里都带着这个高频字：的。${i === 1 ? '另外还有一个独角兽专属词。' : ''}`,
+    })
+  }
+  const corpus = buildCorpus(entries)
+  assert.ok(corpus.df.get('的') >= 40, 'the fixture must make 的 a corpus-wide term')
+  const doc = corpus.docs.get('freq-1')
+  // A-2：df > dfCap 的 term 整条不参与打分。旧实现给出一个很小的正数，于是
+  // 查「的」能把全库都拉进候选池；现在它不产生任何分数。
+  assert.equal(bm25(tokenize('的'), doc, corpus), 0)
+  // 真正的稀有 term 不受影响——闸门只剔高频词，不改正常词的分值口径。
+  assert.ok(bm25(tokenize('独角兽'), doc, corpus) > 0)
+})
+
+test('bm25: query term frequency is preserved (qtf multiplies that term\'s contribution)', () => {
+  const corpus = corpusFor()
+  const doc = corpus.docs.get('b')
+  const once = bm25(['缓存'], doc, corpus)
+  const twice = bm25(['缓存', '缓存'], doc, corpus)
+  assert.ok(once > 0)
+  assert.ok(Math.abs(twice - 2 * once) < 1e-12, `qtf=2 must double the contribution: ${once} -> ${twice}`)
+})
+
 // —— §4.2 similarityDetail / pairFeatures / pairScore ——
 
 test('similarityDetail: length-comparable pairs report dice, pruned pairs report the containment floor', () => {
@@ -240,35 +269,49 @@ test('rankPairCandidates: deterministic — same input, same output', () => {
 
 // —— §4.3 边界带（P0-1 回归修复的守卫）：代理切分 → pairScore 真尺终选 ——
 //
-// 手算秩结构（可复现 fixture，文本两两相同造成 bm25/dice 精确并列，en 路由的
-// containment tiebreak 由 cand-c/d 的逐字包含 0.92 垫高）：
-//   cand-a: bm1, di1, en4 → rrf = 0.5/61 + 0.3/61 + 0.2/64 = 1.6240e-2（rank 1，切点）
-//   cand-b: bm2, di2, en1 → rrf = 0.5/62 + 0.3/62 + 0.2/61 = 1.6183e-2（rank 2，带内：
-//           与切点差 (0.5+0.3)×(1/61−1/62) − 0.2×(1/61−1/64) = 5.78e-5 ≤ RRF_SLICE_BAND）
-//   cand-c/d: rrf 更低，带外（仅作 en 路由 containment 垫脚）。
-// pairScore：cand-b 0.9894（entity 匹配）≫ cand-a 0.8394（appliesTo 不相交）。
-// 修复前 pre-cut=limit=1 只评分 cand-a，返回 ['cand-a']；边界带把 cand-b 并入
-// 评分集，真尺终选翻到 cand-b——准入从 RRF 代理换成 pairScore 真尺的直接证据。
+// 手算秩结构（A-12 之后并列共享名次，fixture 不再靠 id tiebreak 制造分差）：
+//   cand-a: 与 proposal 文本全同、appliesTo 不相交 → bm1, di1, en2
+//           rrf = 0.5/61 + 0.3/61 + 0.2/62（切点）
+//   cand-b: 文本只多一个词、appliesTo 相同 → bm2, di2, en1
+//           rrf = 0.5/62 + 0.3/62 + 0.2/61
+//   差值 = 0.6×(1/61−1/62) = 1.58e-4 ≤ RRF_SLICE_BAND(2.5e-4)，所以 b 落在带内。
+// pairScore：b（entity 1.0）明显高于 a（entity 0）——pre-cut=limit=1 只评分 a，
+// 边界带把 b 并入评分集后真尺终选翻到 b：准入从 RRF 代理换成 pairScore 真尺。
 test('rankPairCandidates: the slice boundary band admits a better-pairScore candidate the RRF proxy dropped', () => {
-  const twin = 'Redis 缓存统一设置 30 秒过期，命中直接返回。Redis 缓存统一设置 30 秒过期，命中直接返回。'
-  const tail = '。另有运维值班轮换表与告警升级路径的完整说明，这里补足长度让长度剪枝生效并保持逐字包含。'
   const proposal = { title: '缓存过期', content: 'Redis 缓存统一设置 30 秒过期，命中直接返回。', appliesTo: ['deploy'], track: 'memory', domain: 'general' }
   const corpus = buildCorpus([
-    { id: 'cand-a', title: '缓存过期', content: twin, appliesTo: [], track: 'memory', domain: 'general' },
-    { id: 'cand-b', title: '缓存过期', content: twin, appliesTo: ['deploy'], track: 'memory', domain: 'general' },
-    { id: 'cand-c', title: '缓存过期', content: proposal.content + tail, appliesTo: [], track: 'memory', domain: 'general' },
-    { id: 'cand-d', title: '缓存过期', content: proposal.content + tail, appliesTo: [], track: 'memory', domain: 'general' },
+    { id: 'cand-a', title: '缓存过期', content: proposal.content, appliesTo: [], track: 'memory', domain: 'general' },
+    { id: 'cand-b', title: '缓存过期', content: 'Redis 缓存统一设置 30 秒过期，命中直接返回数据。', appliesTo: ['deploy'], track: 'memory', domain: 'general' },
   ])
   const found = rankPairCandidates({ corpus, proposal, limit: 1 })
   // 真尺终选：数量语义不变（≤max），赢家是带内 rescue 的高 pairScore 候选
   assert.equal(found.length, 1)
   assert.equal(found[0].id, 'cand-b')
   // 赢家的 rrf 严格低于切点（cand-a 的手算 rrf）——证明它来自边界带而非 pre-cut
-  const cutRrf = 0.5 / (60 + 1) + 0.3 / (60 + 1) + 0.2 / (60 + 4)
+  const cutRrf = (RRF_W_BM25 + RRF_W_DICE) / (RRF_K + 1) + RRF_W_ENTITY / (RRF_K + 2)
   assert.ok(found[0].rrf < cutRrf, `winner rrf ${found[0].rrf} must sit below the pre-cut line ${cutRrf}`)
+  assert.ok(cutRrf - found[0].rrf <= 2.5e-4, 'and the gap must stay inside the slice band')
   // 被切掉的 cand-a 在真尺上确实更差（低 pairScore 者按 pairScore 出局）
   const loserScore = pairScore(pairFeatures(proposal, corpus.docs.get('cand-a').entry))
   assert.ok(found[0].score > loserScore, `band winner ${found[0].score} must beat the displaced candidate ${loserScore}`)
+})
+
+// —— A-12：同分文档共享名次，RRF 贡献相等 ——
+test('rankPairCandidates: two tied documents contribute the same RRF (competition ranking)', () => {
+  const text = 'Redis 缓存统一设置 30 秒过期，命中直接返回。'
+  const proposal = { title: '缓存过期', content: text, appliesTo: [], track: 'memory', domain: 'general' }
+  const corpus = buildCorpus([
+    { id: 'twin-b', title: '缓存过期', content: text, appliesTo: [], track: 'memory', domain: 'general' },
+    { id: 'twin-a', title: '缓存过期', content: text, appliesTo: [], track: 'memory', domain: 'general' },
+  ])
+  const found = rankPairCandidates({ corpus, proposal, limit: 20 })
+  const a = found.find((item) => item.id === 'twin-a')
+  const b = found.find((item) => item.id === 'twin-b')
+  assert.ok(a && b)
+  // 三路全部并列 rank 1：rrf = (0.5+0.3+0.2)/(K+1)。旧实现给同分者 1/2 名，
+  // 两者的 rrf 会不相等（1/61 vs 1/62）。
+  assert.equal(a.rrf, b.rrf)
+  assert.ok(Math.abs(a.rrf - (RRF_W_BM25 + RRF_W_DICE + RRF_W_ENTITY) / (RRF_K + 1)) < 1e-15)
 })
 
 // —— §4.8 全局冲突预筛 ——

@@ -67,6 +67,22 @@ test('usageLowerBound: n=0 is 0, success is clamped to n, output stays in [0,1]'
   assert.ok(Math.abs(single - 0.207) < 0.01, `1/1 lower bound should be ~0.207, got ${single}`)
 })
 
+test('usageLowerBound: priorAttempts is the same-source denominator; overflow stays bounded and monotone', () => {
+  const probe = (priorAttempts, injection, query = 0) => lexicon.usageLowerBound({ candidate: 100, priorAttempts, injection, query })
+  // 同源分母：固定 priorAttempts，同源成功数越多，下界单调不减。
+  const steps = [0, 1, 2, 3, 5].map(success => probe(5, success))
+  for (let i = 1; i < steps.length; i += 1) {
+    assert.ok(steps[i] >= steps[i - 1], `success ${i} must not lower the bound: ${steps[i - 1]} -> ${steps[i]}`)
+  }
+  // 分子超过分母：仍被 clamp 到 n，结果有界且等于 p=1 的下界（不会 >1）。
+  const overflow = probe(5, 50)
+  const full = probe(5, 5)
+  assert.equal(overflow, full)
+  assert.ok(overflow > 0 && overflow <= 1)
+  // 缺失 priorAttempts 时退回 candidate 分母：与旧近似的数值一致（文档化假设）。
+  assert.equal(lexicon.usageLowerBound({ candidate: 5, injection: 5 }), full)
+})
+
 test('usageLowerBound: 10/9 ranks above 10/1 — a high miss rate is punished', () => {
   const good = lexicon.usageLowerBound({ candidate: 10, injection: 9, query: 0 })
   const bad = lexicon.usageLowerBound({ candidate: 10, injection: 1, query: 0 })

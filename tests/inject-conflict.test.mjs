@@ -71,6 +71,24 @@ test('the card text stays under 200 characters even with long titles', () => {
   assert.equal(conflictCard({ left: null, right: null }), '')
 })
 
+test('the card orders sides by local authority and observed time', () => {
+  const card = conflictCard({
+    factKey: 'home:living_floor_color',
+    left: { id: 'mem-inferred', entry: { title: '木色', source_kind: 'inferred' } },
+    right: { id: 'mem-user', entry: { title: '灰色', source_kind: 'user_said' } },
+  })
+  assert.match(card, /- A \[mem-user\]/, 'a direct quote is shown first')
+  assert.match(card, /- B \[mem-inferred\]/)
+  assert.ok(card.length <= 200)
+
+  const newer = conflictCard({
+    factKey: 'x',
+    left: { id: 'mem-old', entry: { title: '旧', fact_authority: 1, observed_at: '2026-11-01' } },
+    right: { id: 'mem-new', entry: { title: '新', fact_authority: 1, observed_at: '2026-11-05' } },
+  })
+  assert.match(newer, /- A \[mem-new\]/, 'equal authority falls back to the newer observation')
+})
+
 test('a conflict card that cannot fit falls back to the ordinary title cards', async () => {
   const { exec, sessionId } = session('conflict-budget')
   const longTitle = '非常长的旅行目的地描述'.repeat(8)

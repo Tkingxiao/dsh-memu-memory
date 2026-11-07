@@ -149,14 +149,15 @@ test('maybeCue falls back to a fixed sentence when no memory qualifies', async (
 
 test('a tense room pulls charged memories further ahead than a quiet one', async () => {
   const { sessionId, exec } = setup('arousal')
-  // 两条正文词面不同（dice 0.512，低于 TOPIC_DICE）：事实级去重上线后，同文改标题的
-  // 旧写法会被写入侧打标/召回侧折叠，唤醒度因子就测不到了。语义并行 + 显式 arousal
-  // 仍然隔离这个因子。
+  // Both bodies cover the query terms equally (BM25 gives the same lexical score),
+  // so arousal is the only variable. The old includes scorer tied on the same
+  // fixture; BM25's length/IDF normalisation would otherwise let a lexically better
+  // sentence outrank the charged one before the mood factor is applied.
   const calm = await memory.privateRemember({
     exec, content: 'The hallway smelled of rain on warm stone.', title: 'hallway calm', arousal: 0.1, moodValence: 0.05,
   })
   const loud = await memory.privateRemember({
-    exec, content: 'Rain hammered the hallway stones while voices echoed off the walls.', title: 'hallway loud', arousal: 0.95, moodValence: 0.05,
+    exec, content: 'Rain hammered the hallway stone as voices echoed.', title: 'hallway loud', arousal: 0.95, moodValence: 0.05,
   })
 
   async function gapAt(arousal) {

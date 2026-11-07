@@ -114,6 +114,51 @@ test('relationship snapshots preserve unknowns, evidence, boundaries and previou
   assert.throws(() => graph.updateRelationship({ libraryId, fromId: a.id, toId: b.id, state: {}, evidenceIds: [], reason: 'no evidence' }), /evidence/)
 })
 
+test('relationship history is capped while the current snapshot and evidence stay', () => {
+  const a = graph.createEntity({ libraryId, name: 'History A' })
+  const b = graph.createEntity({ libraryId, name: 'History B' })
+  for (let i = 0; i < 55; i += 1) {
+    graph.updateRelationship({
+      libraryId, fromId: a.id, toId: b.id,
+      state: { trust: 0.5, callbacks: [`callback ${i}`] },
+      evidenceIds: ['mem-2'], reason: `Evidence-backed revision ${i} is explicit.`,
+    })
+  }
+  const relation = graph.getRelationship({ libraryId, fromId: a.id, toId: b.id }).relationship
+  assert.equal(relation.history.length, 50, 'old revisions are capped')
+  assert.equal(relation.revision, 55)
+  assert.deepEqual(relation.state.callbacks, ['callback 54'])
+  assert.deepEqual(relation.evidenceIds, ['mem-2'])
+})
+
+test('relationship retention is a pure wall-clock decay with access reinforcement', () => {
+  assert.equal(graph.relationshipRetentionAt(1, 24), 0.5)
+  assert.equal(graph.relationshipRetentionAt(1, 48), 0.25)
+  assert.equal(graph.relationshipRetentionAt(1, -5), 1, 'clock rollback never boosts retention')
+  const accessed = graph.accessRelationship(0.5, { now: 10_000_000, lastAccessAt: null })
+  assert.ok(accessed > 0.5 && accessed < 1)
+  assert.equal(graph.accessRelationship(0.5, { now: 10_000_000, lastAccessAt: new Date(10_000_000 - 1000).toISOString() }), 0.5, 'cooldown blocks a second bump')
+})
+
+test('relationship snapshots persist retention, last access and next review', () => {
+  const a = graph.createEntity({ libraryId, name: 'Lifecycle A' })
+  const b = graph.createEntity({ libraryId, name: 'Lifecycle B' })
+  const created = graph.updateRelationship({
+    libraryId, fromId: a.id, toId: b.id,
+    state: { trust: 0.6 }, evidenceIds: ['mem-2'], reason: 'First explicit evidence for this relation.',
+  }).relationship
+  assert.equal(created.retention_strength, 1)
+  assert.ok(created.last_access_at)
+  assert.ok(created.next_review_at)
+  const next = graph.updateRelationship({
+    libraryId, fromId: a.id, toId: b.id,
+    state: { trust: 0.7 }, evidenceIds: ['mem-2'], reason: 'Second explicit evidence for this relation.',
+  }).relationship
+  assert.ok(next.retention_strength > 0 && next.retention_strength <= 1)
+  assert.ok(next.last_access_at >= created.last_access_at)
+  assert.equal(next.history[0].retention_strength, 1)
+})
+
 test('a dangling edge is reported as missing, matching the graph view placeholder', () => {
   // mem-1 was deleted from the index in an earlier test; its inbound edge from
   // mem-0 remains. getGraph renders a [deleted] placeholder for it, so recall

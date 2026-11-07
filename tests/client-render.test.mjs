@@ -422,7 +422,7 @@ test('the WebUI buttons open a new tab and never navigate this one', async () =>
     globalThis.window.open = (url) => { opened.push(url); return { focus() {}, opener: null } }
     buttons[0].props.onClick()
     assert.equal(opened.length, 1, 'a popup was requested')
-    assert.ok(opened[0].endsWith('/dsh-memu-memory/ui#/settings/engine'), `unexpected url: ${opened[0]}`)
+    assert.ok(opened[0].includes('/dsh-memu-memory/ui') && /[?&]theme=(light|dark)/.test(opened[0]) && opened[0].endsWith('#/settings/engine'), `unexpected url: ${opened[0]}`)
     assert.deepEqual(navigated, [], 'no fallback navigation while the popup works')
 
     // Blocked popups return null: fall back to an in-app overlay. Navigating this
@@ -435,7 +435,7 @@ test('the WebUI buttons open a new tab and never navigate this one', async () =>
     assert.equal(overlay.attrs['data-dsh-memu-memory-webui'], '', 'the overlay is marked')
     const frame = overlay.children.find((child) => child.tag === 'iframe')
     assert.ok(frame, 'the overlay hosts an iframe')
-    assert.ok(String(frame.src).endsWith('/dsh-memu-memory/ui#/settings/engine'), `unexpected url: ${frame.src}`)
+    assert.ok(String(frame.src).includes('/dsh-memu-memory/ui') && /[?&]theme=(light|dark)/.test(String(frame.src)) && String(frame.src).endsWith('#/settings/engine'), `unexpected url: ${frame.src}`)
     assert.deepEqual(navigated, [], 'the current tab is never navigated')
     // The close control lives inside the page; the overlay only waits for its message.
     assert.equal(overlay.children.length, 1, 'no floating chrome outside the panel')

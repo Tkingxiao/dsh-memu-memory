@@ -400,6 +400,25 @@ test('library queue spans compensation across routes and releases after failure'
   assert.equal(backendRows.size, 1)
 })
 
+test('managed vector commit failure defers to index-only instead of losing the write', async () => {
+  const f = fixture()
+  activate([f.libraryId])
+  failCommit = true
+  const written = await memory.privateRemember({ exec: f.exec, content: 'deferred write survives', title: 'deferred' })
+  let entry = state.loadPrivateIndex(f.libraryId).entries[written.id]
+  assert.equal(entry.content, 'deferred write survives')
+  assert.equal(entry.vectorPending, true)
+  assert.equal(entry.vector, undefined)
+  assert.equal(backendRows.size, 0, 'nothing was falsely recorded as committed')
+  assert.ok(warnings.some(message => /deferred/.test(message)), 'the degradation must be observable')
+
+  failCommit = false
+  await memory.privateUpdate({ exec: f.exec, id: written.id, content: 'deferred write now committed' })
+  entry = state.loadPrivateIndex(f.libraryId).entries[written.id]
+  assert.equal(entry.vectorPending, undefined, 'a later successful commit clears the pending flag')
+  assert.equal(entry.vector.route, 'managed-local')
+})
+
 test('managed import failure rejects without index-first false success', async () => {
   const f = fixture()
   activate([f.libraryId])

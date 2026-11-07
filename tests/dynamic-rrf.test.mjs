@@ -119,34 +119,37 @@ function recentCorpus() {
   ])
 }
 
-test('recency 查询下 updatedAt 更新的候选相对提升：rrf 差距收窄、新者增益为正、旧者为负', () => {
+test('recency 查询下同分文档共享三路名次，recency 第四路成为唯一区分信号', () => {
   const corpus = recentCorpus()
   const proposal = { track: 'memory', domain: 'general', title: '缓存过期', content: '昨天 缓存过期提醒每日检查' }
   const found = rankPairCandidates({ corpus, proposal, limit: 20 })
   assert.equal(found.length, 2)
-  // 文本全同 → 三路 tie 由 idAsc 定序：a-old 三路 rank1、b-new rank2；
-  // recency 通道按 updatedAt 降序：b-new rank1、a-old rank2。
-  const rrfOld = found.find((c) => c.id === 'a-old').rrf
-  const rrfNew = found.find((c) => c.id === 'b-new').rrf
-  // 静态口径的期望值（同一表达式、rank 1/2）
-  const statOld = RRF_W_BM25 / (RRF_K + 1) + RRF_W_DICE / (RRF_K + 1) + RRF_W_ENTITY / (RRF_K + 1)
-  const statNew = RRF_W_BM25 / (RRF_K + 2) + RRF_W_DICE / (RRF_K + 2) + RRF_W_ENTITY / (RRF_K + 2)
-  // 新者的 rrf 相对静态严格提升，旧者严格下降 → 相对排名提升
-  assert.ok(rrfNew > statNew, `新者应增益：${rrfNew} > ${statNew}`)
-  assert.ok(rrfOld < statOld, `旧者应减益：${rrfOld} < ${statOld}`)
-  // 两者差距收窄（0.8δ → 0.6δ），即 recency 把新者往前拉
-  assert.ok(rrfOld - rrfNew < statOld - statNew)
-  // recency 权重不足以翻转文本三路的合计优势（0.6δ > 0），排序仍稳定
-  assert.equal(found[0].id, 'a-old')
-  assert.equal(found[1].id, 'b-new')
+  // A-12：文本全同 → bm25/dice/entity 三路并列，竞赛排名下都取 rank 1（旧实现
+  // 用 idAsc 把它们拆成 rank 1/2，凭空制造分差）。recency 是唯一区分通道：
+  // b-new updatedAt 更新 → rank 1，a-old rank 2。
+  const w = computeRRFWeights(proposal, corpus)
+  assert.ok(w.recency != null, 'fixture must take the recency route')
+  const textRoutes = w.bm25 / (RRF_K + 1) + w.dice / (RRF_K + 1) + w.entity / (RRF_K + 1)
+  const rrfNew = textRoutes + w.recency / (RRF_K + 1)
+  const rrfOld = textRoutes + w.recency / (RRF_K + 2)
+  assert.ok(Math.abs(found.find((c) => c.id === 'b-new').rrf - rrfNew) < 1e-15)
+  assert.ok(Math.abs(found.find((c) => c.id === 'a-old').rrf - rrfOld) < 1e-15)
+  // 文本三路不提供任何区分，recency 足以把更新的文档推到前面。
+  assert.ok(rrfNew > rrfOld)
+  assert.equal(found[0].id, 'b-new')
+  assert.equal(found[1].id, 'a-old')
 })
 
-test('非近期查询下同一 corpus 不受 recency 影响：rrf 与静态公式逐位相等', () => {
+test('非近期查询下同一 corpus 不受 recency 影响：同分同 rrf，输出按 id 稳定', () => {
   const corpus = recentCorpus()
   const proposal = { track: 'memory', domain: 'general', title: '缓存过期', content: '缓存过期提醒每日检查' }
   const found = rankPairCandidates({ corpus, proposal, limit: 20 })
-  assert.equal(found[0].rrf, RRF_W_BM25 / (RRF_K + 1) + RRF_W_DICE / (RRF_K + 1) + RRF_W_ENTITY / (RRF_K + 1))
-  assert.equal(found[1].rrf, RRF_W_BM25 / (RRF_K + 2) + RRF_W_DICE / (RRF_K + 2) + RRF_W_ENTITY / (RRF_K + 2))
+  // 文本全同 → 三路并列 rank 1，A-12 后两条 rrf 相等（旧实现是 1/61 与 1/62）。
+  const tied = (RRF_W_BM25 + RRF_W_DICE + RRF_W_ENTITY) / (RRF_K + 1)
+  assert.equal(found[0].rrf, tied)
+  assert.equal(found[1].rrf, tied)
+  assert.equal(found[0].id, 'a-old', 'equal rrf falls back to idAsc')
+  assert.equal(found[1].id, 'b-new')
 })
 
 test('结果确定性：同输入两次 rankPairCandidates / computeRRFWeights 完全一致', () => {

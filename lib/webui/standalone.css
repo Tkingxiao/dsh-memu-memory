@@ -455,9 +455,6 @@ body[data-scrolled="true"] .topbar {
 #root {
   min-height: 50vh;
 }
-.boot-failed #root::before {
-  content: "";
-}
 
 /* ── footer ────────────────────────────────────────────────────────────── */
 .foot {
@@ -619,11 +616,9 @@ html[data-standalone] .dshm-root {
   padding: 0;
   min-height: 0;
   animation: none;
-  /* The component uses container queries inside the host pane. On a full page
-     `contain: layout` would also make it the containing block for the detail
-     drawer's fixed overlay, pinning it under the topbar; the media queries above
-     already cover the narrow layout. */
-  container-type: normal;
+  /* Keep the query container alive in the standalone shell too, so UI_CSS's
+     @container rules drive the narrow layout in both shells (see UI_CSS). */
+  container-type: inline-size;
   --dshm-mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
 }
 html[data-standalone] .dshm-shell {
@@ -651,7 +646,7 @@ html[data-standalone] .dshm-nav {
   z-index: 20;
 }
 html[data-standalone] .dshm-nav::before {
-  content: "MEMORY STUDIO";
+  content: var(--dshm-studio-label, "MEMORY STUDIO");
   display: block;
   padding: 4px 12px 10px;
   font-size: 9px;
@@ -922,8 +917,8 @@ html[data-standalone] .dshm-error {
   margin: 2px 0;
   padding: 8px 12px;
   border-radius: 11px;
-  border: 1px solid color-mix(in srgb, var(--dshm-error, #b43e45) 30%, transparent);
-  background: color-mix(in srgb, var(--dshm-error, #b43e45) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary, #b43e45) 30%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #b43e45) 10%, transparent);
   font-size: 12.5px;
 }
 
@@ -960,15 +955,19 @@ html[data-standalone] .dshm-wall-grid {
 }
 html[data-standalone] .dshm-wall-item {
   min-height: 236px;
+  /* Skip layout/paint for rows outside the viewport: a fullscreen wall can hold
+     300 cards, and rendering all of them is what starves the WebView2 compositor. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 236px;
   padding: 18px;
   border-radius: 18px;
   border: 1px solid var(--dshm-line);
+  /* No backdrop-filter here. A fullscreen wall puts dozens of blurred cards on
+     screen at once; the pointer spotlight repaints their backdrop every frame
+     and WebView2 starts dropping compositor tiles (cards flash, then vanish).
+     The gradients below already carry the depth. */
   background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--dshm-panel-strong) 92%, transparent),
-      color-mix(in srgb, var(--dshm-panel) 82%, transparent));
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
+    linear-gradient(180deg, var(--dshm-panel-strong), var(--dshm-panel));
   box-shadow: 0 18px 36px -32px rgba(10, 28, 23, .5);
   transition: transform .28s cubic-bezier(.22, 1, .36, 1), box-shadow .28s ease,
     border-color .28s ease;
@@ -998,9 +997,7 @@ html[data-standalone] .dshm-wall-cover-count {
   bottom: 10px;
   font-size: 10.5px;
   letter-spacing: .01em;
-  background: rgba(10, 16, 32, .62);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
+  background: rgba(10, 16, 32, .72);
 }
 html[data-standalone] .dshm-wall-meta {
   font-size: 11px;
@@ -1036,7 +1033,6 @@ html[data-standalone] .dshm-drawer {
   border-left-color: var(--dshm-line);
   box-shadow: -30px 0 80px -40px rgba(0, 0, 0, .55);
 }
-html[data-standalone] .dshm-drawer .dshm-input,
 html[data-standalone] .dshm-drawer input,
 html[data-standalone] .dshm-drawer textarea,
 html[data-standalone] .dshm-drawer select {
@@ -1104,7 +1100,6 @@ html[data-standalone] .dshm-wall-graph {
 
 /* ── responsive ────────────────────────────────────────────────────────── */
 @media (max-width: 760px) {
-  html[data-standalone] .dshm-shell { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   html[data-standalone] .dshm-nav { position: static; }
   html[data-standalone] .dshm-nav-list { flex-direction: row; flex-wrap: wrap; }
   html[data-standalone] .dshm-nav-ind { display: none; }
@@ -1112,7 +1107,7 @@ html[data-standalone] .dshm-wall-graph {
 }
 @media (max-width: 1120px) {
   :root { --dshm-rail: 186px; --dshm-gap: 24px; }
-  .stage { padding: 22px 22px 48px; }
+  .stage { padding: 22px 22px 48px calc(var(--dshm-rail) + 38px); }
 }
 @media (max-width: 900px) {
   .topbar { top: 8px; width: calc(100% - 16px); margin-top: 8px; padding: 10px 12px; }

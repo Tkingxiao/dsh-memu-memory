@@ -359,7 +359,7 @@ test('backup manifest carries the lexicon store and skips unsafe names', async (
   const junk = path.join(dataDir(), 'lexicon', 'bad id.json')
   fs.mkdirSync(path.dirname(junk), { recursive: true })
   fs.writeFileSync(junk, '{}')
-  const created = backup.createBackup({ label: 'lexicon-ui' })
+  const created = await backup.createBackup({ label: 'lexicon-ui' })
   const manifest = JSON.parse(fs.readFileSync(path.join(created.dir, 'manifest.json'), 'utf8'))
   const rel = `lexicon/${lib.id}.json`
   assert.ok(manifest.files[rel], `manifest lists ${rel}`)

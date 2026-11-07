@@ -100,10 +100,10 @@ test('globalList({domain}) returns only that domain', async () => {
 
 // ---- §2.8 backups carry the prompt manifest
 
-test('a backup includes prompts/manifest.json', () => {
+test('a backup includes prompts/manifest.json', async () => {
   fs.mkdirSync(path.join(home, 'prompts'), { recursive: true })
   fs.writeFileSync(path.join(home, 'prompts', 'manifest.json'), '{"version":1}')
-  const dest = state.backupDatabases()
+  const dest = await state.backupDatabases()
   assert.ok(fs.existsSync(path.join(dest, 'prompts', 'manifest.json')), 'prompt manifest must be in the backup')
 })
 

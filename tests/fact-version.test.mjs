@@ -120,6 +120,24 @@ test('relation targets must exist, be active and share the scope', async () => {
   assert.ok(!Object.values(stored).some((entry) => entry.title === '坏目标'), 'nothing is written when the target is invalid')
 })
 
+test('explicit provenance derives local authority and evidence without extra card text', async () => {
+  const { exec } = session('fact-authority')
+  const quoted = await memory.privateRemember({
+    exec, title: '报价确认', content: '他确认报价是三十万。',
+    source: 'user_said', quoteSpan: { seq: 8, turn: 2, textHash: 'abc' },
+  })
+  assert.equal(quoted.entry.fact_authority, 3)
+  assert.deepEqual(quoted.entry.fact_evidence, { seq: 8, turn: 2, textHash: 'abc' })
+
+  const guessed = await memory.privateRemember({
+    exec, title: '报价猜测', content: '我猜报价大概是三十万。',
+  })
+  assert.equal(guessed.entry.fact_authority, 1)
+
+  const corrected = await memory.privateUpdate({ exec, id: guessed.id, source: 'user_said' })
+  assert.equal(corrected.entry.fact_authority, 3, 'correcting provenance re-derives authority')
+})
+
 test('a derived fact_key is stored even without an explicit key', async () => {
   const { exec } = session('fact-derived')
   const { entry } = await memory.privateRemember({ exec, title: '窗台的绿萝', content: '窗台有一盆绿萝。' })
