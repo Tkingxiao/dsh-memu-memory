@@ -10,7 +10,7 @@ process.env.DSH_MEMU_HOME = home
 const state = await import('../lib/state.js')
 const activity = await import('../lib/activity-log.js')
 const forkModel = await import('../lib/fork-model.js')
-const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY, CONSOLIDATION_WINDOW_EVENTS, compactSeedEvents, selectConsolidationWindow, selectTailTurnWindow } = await import('../lib/private.js')
+const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY, CONSOLIDATION_WINDOW_EVENTS, compactSeedEvents, selectConsolidationWindow, selectTailTurnWindow, mustCoverCandidates, mergeMustCover, candidateCovered } = await import('../lib/private.js')
 
 test.after(() => {
   forkModel.disposeConsolidationRoute()
@@ -431,7 +431,48 @@ test('a manual re-check starts at a complete turn instead of mid-step', () => {
   assert.equal(window.throughSeq, 4, 'the window ends on a closed turn')
 })
 
-test('the same failed snapshot stops re-forking after the failure cap', async () => {
+test('must-cover candidates keep the high-signal turn and its seq range', () => {
+  const events = [
+    { seq: 0, type: 'turn/start', data: {} },
+    { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '说好周末拿给阿兰换伞骨，记得带过去。' }] } },
+    { seq: 2, type: 'turn/end', data: {} },
+    { seq: 3, type: 'turn/start', data: {} },
+    { seq: 4, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '今天天气不错。' }] } },
+    { seq: 5, type: 'turn/end', data: {} },
+  ]
+  const rows = mustCoverCandidates(events, { max: 4 })
+  assert.equal(rows.length, 1, 'a low-signal turn is not a must-cover candidate')
+  assert.equal(rows[0].fromSeq, 0)
+  assert.equal(rows[0].throughSeq, 2)
+  assert.equal(rows[0].tag, '人物/关系')
+  assert.match(rows[0].text, /阿兰/)
+})
+
+test('mergeMustCover puts carried candidates first and reserves room for fresh ones', () => {
+  const carry = Array.from({ length: 6 }, (_, i) => ({ text: 'carry' + i, fromSeq: i, throughSeq: i, tag: '事实' }))
+  const fresh = Array.from({ length: 6 }, (_, i) => ({ text: 'fresh' + i, fromSeq: i, throughSeq: i, tag: '事实' }))
+  const merged = mergeMustCover(carry, fresh)
+  assert.equal(merged.length, 8)
+  assert.deepEqual(merged.slice(0, 4).map((row) => row.text), ['carry0', 'carry1', 'carry2', 'carry3'])
+  assert.deepEqual(merged.slice(4).map((row) => row.text), ['fresh0', 'fresh1', 'fresh2', 'fresh3'])
+  assert.ok(merged.slice(0, 4).every((row) => row.carried === true))
+  assert.equal(mergeMustCover([{ text: 'same' }], [{ text: 'same' }]).length, 1, 'duplicates are dropped')
+})
+
+test('a candidate is covered only when a written entry carries the fact', () => {
+  const index = {
+    entries: {
+      'mem-1': { title: '楼下修伞的阿兰', content: '说好周末拿折伞给她换伞骨，布不用动。' },
+      'mem-2': { title: '同事叶楠生日是八月十八号', content: '叶楠生日八月十八号。' },
+    },
+  }
+  assert.equal(candidateCovered({ text: '说好周末拿给阿兰换伞骨' }, ['mem-1'], index), true)
+  assert.equal(candidateCovered({ text: '叶楠生日八月十八号' }, ['mem-2'], index), true)
+  assert.equal(candidateCovered({ text: '父亲不吃芹菜' }, ['mem-1'], index), false)
+  assert.equal(candidateCovered({ text: '父亲不吃芹菜' }, [], index), false, 'no writes means no coverage')
+})
+
+test('the same failed snapshot stops automatic re-forking after the failure cap', async () => {
   state.ensureSession('fork-failcap', { cwd: path.join(home, 'proj-failcap'), agentPreset: 'coding' })
   const ctx = host({ live: true, turnReason: { kind: 'error', error: { message: 'provider refused' } } })
   const first = await requestPrivateConsolidation(ctx, 'fork-failcap', { force: true })
@@ -439,10 +480,15 @@ test('the same failed snapshot stops re-forking after the failure cap', async ()
   assert.equal(first.ok, false)
   assert.equal(second.ok, false)
   assert.equal(ctx.rec.created.length, 2, 'two real attempts happen')
-  const third = await requestPrivateConsolidation(ctx, 'fork-failcap', { force: true })
+  // 自动路径仍然受上限约束：同一快照连续失败 2 次后不再付第三次 fork 成本。
+  const third = await requestPrivateConsolidation(ctx, 'fork-failcap')
   assert.equal(third.ok, true)
   assert.equal(third.skipped, 'snapshot-failed')
-  assert.equal(ctx.rec.created.length, 2, 'the third call does not pay for the same snapshot again')
+  assert.equal(ctx.rec.created.length, 2, 'the automatic call does not pay for the same snapshot again')
+  // 手动整理是明确的一次再决定：force 不受上限约束（否则冻结回放/用户重试会被永久卡住）。
+  const forcedAgain = await requestPrivateConsolidation(ctx, 'fork-failcap', { force: true })
+  assert.equal(forcedAgain.ok, false)
+  assert.equal(ctx.rec.created.length, 3, 'a manual retry is allowed past the cap')
 })
 
 // ---------------------------------------------------------------- PTC 兼容
@@ -478,16 +524,16 @@ test('a PTC session (run_code only header) is consolidated and the worker gets w
   assert.equal(result.ok, true, 'a run_code header must not block consolidation: ' + String(result.error || ''))
   assert.equal(result.settled, true)
   assert.equal(ctx.rec.created.length, 1, 'the fork is created for the PTC conversation')
-  // 只挂 worker 的读写面（记忆读写 + 关联裁决/候选 + 词典检索/写入）；
-  // archive/delete/unpin 这些破坏性工具不得进 worker 的工具面。
-  assert.deepEqual([...registered].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  // 只挂 worker 真正用到的读写面（remember/update/link_suggest/list/recall/status）；
+  // lexicon、private_link、archive/delete/unpin 这些用不到或破坏性的工具不进 worker 面。
+  assert.deepEqual([...registered].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
   // 整理结束（finally）必须卸载挂载，不能给这条一次性 worker 留常驻注册。
-  assert.deepEqual([...disposals].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.deepEqual([...disposals].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
   // 全量挂载的活动元数据：attached=实际子集（此处=完整 wanted）、requested=完整 wanted、
   // partial=false。三件一起钉住"成功路径不再含糊"。
   const started = startedEntryFor(ctx, 'fork-ptc')
-  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
   assert.equal(started.detail.workerToolsPartial, false, 'a full mount is not partial')
   const followup = ctx.rec.forkFollowups[0]?.message
   const brief = Array.isArray(followup?.content)
@@ -529,14 +575,14 @@ test('a host registry refusing one write tool leaves a structured partial mount 
   const result = await requestPrivateConsolidation(ctx, 'fork-ptc-partial')
   assert.equal(result.ok, true, String(result.error || ''))
   assert.equal(result.settled, true)
-  assert.deepEqual([...registered].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update'],
+  assert.deepEqual([...registered].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update', 'memu_status'],
     'exactly the tools that actually registered are mounted')
-  assert.deepEqual([...disposals].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update'],
+  assert.deepEqual([...disposals].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update', 'memu_status'],
     'dispose unmounts exactly what was mounted')
   const started = startedEntryFor(ctx, 'fork-ptc-partial')
-  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update'],
+  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update', 'memu_status'],
     'the log records the actual subset, not the full wanted list')
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
   assert.equal(started.detail.workerToolsPartial, true)
   // 挂载为部分子集时任务书仍带 PTC 调用形态：worker 知道写记忆走 run_code 的 SDK 绑定。
   const followup = ctx.rec.forkFollowups[0]?.message
@@ -557,7 +603,7 @@ test('a fork context without a tools service records a null mount, the request a
   assert.equal(result.ok, true, String(result.error || ''))
   const started = startedEntryFor(ctx, 'fork-ptc-notools')
   assert.equal(started.detail.workerToolsAttached, null, 'no mount completed, so the log must not claim one')
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_lexicon_propose', 'memu_lexicon_search', 'memu_private_link', 'memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
   assert.equal(started.detail.workerToolsPartial, true)
 })
 

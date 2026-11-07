@@ -187,8 +187,8 @@ test('every consolidation prompt tells the model how to write the field', () => 
 
 test('the remember tool tells the model to resolve a relative day', () => {
   const source = fs.readFileSync(fileURLToPath(new URL('../lib/tools.js', import.meta.url)), 'utf8')
-  assert.ok(source.includes('A relative day'), 'the tool description must mention relative days')
-  assert.ok(source.includes('turns one appointment into a yearly reminder'), 'and why it matters')
+  assert.ok(source.includes('Resolve 今天/明天/下周 to the absolute date'), 'the tool description must mention relative days')
+  assert.ok(source.includes('never send a bare MM-DD for a one-off'), 'and why it matters')
 })
 
 // ------------------------------------- D: freshness hint is conditional and bounded

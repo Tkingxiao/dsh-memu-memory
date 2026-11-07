@@ -45,7 +45,7 @@ test('the consolidation page and worker brief carry the same field contract', ()
     snapshot: { fromSeq: 1, throughSeq: 2, eventCount: 2, hash: 'prompt-128' },
     probe: { tools: ['memu_private_remember', 'memu_private_update'] },
   })
-  for (const needle of ['speaker_id', 'source_kind', 'absolute_date', 'conflicts_with', 'supersedes', 'commitment', 'assistant_said', '每窗最多新增 10 条']) {
+  for (const needle of ['speaker_id', 'source_kind', 'absolute_date', 'conflicts_with', 'supersedes', 'commitment', 'assistant_said', '每窗最多新增 8 条']) {
     assert.ok(brief.includes(needle), `worker brief is missing ${needle}`)
   }
 })

@@ -1,5 +1,27 @@
 # 更新日志 / Changelog
 
+## [1.3.0] - 2026-11-08
+
+> 整理成本与可靠性：worker 工具面 14 → 6、remember/update schema 压缩、窗口 500 事件 / 每窗上限 8 条；新增本地零 Token 的“必写候选”与跨窗顺延；回执对账改为以库 diff 为权威，`snapshot-failed` 不再被当成完成。两组匿名测试（共 9 题）综合 Token 比 1.2.7 下降 **21.8%**，其中硬题组下降 **32.9%**。未重跑 714 全量，不把 1.2.7 的旧成绩写成 1.3.0 成绩。
+
+### 整理成本
+
+- **worker 工具面 14 → 6**：只挂 `remember` / `update` / `link_suggest` / `list` / `recall` / `status`，schema 从 22,217 字符降到 10,283；`remember` 9,105 → 5,449，`update` 4,756 → 3,224。
+- **窗口与条数**：`CONSOLIDATION_WINDOW_EVENTS` 300 → **500**；每窗最多新增 **8** 条，正文 50–170 字；结束条件从“每窗 10 条长文”改为“有明确事实就写、宁可短而准”。
+- **必写候选（本地零 Token）**：整理前按 salience ≥3 抽最多 8 条带 seq 的候选注入任务书；本窗没写进库的候选记入账本 `carry`，下一窗优先带 4 条、其余名额留给新候选，最后一窗也在同一份任务书里看到它们——不额外开补写 fork。
+- **候选核验**：日期命中或 ≥2 个有效 bigram（带停用词表）判定覆盖，纯本地比对，不增加模型调用。
+- **RP 页与任务书对齐**：`private-consolidation.rp.md` 的 10 条 → 8 条、正文 60–180 → 50–170；“宁可少写”改为只约束单条正文精度，不再暗示少记事实；人物首次出现/换人接手/称呼变化必须单独成条。
+
+### 整理可靠性
+
+- **回执以库 diff 为权威**：本窗新建后再 update、重试重复引用已落库 id、active 条目被写成 held，都不再让整份回执作废；仍拦“引用不存在的 id”和“声称写了但库里零变化”。
+- **`snapshot-failed` 不再算完成**：失败上限只约束自动触发，`force: true` 的手动/评测重试可以越过；评测端遇到 `snapshot-failed` 直接报错，不再静默截断游标。
+- **held 语义放宽**：`pending_review` 或带 `conflictingWith` / `duplicateOf` / `reviewReason` 都算“暂扣证据”，不再要求必须是 `pending_review`。
+
+### 门禁
+
+- `npm test`：**1532 tests / 1530 pass / 0 fail / 2 skipped**；`node scripts/acceptance-local.mjs`：**50/50**；`npm run check`：全部通过。
+
 ## [1.2.9] - 2026-11-07
 
 > 召回质量与运维硬化：本地词法腿换 BM25、槽位感知去重；图扩展只补空位、事实账本排序；记忆包校验/整批回滚、删除可预演可恢复、绑定与向量代际 GC；并修复大屏/全屏 MemU WebUI 切换记忆库时的闪烁与卡片丢失。无新增 LLM 调用、提示词或注入 token，topK 与预算默认值不变。

@@ -30,7 +30,7 @@
 > [!WARNING]
 > **早期版本提示。** 本插件仍处于早期阶段，可能存在无法预见的错误、bug 或不兼容变更。请先备份数据；欢迎[提交 Issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) 或 PR 帮助改进。
 
-> **状态：** 1.2.9。首个公开发布版本为 1.0.0。细节文档已迁到 [`docs/`](docs/)，[`AGENTS.md`](AGENTS.md) 只做索引。升级前请备份 `~/.dsh/dsh-memu-memory`；如果要存无法重建的数据，请先读[兼容性与边界](#兼容性与边界)。
+> **状态：** 1.3.0。首个公开发布版本为 1.0.0。细节文档已迁到 [`docs/`](docs/)，[`AGENTS.md`](AGENTS.md) 只做索引。升级前请备份 `~/.dsh/dsh-memu-memory`；如果要存无法重建的数据，请先读[兼容性与边界](#兼容性与边界)。
 
 ## 基准测试
 

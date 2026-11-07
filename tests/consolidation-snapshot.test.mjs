@@ -281,7 +281,7 @@ test('auxiliary link and lexicon tools alone do not prove the worker can write m
   assert.equal(probe.hasWrite, false)
 })
 
-test('the brief teaches the suggest-then-adjudicate loop and lexicon extraction', () => {
+test('the brief teaches the suggest-then-adjudicate loop and the receipt buckets', () => {
   const brief = buildWorkerBrief({
     snapshot: { fromSeq: 0, throughSeq: 5, eventCount: 6, hash: 'brief01' },
     probe: { tools: ['memu_private_remember', 'memu_private_update', 'memu_private_link_suggest', 'memu_lexicon_propose'] },
@@ -289,13 +289,10 @@ test('the brief teaches the suggest-then-adjudicate loop and lexicon extraction'
   })
   assert.match(brief, /memu_private_link_suggest\(\{ids:\[\.\.\.\]\}\)/, 'the call shape is spelled out')
   assert.match(brief, /已经自动连好/, 'high-confidence links are applied before the worker sees candidates')
-  assert.match(brief, /每轮最多确认 5 条/)
-  assert.match(brief, /noop/)
-  assert.match(brief, /conflict/)
-  assert.match(brief, /memu_lexicon_search/)
-  assert.match(brief, /memu_lexicon_propose/)
-  assert.match(brief, /term 是索引键/)
-  assert.match(brief, /sensitive trigger/)
+  assert.match(brief, /每窗最多新增 8 条/)
+  assert.match(brief, /heldIds/)
+  // 整理 worker 只挂用得到的 6 个工具：词典/lexicon 不再出现在任务书里。
+  assert.doesNotMatch(brief, /memu_lexicon|term 是索引键|sensitive trigger/)
   assert.match(brief, /tools-unavailable/, 'the tools-unavailable contract survives')
   assert.match(brief, /没有回执视为本次整理失败/, 'the receipt requirement survives')
   assert.match(brief, /BRIEF-CONTRACT/)
@@ -346,7 +343,7 @@ test('a mixed surface (run_code beside native memu_*) proves write ability and k
     probe,
     contract: 'MIXED-CONTRACT',
   })
-  assert.match(brief, /run_code, memu_private_remember, memu_private_update/, 'the brief lists the native names')
+  assert.match(brief, /memu_private_remember, memu_private_update/, 'the brief lists the allowed native names')
   assert.match(brief, /await tools\.memu_private_remember/, 'the brief keeps the PTC SDK invocation shape on a mixed surface')
   assert.match(brief, /MIXED-CONTRACT/)
 })
@@ -396,4 +393,23 @@ test('the worker brief carries the range, the tools and the receipt contract', (
   assert.match(brief, /RECEIPT-CONTRACT-MARKER/)
   assert.match(brief, /手动/)
   assert.match(brief, /tools-unavailable/)
+})
+
+test('the worker brief renders the must-cover checklist with seq ranges', () => {
+  const brief = buildWorkerBrief({
+    snapshot: { fromSeq: 998, throughSeq: 1211, eventCount: 214, hash: 'opt6' },
+    probe: { tools: ['memu_private_remember'] },
+    contract: '',
+    mustCover: [
+      { fromSeq: 1080, throughSeq: 1085, tag: '人物/关系', text: '说好周末拿给阿兰换伞骨' },
+      { fromSeq: 1152, throughSeq: 1157, tag: '人物/关系', text: '普法折页，小圆负责入口登记' },
+      { fromSeq: 0, throughSeq: 0, tag: '事实', text: '父亲不吃芹菜', carried: true, observedAt: '2026-05-17T12:00:00+08:00' },
+    ],
+  })
+  assert.match(brief, /本窗必写候选/)
+  assert.match(brief, /第 1080–1085 条 · 人物\/关系/)
+  assert.match(brief, /阿兰/)
+  assert.match(brief, /小圆负责入口登记/)
+  assert.match(brief, /顺延 · 事件时间 2026-05-17/)
+  assert.match(brief, /来自之前窗口/)
 })

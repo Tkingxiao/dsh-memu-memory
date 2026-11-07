@@ -260,12 +260,55 @@ test('an unchanged existing id cannot prove an update', () => {
   assert.match(reconciled.problems.join(' '), /no verified post-worker change/)
 })
 
-test('a held id must really be pending_review', () => {
+test('a held claim on an active entry is ignored, not fatal', () => {
   const index = { entries: { 'mem-1': { status: 'active' } } }
   const parsed = receipt.parseReceipt(fence({ status: 'completed', outcome: 'no_value', heldIds: ['mem-1'], checkedRange: { fromSeq: 0, throughSeq: 4 } }))
   const reconciled = receipt.reconcileReceipt({ receipt: parsed.receipt, index })
-  assert.equal(reconciled.ok, false)
-  assert.match(reconciled.problems.join(' '), /not pending_review/)
+  // 库是权威：worker 说「暂扣」但条目正常落库时，不把整份回执退回。
+  assert.equal(reconciled.ok, true)
+  assert.deepEqual(reconciled.heldIds, [])
+})
+
+test('a held claim is accepted when the entry carries a conflict marker', () => {
+  const index = { entries: { 'mem-1': { status: 'active', conflictingWith: 'mem-2', reviewReason: '说法相反' } } }
+  const parsed = receipt.parseReceipt(fence({ status: 'completed', outcome: 'no_value', heldIds: ['mem-1'], checkedRange: { fromSeq: 0, throughSeq: 4 } }))
+  const reconciled = receipt.reconcileReceipt({ receipt: parsed.receipt, index })
+  assert.equal(reconciled.ok, true)
+  assert.deepEqual(reconciled.heldIds, ['mem-1'])
+})
+
+test('a memory created and updated in the same window is a create, not a failed update', () => {
+  const index = { entries: { 'mem-new': { status: 'active', content: 'final' }, 'mem-old': { status: 'active', content: 'same' } } }
+  const parsed = receipt.parseReceipt(fence({
+    status: 'completed', outcome: 'mixed', createdIds: ['mem-new'], updatedIds: ['mem-new', 'mem-old'], checkedRange: { fromSeq: 0, throughSeq: 4 },
+  }))
+  const reconciled = receipt.reconcileReceipt({
+    receipt: parsed.receipt,
+    index,
+    beforeIds: new Set(['mem-old']),
+    beforeEntries: { 'mem-old': receipt.entryFingerprint({ status: 'active', content: 'same' }) },
+  })
+  assert.equal(reconciled.ok, true)
+  assert.deepEqual(reconciled.createdIds, ['mem-new'])
+  assert.deepEqual(reconciled.updatedIds, [])
+  assert.equal(reconciled.outcome, 'created')
+})
+
+test('a retry may report a previous attempt write as created without failing', () => {
+  const index = { entries: { 'mem-prev': { status: 'active', content: 'v2' } } }
+  const parsed = receipt.parseReceipt(fence({
+    status: 'completed', outcome: 'created', createdIds: ['mem-prev'], checkedRange: { fromSeq: 0, throughSeq: 4 },
+  }))
+  const reconciled = receipt.reconcileReceipt({
+    receipt: parsed.receipt,
+    index,
+    beforeIds: new Set(['mem-prev']),
+    beforeEntries: { 'mem-prev': receipt.entryFingerprint({ status: 'active', content: 'v1' }) },
+  })
+  assert.equal(reconciled.ok, true)
+  assert.deepEqual(reconciled.duplicateIds, ['mem-prev'])
+  assert.deepEqual(reconciled.updatedIds, ['mem-prev'])
+  assert.equal(reconciled.outcome, 'updated')
 })
 
 test('decideCompletion: proof advances, guesswork does not', () => {
@@ -295,4 +338,22 @@ test('decideCompletion never settles a silent worker on its own', () => {
   const unattributed = receipt.decideCompletion({ text: '', wrote: 2 })
   assert.equal(unattributed.advance, false)
   assert.match(unattributed.error, /receipt|cannot settle/i)
+})
+
+test('carry candidates survive the ledger round-trip and stay bounded', () => {
+  ledger.setCarryCandidates('carry-1', [
+    { fromSeq: 1080, throughSeq: 1085, tag: '人物/关系', text: '说好周末拿给阿兰换伞骨', observedAt: '2026-05-17T12:00:00+08:00' },
+    { fromSeq: 1152, throughSeq: 1163, tag: '人物/关系', text: '普法折页：小圆先登记，后换阿梁接手' },
+  ])
+  const rows = ledger.readCarryCandidates('carry-1')
+  assert.equal(rows.length, 2)
+  assert.deepEqual(rows[0], {
+    fromSeq: 1080, throughSeq: 1085, score: 0, tag: '人物/关系',
+    text: '说好周末拿给阿兰换伞骨', observedAt: '2026-05-17T12:00:00+08:00',
+  })
+  const many = Array.from({ length: 12 }, (_, i) => ({ text: '候选 ' + i }))
+  ledger.setCarryCandidates('carry-1', many)
+  assert.equal(ledger.readCarryCandidates('carry-1').length, ledger.CARRY_LIMIT, 'the carry list is capped')
+  ledger.setCarryCandidates('carry-1', [])
+  assert.deepEqual(ledger.readCarryCandidates('carry-1'), [], 'a covered window clears the carry')
 })
