@@ -281,20 +281,21 @@ test('auxiliary link and lexicon tools alone do not prove the worker can write m
   assert.equal(probe.hasWrite, false)
 })
 
-test('the brief teaches the suggest-then-adjudicate loop and the receipt buckets', () => {
+test('the brief teaches direct writes with the injected catalog and the receipt buckets', () => {
   const brief = buildWorkerBrief({
     snapshot: { fromSeq: 0, throughSeq: 5, eventCount: 6, hash: 'brief01' },
-    probe: { tools: ['memu_private_remember', 'memu_private_update', 'memu_private_link_suggest', 'memu_lexicon_propose'] },
+    probe: { tools: ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'] },
     contract: 'BRIEF-CONTRACT',
   })
-  assert.match(brief, /memu_private_link_suggest\(\{ids:\[\.\.\.\]\}\)/, 'the call shape is spelled out')
-  assert.match(brief, /已经自动连好/, 'high-confidence links are applied before the worker sees candidates')
-  assert.match(brief, /每窗最多新增 8 条/)
-  assert.match(brief, /heldIds/)
-  // 整理 worker 只挂用得到的 6 个工具：词典/lexicon 不再出现在任务书里。
+  assert.match(brief, /memu_private_remember_batch\(\{items:\[\.\.\.\]\}\)/, 'the batch call shape is spelled out')
+  assert.match(brief, /目录和召回命中已经给出/, 'catalog and local recall replace the read round')
+  assert.match(brief, /不要再检索/, 'the worker must not open a list/recall round')
+  assert.match(brief, /总数仍不超过 8 条/)
+  assert.doesNotMatch(brief, /heldIds/, 'the auto receipt owns the id buckets')
+  assert.doesNotMatch(brief, /memu_private_link_suggest|memu_private_recall|memu_private_list/)
   assert.doesNotMatch(brief, /memu_lexicon|term 是索引键|sensitive trigger/)
   assert.match(brief, /tools-unavailable/, 'the tools-unavailable contract survives')
-  assert.match(brief, /没有回执视为本次整理失败/, 'the receipt requirement survives')
+  assert.match(brief, /没有回执视为本次整理失败/, 'the receipt requirement survives when auto receipt is off')
   assert.match(brief, /BRIEF-CONTRACT/)
 })
 

@@ -63,7 +63,7 @@ identity、preferences、working_style、tooling、domain_profile、do_not_assum
 
 第六步：写条目
 中性第三人称，简洁，可执行。不要用角色口吻，不要写“我觉得”。
-每条带 evidence（session_id + 一句原文/事件）和 confidence（0-1）。
+每条 content ≤300 字；每条带 evidence（session_id + 恰好 1 条 quote，quote ≤200 字）和 confidence（0-1）。
 引用只能来自输入中确实存在的说话人与片段；摘要就写成摘要，不伪装逐字引语，不编造 session_id。群聊先核对是谁说的，不把其他成员或角色的喜好归给当前用户；凭据与私密信息不能出现在 evidence 里。
 不要写“用户聊了很多项目的事”这种总结；
 要写“用户在 coding 任务中偏好先给结论，再给细节”。
@@ -75,10 +75,13 @@ identity、preferences、working_style、tooling、domain_profile、do_not_assum
 - 标题是给以后检索用的目录项，不是文采展示；拿不准就把结论写进标题。
 
 上限（代码会截断，超出部分直接丢弃）：
-- memories ≤80；
+- memories ≤24；
+- 每条 content ≤300 字；
 - link 与 absorb 合计 ≤20；其中 absorb ≤8；
 - 每条 link note 8-500 字；
-- 每条 evidence 的 quote 必须来自输入会话原文。
+- 每条 evidence 恰好 1 条 quote、quote ≤200 字，且必须来自输入会话原文；
+- sessions 每条只写 id、domain 和 ≤20 字的 reason；
+- domain_summary 每个域 ≤20 字。
 
 输出 JSON：
 {

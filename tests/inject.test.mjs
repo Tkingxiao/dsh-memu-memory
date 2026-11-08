@@ -238,7 +238,7 @@ test('buildRecall injects the title card, not the body', async () => {
   assert.ok(recall.ids.includes('mem-recall-title'))
   assert.ok(recall.text.includes('部署脚本的位置'), 'the title is the card')
   assert.ok(recall.text.includes('[mem-recall-title]'), 'the id stays quotable')
-  assert.match(recall.text, /条目是标题卡/, 'the block tells the model how to use a title card')
+  assert.match(recall.text, /标题卡/, 'the block tells the model how to use a title card')
   assert.ok(recall.text.includes('memu_private_recall'), 'and which tool returns the body')
   assert.equal(recall.text.includes('RECALL-BODY-ONLY'), false,
     'memu_private_recall still returns full text; the turn block does not')

@@ -328,6 +328,37 @@ test('decideCompletion: proof advances, guesswork does not', () => {
   assert.equal(silent.reasonCode, 'receipt-missing')
 })
 
+test('auto receipt synthesizes a verified receipt from the library diff', () => {
+  const autoReceipt = { jobId: 'cons-auto-1', snapshotHash: 'a'.repeat(64), checkedRange: { fromSeq: 0, throughSeq: 9 } }
+  const index = { entries: { 'mem-7': { status: 'active', content: 'new' } } }
+  const created = receipt.decideCompletion({
+    text: '整理完成，新增一条。', wrote: 1, index, beforeIds: new Set(), autoReceipt,
+  })
+  assert.equal(created.advance, true)
+  assert.equal(created.outcome, 'created')
+  assert.deepEqual(created.counted, { created: 1, updated: 0, held: 0 })
+  assert.equal(created.receipt.jobId, 'cons-auto-1')
+  assert.equal(created.receipt.checkedRange.throughSeq, 9)
+
+  const none = receipt.decideCompletion({
+    text: '这窗没有值得新增的内容。', wrote: 0, index: { entries: {} }, beforeIds: new Set(), autoReceipt,
+  })
+  assert.equal(none.advance, true)
+  assert.equal(none.outcome, 'no_value')
+
+  const unavailable = receipt.decideCompletion({
+    text: 'tools-unavailable: 没有写记忆工具。', wrote: 0, index: { entries: {} }, beforeIds: new Set(), autoReceipt,
+  })
+  assert.equal(unavailable.advance, false)
+  assert.equal(unavailable.reasonCode, 'tools-unavailable')
+
+  const silent = receipt.decideCompletion({
+    text: '', wrote: 0, index: { entries: {} }, beforeIds: new Set(), autoReceipt,
+  })
+  assert.equal(silent.advance, false)
+  assert.equal(silent.reasonCode, 'receipt-missing')
+})
+
 test('decideCompletion never settles a silent worker on its own', () => {
   // 结算空正文的规则已经上移到 private.js 的调用点：那里知道「worker 一个字没说、库里也没
   // 多出条目」这一种情形（见 tests/consolidation-fork.test.mjs 与 tests/cycle.test.mjs）。

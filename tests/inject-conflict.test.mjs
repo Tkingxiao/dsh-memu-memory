@@ -102,7 +102,7 @@ test('a conflict card that cannot fit falls back to the ordinary title cards', a
   const binding = state.getSessionBinding(sessionId)
   // The card's fact_key + two long titles cannot fit; a one-line title card still can.
   const build = await inject.buildRecall(binding, '旅行目的地', 1, {
-    ...state.getSettings(), privateTopK: 5, relevanceThreshold: 0, turnTokens: 150,
+    ...state.getSettings(), privateTopK: 5, relevanceThreshold: 0, turnTokens: 110,
   }, exec, sessionId)
   assert.deepEqual(build.errors, [])
   assert.equal(build.text.includes('冲突 ·'), false)

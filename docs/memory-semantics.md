@@ -159,7 +159,7 @@
 
 **词典生命周期。** 公开状态只有 `active` / `archived`：用户新建、模型 `memu_lexicon_propose`、curator 带证据抽取都直接 active；`archiveLexiconTerm` / `restoreLexiconTerm` 负责可逆退场，删除只属于管理面。`rejected` 只作为 legacy 墓碑/指纹留在数据里，UI、注入、检索与计数都看不到；`pending` 只作为旧版本迁移输入：新提案 → active（敏感 → archived），revision 草稿 → archived。敏感 trigger 的新建/修改只能由用户完成，模型/curator 得到 typed 拒绝；非用户修改普通 active 词条的敏感字段也直接拒绝，不再生成 pending revision。RPC 的 `lexiconReview` 已删除（方法数见 `docs/contributing.md` 的 rpc-method-count 标记）。**哪些词条进得来**是另一层：全局词典 + 同域跨库，见 §8.16。
 
-**私有自动关联。** 整理结算后 `lib/private-links.js` 只做本地算法：同库、同 context/track、可见非 secret、标题共享稀有 name-like token、pairScore < 0.82 且无冲突时，建立 memory↔memory `relation` 并写 `source:'auto'`；≥2 条记忆共享该 token 时复用/创建实体枢纽（人物信号 → `person`，无信号的拉丁名保守 → `thing`，CJK 无信号或 kind 冲突 → 不确定候选）。高置信写库在算法侧完成，不确定候选最多 8 对交给本次整理 worker 用 `memu_private_link_suggest` / `memu_private_link` 带证据裁决；不另起整理、不重读转录。算法/写入失败只记 warn，不能让已经成功的整理失败；自动关联不改正文、不写向量、不删除，边可在关系图移除。worker 写工具为 remember/update/link/link_suggest/lexicon_propose，读工具为 recall/list/lexicon_search，但「有没有写能力」仍只由 remember/update 判定。
+**私有自动关联。** 整理结算后 `lib/private-links.js` 只做本地算法：同库、同 context/track、可见非 secret、标题共享稀有 name-like token、pairScore < 0.82 且无冲突时，建立 memory↔memory `relation` 并写 `source:'auto'`；≥2 条记忆共享该 token 时复用/创建实体枢纽（人物信号 → `person`，无信号的拉丁名保守 → `thing`，CJK 无信号或 kind 冲突 → 不确定候选）。高置信写库在算法侧完成；1.3.1 起整理 worker 不再接收 `link_suggest`，不确定候选只留在本地算法结果里，需要时由主会话用 `memu_private_link` 裁决；不另起整理、不重读转录。算法/写入失败只记 warn，不能让已经成功的整理失败；自动关联不改正文、不写向量、不删除，边可在关系图移除。worker 写工具为 remember/remember_batch/update，读工具为空（记忆目录与本地召回由插件在种子开头注入），但「有没有写能力」仍只由 remember/update 判定。
 
 ### 8.14 日期联动、到点唤醒与实体合并（1.2.3）
 

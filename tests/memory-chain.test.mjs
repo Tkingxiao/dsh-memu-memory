@@ -11,6 +11,7 @@ const { registerTools } = await import('../lib/tools.js')
 const state = await import('../lib/state.js')
 const inject = await import('../lib/inject.js')
 const { dispatch } = await import('../lib/rpc.js')
+const { memoryRecallEvent } = await import('../lib/private.js')
 
 test.after(() => {
   try { fs.rmSync(home, { recursive: true, force: true }) } catch {}
@@ -137,4 +138,31 @@ test('the real tool → recall → injection chain is reachable and carries S1�
   for (const key of ['hits', 'misses', 'evictions', 'errors', 'staleSkipped']) {
     assert.equal(typeof view.recallCache[key], 'number', key)
   }
+})
+
+test('memoryRecallEvent gives the worker local hits without a recall round', async () => {
+  const tools = registeredTools()
+  const cwd = path.join(home, 'project-worker-recall')
+  const sessionId = 'worker-recall-session'
+  state.ensureSession(sessionId, { cwd, agentPreset: 'rp' })
+  state.setSessionBinding(sessionId, { sceneTime: '2026-11-06T04:00:00.000Z' })
+  const exec = { agent: { session: { header: { id: sessionId, cwd, agentPreset: 'rp' } } } }
+  await tools.get('memu_private_remember').execute({
+    content: '明天下午三点在码头见面，别迟到。',
+    title: '明天码头见面',
+    source: 'user_said',
+    speaker_id: 'user',
+  }, exec)
+  const binding = state.getSessionBinding(sessionId)
+  const event = memoryRecallEvent({
+    binding: { ...binding, sessionId },
+    candidates: [{ text: '码头 见面 三点' }],
+    events: [],
+  })
+  assert.ok(event, 'a local hit exists for a matching candidate')
+  assert.equal(event.data.source.summary, 'memory-recall')
+  const body = event.data.content[0].text
+  assert.match(body, /memory-recall/)
+  assert.match(body, /码头/)
+  assert.match(body, /mem-[a-z0-9]+-[a-z0-9]+/i, 'the hit carries a real id for update')
 })

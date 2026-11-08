@@ -1,5 +1,28 @@
 # 更新日志 / Changelog
 
+## [1.3.1] - 2026-11-08
+
+> 整理成本与注入瘦身：worker 只留写工具、回执本地合成、批量写、最小整理回合顺延；注入侧修 guide 预算与锚点重投；工具返回值脱敏与分页。
+
+### 整理
+
+- worker 工具面改为 `remember` / `remember_batch` / `update`，读工具为空；记忆目录与 BM25 召回由插件在种子开头注入（零模型调用）。
+- 回执改为库前后 diff 本地合成，新增 `receipt-unverified` 守卫；batch 参数 JSON 畸形时下一轮降级为逐条 remember。
+- 新增 `consolidationReasoningEffort`（默认 **medium**）；实测 off 省 47% 整理成本但 50 题 40/50，medium 48/50。
+- 最小整理回合：增量 <3 个真人回合先顺延，累计 ≥10 回合或 ≥200 事件强制整理；首次整理与饥饿放行。
+- 种子 caps：工具结果 1200→1100、工具调用 600→500，正文 12000 不变。
+
+### 注入
+
+- guide 只在“本步真投”时预扣预算；锚点哨兵改为 `anchorPushed` 独立记账，不再被 400 条上限挤出重投。
+- 召回引言压缩、标题卡省略默认 `source`/`layer`、时效提示压到一行；guide 渲染加文件签名缓存。
+
+### 工具与后台
+
+- `memu_private_list` 默认分页 50（上限 200）；relationship 只回一行摘要；全局召回与词典输出统一脱敏；召回结果省略默认 `layer`/`status`/`source` 与 `domain=unknown`（非默认值仍输出，sha256 保持完整）。
+- engine 版本探测修正 info-only 响应；`autoCurateSessionLimit` UI 与 state/curator 对齐为 10。
+- 文档：更新 §8.13 worker 工具面与 `link_suggest` 描述。
+
 ## [1.3.0] - 2026-11-08
 
 > 整理成本与可靠性：worker 工具面 14 → 6、remember/update schema 压缩、窗口 500 事件 / 每窗上限 8 条；新增本地零 Token 的“必写候选”与跨窗顺延；回执对账改为以库 diff 为权威，`snapshot-failed` 不再被当成完成。两组匿名测试（共 9 题）综合 Token 比 1.2.7 下降 **21.8%**，其中硬题组下降 **32.9%**。未重跑 714 全量，不把 1.2.7 的旧成绩写成 1.3.0 成绩。

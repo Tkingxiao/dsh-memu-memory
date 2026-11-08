@@ -188,8 +188,8 @@ function ctxFor(events, onActivation) {
 }
 
 function promptInput(prompt) {
-  // The template ends with the pretty-printed JSON input.
-  const start = prompt.lastIndexOf('{\n  "sessions"')
+  // The template ends with the compact JSON input (C2 no longer pretty-prints).
+  const start = prompt.lastIndexOf('{"sessions"')
   assert.ok(start >= 0, 'the curator prompt should embed the JSON input')
   return JSON.parse(prompt.slice(start))
 }
@@ -240,6 +240,36 @@ test('condenseEvents keeps user/assistant/tool shapes and drops every plugin mes
   assert.equal((transcript.match(new RegExp(M.toolArgs, 'g')) || []).length, 2,
     'both tool-call argument shapes survive')
   assert.ok(!transcript.includes(M.toolTail), 'tool results are cut at 400 chars')
+})
+
+test('condenseEvents prefers tool/call events over duplicated assistant tool-call blocks', () => {
+  const marker = 'TOOLCALL-DEDUPE-1f9c'
+  const args = JSON.stringify({ query: marker })
+  const byId = condenseEvents([
+    { type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'call-1', name: 'memu_private_recall', arguments: args }] } } },
+    { type: 'tool/call', data: { callId: 'call-1', name: 'memu_private_recall', arguments: args } },
+  ])
+  assert.equal((byId.match(new RegExp(marker, 'g')) || []).length, 1, 'callId pairs the block with its event')
+  const bySignature = condenseEvents([
+    { type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', name: 'some_tool', arguments: '{"v":1}' }] } } },
+    { type: 'tool/call', data: { name: 'some_tool', arguments: '{"v":1}' } },
+  ])
+  assert.equal((bySignature.match(/Tool call:/g) || []).length, 1, 'without ids, name+arguments pairs the block')
+  const unpaired = condenseEvents([
+    { type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'call-2', name: 'some_tool', arguments: '{"v":2}' }] } } },
+  ])
+  assert.match(unpaired, /Tool call: some_tool/, 'a block with no matching event stays')
+})
+
+test('condenseEvents stops at the token budget while keeping the first line', () => {
+  const events = Array.from({ length: 100 }, (_, i) => ({
+    type: 'user/message',
+    data: { source: { kind: 'user' }, content: [{ type: 'text', text: `LINE-${i} ` + '长'.repeat(20) }] },
+  }))
+  const text = condenseEvents(events, 200000, { maxTokens: 20 })
+  assert.match(text, /truncated .* over token budget 20/)
+  assert.match(text, /LINE-0/)
+  assert.doesNotMatch(text, /LINE-99/)
 })
 
 test('six channels, layer by layer: transcript -> prompt -> simulated output -> committed index', async (t) => {

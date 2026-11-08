@@ -82,7 +82,7 @@ const facts = (id) => {
   const binding = state.getSessionBinding(id) || {}
   return {
     guide: binding.guideRulesKey || null,
-    anchor: (binding.injectedIds || []).includes(inject.ANCHOR_SENTINEL),
+    anchor: binding.anchorPushed === true || (binding.injectedIds || []).includes(inject.ANCHOR_SENTINEL),
     rollback: binding.injectionRollback || null,
     injected: (binding.injectedIds || []).filter((entry) => entry !== inject.ANCHOR_SENTINEL).length,
   }

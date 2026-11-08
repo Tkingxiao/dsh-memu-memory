@@ -240,7 +240,7 @@ test('a stale recalled memory appends exactly one freshness hint after the close
   assert.ok(recall.ids.includes('mem-fresh-deploy'))
   assert.ok(recall.ids.includes('mem-fresh-release'))
   assert.equal((recall.text.match(/<memory-freshness>/g) || []).length, 1, 'the hint appears exactly once')
-  assert.ok(recall.text.includes('上面有 2 条记忆带时间敏感信号'), 'N counts the unique stale entries')
+  assert.ok(recall.text.includes('2 条可能过时'), 'N counts the unique stale entries')
   assert.ok(recall.text.indexOf('<memory-freshness>') > recall.text.lastIndexOf('</memory-context>'),
     'the hint follows the last closed context block')
   assert.equal((recall.text.match(/<memory-context\b/g) || []).length, 1, 'recall still has one context block')
@@ -343,7 +343,7 @@ test('the hint is dropped when turnTokens cannot fit it, and the recall still su
 
   // The smallest budget that still fits the card cannot also fit the footnote.
   let squeezed = null
-  for (let extra = 0; extra <= 12 && !squeezed; extra += 1) {
+  for (let extra = 0; extra <= 40 && !squeezed; extra += 1) {
     const turnTokens = needed + extra
     const attempt = await recallFor('chain-freshness-budget', binding, '部署脚本放在哪里', { turnTokens })
     if (attempt.text) squeezed = { attempt, turnTokens }

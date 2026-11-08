@@ -11,6 +11,8 @@ const state = await import('../lib/state.js')
 const activity = await import('../lib/activity-log.js')
 const forkModel = await import('../lib/fork-model.js')
 const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY, CONSOLIDATION_WINDOW_EVENTS, compactSeedEvents, selectConsolidationWindow, selectTailTurnWindow, mustCoverCandidates, mergeMustCover, candidateCovered } = await import('../lib/private.js')
+// 这些用例验证“路由继承”，不是推理强度；默认 medium 由 config 测试单独覆盖。
+state.updateSettings({ consolidationReasoningEffort: 'inherit' })
 
 test.after(() => {
   forkModel.disposeConsolidationRoute()
@@ -526,14 +528,14 @@ test('a PTC session (run_code only header) is consolidated and the worker gets w
   assert.equal(ctx.rec.created.length, 1, 'the fork is created for the PTC conversation')
   // 只挂 worker 真正用到的读写面（remember/update/link_suggest/list/recall/status）；
   // lexicon、private_link、archive/delete/unpin 这些用不到或破坏性的工具不进 worker 面。
-  assert.deepEqual([...registered].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
+  assert.deepEqual([...registered].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
   // 整理结束（finally）必须卸载挂载，不能给这条一次性 worker 留常驻注册。
-  assert.deepEqual([...disposals].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
+  assert.deepEqual([...disposals].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
   // 全量挂载的活动元数据：attached=实际子集（此处=完整 wanted）、requested=完整 wanted、
   // partial=false。三件一起钉住"成功路径不再含糊"。
   const started = startedEntryFor(ctx, 'fork-ptc')
-  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
+  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
   assert.equal(started.detail.workerToolsPartial, false, 'a full mount is not partial')
   const followup = ctx.rec.forkFollowups[0]?.message
   const brief = Array.isArray(followup?.content)
@@ -575,14 +577,14 @@ test('a host registry refusing one write tool leaves a structured partial mount 
   const result = await requestPrivateConsolidation(ctx, 'fork-ptc-partial')
   assert.equal(result.ok, true, String(result.error || ''))
   assert.equal(result.settled, true)
-  assert.deepEqual([...registered].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update', 'memu_status'],
+  assert.deepEqual([...registered].sort(), ['memu_private_remember_batch', 'memu_private_update'],
     'exactly the tools that actually registered are mounted')
-  assert.deepEqual([...disposals].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update', 'memu_status'],
+  assert.deepEqual([...disposals].sort(), ['memu_private_remember_batch', 'memu_private_update'],
     'dispose unmounts exactly what was mounted')
   const started = startedEntryFor(ctx, 'fork-ptc-partial')
-  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_update', 'memu_status'],
+  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_remember_batch', 'memu_private_update'],
     'the log records the actual subset, not the full wanted list')
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
   assert.equal(started.detail.workerToolsPartial, true)
   // 挂载为部分子集时任务书仍带 PTC 调用形态：worker 知道写记忆走 run_code 的 SDK 绑定。
   const followup = ctx.rec.forkFollowups[0]?.message
@@ -603,7 +605,7 @@ test('a fork context without a tools service records a null mount, the request a
   assert.equal(result.ok, true, String(result.error || ''))
   const started = startedEntryFor(ctx, 'fork-ptc-notools')
   assert.equal(started.detail.workerToolsAttached, null, 'no mount completed, so the log must not claim one')
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_link_suggest', 'memu_private_list', 'memu_private_recall', 'memu_private_remember', 'memu_private_update', 'memu_status'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
   assert.equal(started.detail.workerToolsPartial, true)
 })
 
@@ -739,4 +741,33 @@ test('a bad host consolidationModel is refused with its own reason, not the pare
   } finally {
     restoreSettings()
   }
+})
+
+test('compactSeedEvents accepts the catalog and local recall as two read-only preludes', () => {
+  const user = {
+    seq: 10,
+    type: 'user/message',
+    time: 1,
+    sceneTime: '2026-11-06T04:00:00+08:00',
+    data: { source: { kind: 'user' }, content: [{ type: 'text', text: '明天码头见' }] },
+  }
+  const catalog = {
+    seq: 0,
+    type: 'user/message',
+    time: 1,
+    data: { source: { kind: 'plugin:dsh-memu-memory', form: 'notice', summary: 'memory-catalog' }, content: [{ type: 'text', text: '[memory-catalog]' }] },
+  }
+  const recall = {
+    seq: 0,
+    type: 'user/message',
+    time: 1,
+    data: { source: { kind: 'plugin:dsh-memu-memory', form: 'notice', summary: 'memory-recall' }, content: [{ type: 'text', text: '[memory-recall] [mem-1] 码头' }] },
+  }
+  const seed = compactSeedEvents([user], [catalog, recall])
+  assert.equal(seed.length, 3)
+  assert.deepEqual(seed.map((event) => event.seq), [0, 1, 2])
+  assert.equal(seed[0].data.source.summary, 'memory-catalog')
+  assert.equal(seed[1].data.source.summary, 'memory-recall')
+  assert.equal(seed[2].type, 'user/message')
+  assert.match(seed[2].data.content[0].text, /事件时间/)
 })

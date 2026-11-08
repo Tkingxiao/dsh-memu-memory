@@ -41,6 +41,7 @@ test('all v1 tools register', () => {
     'memu_private_link',
     'memu_private_link_suggest',
     'memu_private_remember',
+    'memu_private_remember_batch',
     'memu_private_recall',
     'memu_private_list',
     'memu_private_update',
@@ -54,10 +55,31 @@ test('all v1 tools register', () => {
   ]) {
     assert.ok(names.includes(name), `missing ${name}`)
   }
-  // Exactly thirteen, not "at least these twelve": a schema the host DSL refuses used to
+  // Exactly fourteen, not "at least these": a schema the host DSL refuses used to
   // abort registerTools() before any register() ran, so counting is the assertion
   // that actually catches a total registration failure.
-  assert.equal(names.length, 13, `expected 13 tools, got ${names.length}: ${names.join(', ')}`)
+  assert.equal(names.length, 14, `expected 14 tools, got ${names.length}: ${names.join(', ')}`)
+  dispose()
+})
+
+test('batch write applies shared defaults and reports each item', async () => {
+  const { tools, dispose } = fakeCtx()
+  const batch = tools.find((t) => t.name === 'memu_private_remember_batch')
+  const batchExec = {
+    agent: { session: { header: { id: 'tools-batch-session', cwd: path.join(home, 'project-batch'), agentPreset: 'coding' } } },
+  }
+  const reply = await batch.execute({
+    defaults: { speaker_id: 'user', source: 'user_said', observed_at: '2026-11-06T04:00:00+08:00' },
+    items: [
+      { title: '码头见面', content: '明天下午三点在码头见面，别迟到。' },
+      { title: '带伞', content: '她说码头风大，让我带把伞。' },
+    ],
+  }, batchExec)
+  assert.match(reply, /批量写入完成：新增 2/)
+  assert.match(reply, /1\. 已写入私有记忆/)
+  assert.match(reply, /2\. 已写入私有记忆/)
+  const empty = await batch.execute({ items: [] }, batchExec)
+  assert.match(empty, /items 为空/)
   dispose()
 })
 
@@ -68,7 +90,7 @@ test('status works without an engine', async () => {
   assert.match(status, /library:/)
   // The registration count is the visible signal for a refused schema: without it
   // a host that rejects the tool and a plugin that never had it look identical.
-  assert.match(status, /tools: 13\/13 registered/)
+  assert.match(status, /tools: 14\/14 registered/)
   dispose()
 })
 

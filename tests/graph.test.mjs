@@ -200,6 +200,27 @@ test('listEntities: without a session every entity returns, with a correct deriv
   assert.equal(graph.graphExport(lib).entities[drifting.id].linked, undefined, 'the derived flag is never written back')
 })
 
+test('recallRelations reuses its inverted index until the index file changes', () => {
+  const binding = state.ensureSession('graph-cache', { cwd: path.join(home, 'rp-cache'), agentPreset: 'rp' })
+  const lib = binding.libraryId
+  const entity = graph.createEntity({ libraryId: lib, name: 'CacheEntity' })
+  state.savePrivateIndex(lib, { entries: {
+    'mem-cache-a': { title: 'a', content: 'a', status: 'active', visibility: 'shared',
+      links: [{ to: entity.id, kind: 'person', note: 'CacheEntity is the person in this scene.', confidence: 0.8 }] },
+  } })
+  const first = graph.recallRelations(lib, state.loadPrivateIndex(lib), 'mem-cache-a', null)
+  const second = graph.recallRelations(lib, state.loadPrivateIndex(lib), 'mem-cache-a', null)
+  assert.deepEqual(second, first, 'an unchanged index returns the same edges')
+  state.updatePrivateIndex(lib, index => {
+    index.entries['mem-cache-b'] = { title: 'b', content: 'b', status: 'active', visibility: 'shared',
+      links: [{ to: 'mem-cache-a', kind: 'event', note: 'The same event seen from another side.', confidence: 0.9 }] }
+  })
+  const refreshed = graph.recallRelations(lib, state.loadPrivateIndex(lib), 'mem-cache-a', null)
+  assert.equal(refreshed.length, 2, 'a new index write invalidates the cached inverted index')
+  assert.ok(refreshed.some(item => item.id === 'mem-cache-b'))
+  assert.ok(refreshed.some(item => item.id === entity.id))
+})
+
 test('listEntities: with a session only visible references count, and relationship evidence is session-filtered too', () => {
   const binding = state.ensureSession('vis-scoped', { cwd: path.join(home, 'ws-vis-scoped'), agentPreset: 'rp' })
   const lib = binding.libraryId

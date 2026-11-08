@@ -222,7 +222,7 @@ test('title guidance ships in every consolidation page; tool workflow lives in t
 
   const { buildWorkerBrief } = await import('../lib/consolidation-worker.js')
   const brief = buildWorkerBrief({ snapshot: { fromSeq: 1, throughSeq: 2, eventCount: 2, hash: 'prompt-test' }, probe: null, contract: '' })
-  for (const rule of [/memu_private_remember/, /memu_private_update/, /memu_private_link_suggest/, /每窗最多新增 8 条/]) {
+  for (const rule of [/memu_private_remember/, /memu_private_update/, /memu_private_remember_batch/, /总数仍不超过 8 条/]) {
     assert.match(brief, rule, 'the local worker brief owns the tool workflow')
   }
   assert.match(prompts.CONSOLIDATION_CONTRACTS.remote, /8-40字/, 'the remote JSON contract uses the same title length')

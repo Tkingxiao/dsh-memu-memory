@@ -136,14 +136,14 @@ test('a verified receipt becomes the completion credential and advances the chec
   assert.equal(ctx.rec.disposed.length, 1)
 })
 
-test('a worker that reports but gives no receipt is a failure, not a success', async () => {
+test('a worker that claims writes but leaves no receipt or library change is a failure, not a success', async () => {
   const sessionId = 'cred-no-receipt'
   state.ensureSession(sessionId, { cwd: path.join(home, 'proj-nr'), agentPreset: 'standard' })
   const ctx = host({ workerText: '我把能记的都记下来了。' })
   const result = await requestPrivateConsolidation(ctx, sessionId, { force: true })
   assert.equal(result.ok, false)
   assert.equal(result.settled, false)
-  assert.equal(result.reasonCode, 'receipt-missing')
+  assert.equal(result.reasonCode, 'receipt-unverified')
   assert.match(result.error, /receipt/)
   assert.equal(state.getSessionBinding(sessionId).lastSleepSeq, undefined, 'without a credential the cursor must not advance')
   const job = ledger.sessionState(sessionId)
