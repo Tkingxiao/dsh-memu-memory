@@ -83,8 +83,13 @@ test('an explicit link source persists on the record and surfaces on graph edges
   const autoEdge = view.edges.find(edge => edge.from === 'mem-src-a' && edge.to === 'mem-src-b')
   assert.equal(autoEdge.source, 'auto', 'the UI can tag an auto link')
   assert.equal(autoEdge.kind, 'relation', 'link semantics are unchanged')
+  // Legacy auto edges written before the rule schema carry no evidence.rule;
+  // they must still surface under the 'auto' bucket so the WebUI rule filter
+  // has an option on old data (new writes record the real rule).
+  assert.equal(autoEdge.rule, 'auto', 'a legacy auto link reports the compat rule bucket')
   const plainEdge = view.edges.find(edge => edge.from === 'mem-src-b')
   assert.equal(plainEdge.source, null, 'a link without a source reports null, not undefined')
+  assert.equal(plainEdge.rule, null, 'a manual link reports no rule')
 })
 
 test('graphs cap nodes at 200 and the recall carries at most two pointers', async () => {

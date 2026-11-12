@@ -212,14 +212,15 @@ test('the settings page renders every page instead of a blank panel', async () =
   await new Promise((resolve) => setTimeout(resolve, 0))
   await new Promise((resolve) => setTimeout(resolve, 0))
 
-  for (let page = 0; page < 12; page++) {
+  // 13 页（含新增的关系图谱 graph:10）；help 仍是最后一页，未纳入这轮巡检。
+  for (let page = 0; page < 13; page++) {
     const { tree } = await renderPage(settings.component, { ctx, t: (key) => key }, page)
     const text = treeText(tree)
     assert.match(String(tree.props?.className), /dshm-root/, `page ${page} did not render the shell`)
     // The rail is the nav: every page label has to be there. Counting the shared
     // dshm-nav-item class instead would also pick up the in-page tab strips (memory
     // backend, prompt scope, browser view), which use the same widget on purpose.
-    const NAV = ['pageOverview', 'pageConnection', 'pageSettings', 'pageFolders', 'pageLibraries', 'pageBrowser', 'pageGlobal', 'pagePrompts', 'pageStats', 'pageMemories', 'pageLogs', 'pageLexicon']
+    const NAV = ['pageOverview', 'pageConnection', 'pageSettings', 'pageFolders', 'pageLibraries', 'pageBrowser', 'pageGlobal', 'pagePrompts', 'pageStats', 'pageMemories', 'pageGraph', 'pageLogs', 'pageLexicon']
     assert.ok(NAV.every((key) => text.includes(key)), `page ${page} lost a nav entry`)
     assert.equal((text.match(/dshm-nav-ind/g) || []).length, 1, `page ${page} lost or duplicated its rail indicator`)
     assert.match(text, /dshm-page/, `page ${page} lost the content pane`)
@@ -938,10 +939,10 @@ test('failed and degraded activity rows are visually distinguished from normal r
   collectPageHook()
   for (const effect of first.effects) effect.fn()
   await new Promise((resolve) => setTimeout(resolve, 0))
-  const mid = await renderPage(settings.component, { ctx, t: (key) => key }, 10)
+  const mid = await renderPage(settings.component, { ctx, t: (key) => key }, 11)
   for (const effect of mid.effects) effect.fn()
   await new Promise((resolve) => setTimeout(resolve, 0))
-  const { tree } = await renderPage(settings.component, { ctx, t: (key) => key }, 10)
+  const { tree } = await renderPage(settings.component, { ctx, t: (key) => key }, 11)
   const rows = new Map()
   const labels = []
   walkNodes(tree, (node) => {
@@ -998,11 +999,11 @@ test('the log page renders rows with copy, download and locate actions', async (
   await new Promise((resolve) => setTimeout(resolve, 0))
   // The log page's own effect only exists once that page renders, so it needs one
   // more render + effect pass before the data is in the hook.
-  const mid = await renderPage(settings.component, { ctx, t: (key) => key }, 10)
+  const mid = await renderPage(settings.component, { ctx, t: (key) => key }, 11)
   for (const effect of mid.effects) effect.fn()
   await new Promise((resolve) => setTimeout(resolve, 0))
   await new Promise((resolve) => setTimeout(resolve, 0))
-  const { tree } = await renderPage(settings.component, { ctx, t: (key) => key }, 10)
+  const { tree } = await renderPage(settings.component, { ctx, t: (key) => key }, 11)
   const text = treeText(tree)
   assert.match(text, /整理超时/)
   assert.match(text, /logCopyAll/)

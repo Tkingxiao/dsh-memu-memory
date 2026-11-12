@@ -771,3 +771,151 @@ test('compactSeedEvents accepts the catalog and local recall as two read-only pr
   assert.equal(seed[2].type, 'user/message')
   assert.match(seed[2].data.content[0].text, /事件时间/)
 })
+
+// ------------------------------------------------------- surface replacements
+// Mirrors @deepseek-ai/dsh-session 0.2.2-rc.1 Session.create for the fields a
+// consolidation seed touches: seq contiguity plus the surface fold. The host
+// rejects "seed event at index N has seq M" and every dangling replace citation,
+// so the assertion has to replay the fold, not just look at one event.
+const HOST_SURFACE_EVENT_TYPES = new Set(['system/message', 'developer/message', 'user/message', 'assistant/message', 'tool/result'])
+function assertSeedAcceptedByHost(seed, label = 'seed') {
+  const nodes = []
+  seed.forEach((event, index) => {
+    assert.equal(event.seq, index, `${label}: event at index ${index} has seq ${event.seq}`)
+    if (!HOST_SURFACE_EVENT_TYPES.has(event.type)) {
+      assert.equal(event.surfaceOp, undefined, `${label}: ${event.type} cannot carry surfaceOp`)
+      assert.equal(event.sourceEventSeqs, undefined, `${label}: ${event.type} cannot carry sourceEventSeqs`)
+      return
+    }
+    const op = event.surfaceOp
+    assert.ok(op !== undefined, `${label}: ${event.type} at ${index} requires a surfaceOp marker`)
+    const sources = event.sourceEventSeqs
+    if (sources !== undefined) {
+      assert.ok(Array.isArray(sources) && sources.length > 0, `${label}: sourceEventSeqs must be a non-empty array`)
+      assert.equal(new Set(sources).size, sources.length, `${label}: sourceEventSeqs must not repeat`)
+      assert.ok(sources.every(seq => Number.isSafeInteger(seq) && seq < event.seq), `${label}: sourceEventSeqs must reference earlier events`)
+    }
+    if (op === 'append') {
+      nodes.push(event.seq)
+      return
+    }
+    assert.deepEqual(Object.keys(op).sort(), ['endSeq', 'op', 'startSeq'], `${label}: replace markers carry exactly op/startSeq/endSeq`)
+    assert.ok(op.startSeq < event.seq && op.endSeq < event.seq, `${label}: surface replace at ${index} must reference earlier events`)
+    const startIdx = nodes.indexOf(op.startSeq)
+    const endIdx = nodes.indexOf(op.endSeq)
+    assert.ok(startIdx >= 0, `${label}: replace start seq ${op.startSeq} is not on the surface`)
+    assert.ok(endIdx >= startIdx, `${label}: replace range must be ordered`)
+    const shadowed = nodes.slice(startIdx, endIdx + 1)
+    if (event.type === 'tool/result') assert.equal(shadowed.length, 1, `${label}: tool/result replacement rewrites exactly one node`)
+    assert.ok(Array.isArray(sources), `${label}: replace at ${index} needs sourceEventSeqs`)
+    assert.deepEqual(shadowed.filter(seq => !sources.includes(seq)), [], `${label}: replace at ${index} must cite every shadowed node`)
+    nodes.splice(startIdx, endIdx - startIdx + 1)
+    nodes.push(event.seq)
+  })
+}
+
+const userEvent = (seq, text, extra = {}) => ({
+  seq, type: 'user/message', surfaceOp: 'append',
+  data: { source: { kind: 'user' }, content: [{ type: 'text', text }] }, ...extra,
+})
+const assistantEvent = (seq, text) => ({
+  seq, type: 'assistant/message', surfaceOp: 'append',
+  data: { message: { content: [{ type: 'text', text }] } },
+})
+const toolResultEvent = (seq, text, extra = {}) => ({
+  seq, type: 'tool/result', surfaceOp: 'append',
+  data: { message: { content: [{ type: 'text', text }] } }, ...extra,
+})
+
+test('a surface replace is renumbered into the seed instead of citing original seqs', () => {
+  const seed = compactSeedEvents([
+    userEvent(0, '记住：周五交房租'),
+    assistantEvent(1, '好'),
+    toolResultEvent(2, '原始工具输出'),
+    toolResultEvent(3, '[已裁剪]', {
+      surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 },
+      sourceEventSeqs: [2],
+    }),
+    userEvent(4, '继续'),
+  ])
+  assert.deepEqual(seed.map(event => event.seq), [0, 1, 2, 3, 4])
+  assert.deepEqual(seed[3].surfaceOp, { op: 'replace', startSeq: 2, endSeq: 2 }, 'the citation follows the surviving node, not its original seq')
+  assert.deepEqual(seed[3].sourceEventSeqs, [2])
+  assertSeedAcceptedByHost(seed)
+})
+
+test('a replace pointing outside the window is dropped and the seed stays contiguous', () => {
+  // 窗口从父会话中间切出：seq 4 不在这一窗里；后面的 replace 又引用前面被丢的
+  // replace。旧实现先编号后丢弃，留下 seq 空洞，宿主报 index 1 has seq 5。
+  const seed = compactSeedEvents([
+    userEvent(10, '这一窗的第一句'),
+    toolResultEvent(11, '输出'),
+    toolResultEvent(12, '[已裁剪]', {
+      surfaceOp: { op: 'replace', startSeq: 4, endSeq: 4 },
+      sourceEventSeqs: [4],
+    }),
+    assistantEvent(13, '回答'),
+    toolResultEvent(14, '[已裁剪]', {
+      surfaceOp: { op: 'replace', startSeq: 12, endSeq: 12 },
+      sourceEventSeqs: [12],
+    }),
+  ])
+  assert.deepEqual(seed.map(event => event.seq), [0, 1, 2], 'dropping a patch must renumber the survivors')
+  assert.equal(seed.some(event => event.surfaceOp && typeof event.surfaceOp === 'object'), false)
+  assertSeedAcceptedByHost(seed)
+})
+
+test('a replacement that cites another replacement keeps both when their targets survive', () => {
+  const seed = compactSeedEvents([
+    userEvent(0, '开头'),
+    toolResultEvent(1, '原始输出'),
+    toolResultEvent(2, '[第一次裁剪]', {
+      surfaceOp: { op: 'replace', startSeq: 1, endSeq: 1 },
+      sourceEventSeqs: [1],
+    }),
+    assistantEvent(3, '中间'),
+    toolResultEvent(4, '[第二次裁剪]', {
+      surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 },
+      sourceEventSeqs: [2],
+    }),
+  ])
+  assert.deepEqual(seed.map(event => event.seq), [0, 1, 2, 3, 4])
+  assert.deepEqual(seed[2].surfaceOp, { op: 'replace', startSeq: 1, endSeq: 1 })
+  assert.deepEqual(seed[4].surfaceOp, { op: 'replace', startSeq: 2, endSeq: 2 })
+  assertSeedAcceptedByHost(seed)
+})
+
+test('a multi-node replace is remapped when every shadowed node survives', () => {
+  const seed = compactSeedEvents([
+    userEvent(0, 'A'),
+    userEvent(1, 'X'),
+    userEvent(2, 'B'),
+    userEvent(3, '外层摘要', {
+      surfaceOp: { op: 'replace', startSeq: 0, endSeq: 2 },
+      sourceEventSeqs: [0, 1, 2],
+    }),
+  ])
+  assert.deepEqual(seed.map(event => event.seq), [0, 1, 2, 3])
+  assert.deepEqual(seed[3].surfaceOp, { op: 'replace', startSeq: 0, endSeq: 2 })
+  assert.deepEqual(seed[3].sourceEventSeqs, [0, 1, 2])
+  assertSeedAcceptedByHost(seed)
+})
+
+test('a replace is dropped when filtering an inner checkpoint reveals a shadowed node', () => {
+  // 内层压缩检查点（source.kind 不是 user）会被种子过滤器丢掉；它遮住的 X 因此
+  // 重新出现在种子的 surface 上。外层替换写于 X 被遮住期间，引用里没有 X。
+  // 宿主会要求外层补上 X 的引用——补不出来就只能丢外层，种子回到纯 append。
+  const seed = compactSeedEvents([
+    userEvent(0, 'A'),
+    userEvent(1, 'X'),
+    userEvent(2, 'B'),
+    userEvent(3, '内层摘要', { data: { source: { kind: 'compact-checkpoint' }, content: [{ type: 'text', text: '内层摘要' }] }, surfaceOp: { op: 'replace', startSeq: 1, endSeq: 1 }, sourceEventSeqs: [1] }),
+    userEvent(4, '外层摘要', {
+      surfaceOp: { op: 'replace', startSeq: 0, endSeq: 2 },
+      sourceEventSeqs: [0, 2],
+    }),
+  ])
+  assert.deepEqual(seed.map(event => event.seq), [0, 1, 2])
+  assert.deepEqual(seed.map(event => event.data.content[0].text), ['A', 'X', 'B'])
+  assertSeedAcceptedByHost(seed)
+})

@@ -68,17 +68,20 @@ test('agent backend accepts a global review without the engine', async () => {
 
 // ---- §2.1 MemU nonzero exit must reject, not crash the host
 
-test('a failing MemU command rejects with MEMU_COMMAND_FAILED (and the process survives)', async () => {
+test('a broken MemU interpreter rejects with MEMU_SPAWN_FAILED (and the process survives)', async () => {
+  // Node 不是 Python：常驻 worker 连就绪都到不了。重点是命令侧得到明确拒绝、
+  // 宿主进程不被带崩，下一次调用仍然是同样的拒绝而不是挂死。
   fs.mkdirSync(path.join(home, 'engine'), { recursive: true })
   fs.writeFileSync(path.join(home, 'engine', 'current.json'), JSON.stringify({ python: process.execPath, venv: home }))
-  let error = null
-  try {
-    await memu.retrieve({ query: 'x', db: path.join(home, 'x.sqlite3'), timeoutMs: 15_000 })
-  } catch (e) {
-    error = e
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(
+      () => memu.retrieve({ query: 'x', db: path.join(home, 'x.sqlite3'), timeoutMs: 15_000 }),
+      (error) => {
+        assert.equal(error.code, 'MEMU_SPAWN_FAILED')
+        return true
+      },
+    )
   }
-  assert.ok(error, 'must reject, not resolve')
-  assert.equal(error.code, 'MEMU_COMMAND_FAILED')
   fs.rmSync(path.join(home, 'engine'), { recursive: true, force: true })
 })
 

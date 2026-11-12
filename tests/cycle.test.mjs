@@ -177,7 +177,7 @@ test('a fork that cannot be created is logged, not dropped silently', async () =
     },
   }
   await cycle.runSleepPass(ctx, { log: (m) => logs.push(m) })
-  assert.ok(logs.some((m) => /consolidation skipped for cycle-hist: no fork in test env/.test(m)), 'attempt logged: ' + logs.join(' | '))
+  assert.ok(logs.some((m) => /consolidation skipped for cycle-hist: .*no fork in test env/.test(m)), 'attempt logged: ' + logs.join(' | '))
   assert.equal(state.getLastSleepAt('cycle-hist'), null)
   assert.match(state.getSessionBinding('cycle-hist').lastSleepError, /no fork/)
 })

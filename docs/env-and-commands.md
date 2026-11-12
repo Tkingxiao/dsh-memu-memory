@@ -30,6 +30,17 @@ npm run replay
 
 `scripts/replay.mjs`：不走测试框架，按生产代码路径端到端重放七条链路（事实级去重工具层、PTC 整理成功/失败、整理提醒与日志页数据、侧边栏提醒块真实渲染、向量计数账本+戳、MemU 记忆页分组/多选/查看跳转）。只有 MemU 引擎子进程换成内存桩，其余全是真实模块；退出码 0 = 全部检查点通过。改动整理/去重/向量计数/提醒任一链路后跑一次，比单测更接近「用户点下去会发生什么」。
 
+### 9.1.2 自动关联迁移（v3）
+
+```bash
+node scripts/rebuild-auto-links.mjs                       # 默认 dry-run：只读索引/实体，打印旧 auto 边、实体分级计划与“确认前 N 个队列实体”的提及边预估
+node scripts/rebuild-auto-links.mjs --apply               # 先整库备份，再删全部 source:'auto' 旧边、落实体状态、为已确认实体重建确定性边
+node scripts/rebuild-auto-links.mjs --library lib_x --json
+node scripts/rebuild-auto-links.mjs --include-archived    # 连归档库一起处理（默认只跑未归档库）
+```
+
+迁移后把设置里的 `autoLinkMode` 从 `suggest` 切到 `deterministic`；候选确认在节点图页「待确认实体」。脚本只删 `source:'auto'` 边，非 auto（手动/worker）边、正文、向量、附件与 `link-suppression.json` 一律不动；apply 在同一轮里为**已确认**实体重建确定性边（设计 §14 原文要求 S3 不建边，实现把 S3+S4 的“已确认”部分合并，未确认的名字仍等人工），apply 后重跑 dry-run 应显示 legacy 0。回滚 = 恢复 `backups/` 里最近一次备份（脚本没有独立 rollback 子命令）。单个库的实体文件损坏只记进 `failures` 并继续跑其余库，`--json` 的 `ok` 为 false、进程退出码非 0。建议在 DSH 关闭时运行（S0 的“冻结整理”没有单独开关，脚本只负责备份）。
+
 ### 9.2 本地 link 到 DSH profile
 
 `~/.dsh/profiles/<profile>/package.json` 里 `"dsh-memu-memory": "link:D:/Code/dsh-plugin/dsh-memu-memory"` 并加入 `dsh.profile.bundles`。是符号链接 → 改源码即刻生效（无 bundle 缓存）。`lstat` 验证是否 symlink（§3.10）。
@@ -51,7 +62,7 @@ npm run replay
 - `memu-cli` 是 **PyPI 上的 Python 包，不是 npm 包**；锁定 `0.11.0b3`。
 - 发布版 `memu --help` 只有 `retrieve, search, list-files, commit`；源码里的 `memorize prepare/commit` **尚未发布**，**不要依赖 `memorize`**——当可选能力（启动探测 `memu memorize --help`，成功才注册入口，失败隐藏不报错）。
 - 必需命令 `retrieve` / `list-files` / `commit`；必需 flag `--json` / `--db` / `--provider` / `--embed-model` / `--api-key` / `--base-url`。**所有 CLI 字符串只在 `lib/memu.js`**。
-- 本地向量模式下插件**常驻一个解释器**（`lib/memu.js` 的 resident engine）：启动时 `import memu.cli` 一次，随后 `retrieve` / `list-files` / `commit` 通过 JSON 行协议调用同一个 `main(argv)`，省掉每条命令约 2 s 的导入链；每条命令结束显式 `database.close()`，空闲期不占 sqlite 句柄。远端 API 路由仍按命令新起进程；插件卸载或引擎安装/切换前关闭常驻进程，异常退出时下一条命令冷启动（见 `docs/troubleshooting.md` §3.26）。
+- 本地向量模式下插件**常驻一个解释器**（`lib/memu.js` 的 resident engine）：启动时 `import memu.cli` 一次，随后 `retrieve` / `list-files` / `commit` 通过 JSON 行协议调用同一个 `main(argv)`，省掉每条命令约 2 s 的导入链；每条命令结束显式 `database.close()`，空闲期不占 sqlite 句柄。远端 API 路由复用同一个常驻进程（每条命令单独传 base URL/key/model/db 的 env）；插件卸载或引擎安装/切换前关闭常驻进程，异常退出时下一条命令冷启动（见 `docs/troubleshooting.md` §3.26）。
 
 ```bash
 python -m memu retrieve "query" --json --db <db>

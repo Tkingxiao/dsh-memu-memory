@@ -68,6 +68,7 @@
 - **矛盾不会被悄悄合并。** 普通矛盾仍进入 `pending_review`：不注入、不召回，只出现在复核队列，等人或整理作业裁决。写入方明确把两种说法标成同一事实的版本（`conflicts_with`）时，两条都保持 active、一起召回并注入一张冲突卡；显式 `supersedes` 才退休旧条，正文不删。
 - **秘密不进自动召回。** `secret`、群聊频道、角色、世界线、剧情分支与 `knownBy` 共同约束读写；`secret` 永远不会被自动注入，但同文件夹里**主动检索仍然读得到**——它挡的是「自己冒出来」，不是保险箱。真正把同一文件夹里的两段对话隔开的是 `context` 作用域（`channelId` / `characterId` / `worldId` / `branchId`）；两边都没填就是同一个作用域，这正是「文件夹」的含义。旧的 `visibility: 'session'` 级别已删除：读到就按 `shared` 处理、`context` 原样保留，仍存着该级别的库用 `node scripts/migrate-visibility.mjs` 重写（`--apply` 才写，先备份）。
 - **人与故事是有结构的。** 群聊用稳定的 `speakerId` / `channelId`，不拿显示名当身份；RP 用 `characterId` / `worldId` / `branchId` 隔离知识。关系边有理由和置信度，实体改名不动记忆正文，关系当前状态（熟悉、信任、温度、边界、承诺）是带证据和历史快照。
+- **关联只来自已确认的实体与字段证据。** 设置里的「自动关联」默认只出候选、不写边；你确认过的实体名/别名才会把已有记忆的提及连起来（`entity-mention`），冲突/取代/同 `fact_key` 的相邻版本则建立字段证据边。词面相似、共享 token 与向量永远不建边；候选队列在节点图页审核。旧库的统计噪声边用 `node scripts/rebuild-auto-links.mjs` 先 dry-run、确认后 `--apply`（自动备份）清理；删掉的自动边会写进抑制表，不会复活。
 - **图片是指针加描述，不是假装能看图。** 附件按 SHA-256 去重、有配额、分三级留存；没有描述时只记「收到一张图片」，绝不编造画面。
 - **整理在后台。** 整理跑在种子 fork 子会话里，不会在你的待发区多出一轮；失败退避重试，不伪记成功。
 
@@ -237,7 +238,8 @@ npx --package dsh-memu-memory dsh-memu-memory-setup
 | `memu_private_update` | 编辑，但不能绕过永久准入、复核或可见性规则 |
 | `memu_private_archive` | 归档，不删除 |
 | `memu_private_unpin` | 用第一人称理由、配额和冷却边缘化一条永久记忆 |
-| `memu_private_link` | 用证据连接记忆/实体，或更新关系快照；不能删边 |
+| `memu_private_link` | 用证据连接记忆/实体，或更新关系快照；可裁决 `memu_private_link_suggest` 的不确定候选；不能删边 |
+| `memu_private_link_suggest` | 为本轮整理写入的 id 刷新确定性边（已确认实体提及 / 字段证据），只返回不确定候选 |
 | `memu_global_recall` / `memu_global_list` | 按 domain 读取全局记忆 |
 | `memu_status` | 存储健康、同步心跳、召回状态与图片回合状态 |
 

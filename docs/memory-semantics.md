@@ -60,7 +60,7 @@
 - **职责分工**：`system-guide.*` 是唯一常驻规则，只写领域行为、检索时机、回答口径；`private-policy.*` 保留为字段规约参考，不再投放，避免两套常驻文本互相漂移。
 - **只有三个 key 分域**：`system-guide`、`private-policy`、`private-consolidation`；`global-curator` 不分域。
 - **远程与本地共用一份 `private-consolidation`**：正文讲「记什么、字段怎么填」，差异只有输出协议（`CONSOLIDATION_CONTRACTS.local` 调工具 / `.remote` 返回 JSON，代码追加）。不要拆第二份。
-- **1.2.2 起整理稿负责标题质量**：title 按「只看标题就知道具体事实」写（8–40 字、具体关键词、集合稿覆盖全部来源），`global-curator` 同一口径。词典/关联的工具调用属于**本地工作流**：领域整理稿与远程 JSON 路径共用，因此不写 `memu_*` 工具名；领域稿只保留「可抽什么词」的差异，稳定复用的黑话/梗/术语先 `memu_lexicon_search` 再 `memu_lexicon_propose`、写完用 `memu_private_link_suggest` 裁决候选的工具流程只出现在 local worker brief。远程契约明确「没有工具」，title 长度同样是 8–40 字。
+- **1.2.2 起整理稿负责标题质量**：title 按「只看标题就知道具体事实」写（8–40 字、具体关键词、集合稿覆盖全部来源），`global-curator` 同一口径。词典/关联的工具调用属于**本地工作流**：领域整理稿与远程 JSON 路径共用，因此不写 `memu_*` 工具名；领域稿只保留「可抽什么词」的差异，稳定复用的黑话/梗/术语先 `memu_lexicon_search` 再 `memu_lexicon_propose`、写完调用 `memu_private_link_suggest` 刷新确定性边（已确认实体提及 / 字段证据）并取得不确定候选、需要时用 `memu_private_link` 显式裁决的工具流程只出现在 local worker brief。远程契约明确「没有工具」，title 长度同样是 8–40 字。
 - RP 与 coding 是**内容**差异：coding 记事实（决定、约束、踩过的坑、工程偏好），召回当「可能过期的事实」，与代码冲突时以代码为准；rp 记经验（具体瞬间、半句原话、身体感觉、没说出口的话），允许模糊记错，不确定就标低 `confidence`。rp/mixed 同时收对方主动给出的**现实生活事实**（作息、行程、口味、健康、家人朋友、在忙的事）：`about_user` 平实短条（30–80 字），不需要「瞬间+影响」模板，剧情与现实条分开写、不互相合并；单次提及低 confidence 或 `short_term`，重复出现才升 `long_term`（`寒暄不留`的口径只拦寒暄本身，不拦寒暄里夹带的事实）。
 - **KV cache**：section 文本随 domain 变，但同一会话内恒定，缓存不受影响；中途改 domain 会让该会话失效一次缓存。别在文档里写「文本恒定」。
 
@@ -159,7 +159,13 @@
 
 **词典生命周期。** 公开状态只有 `active` / `archived`：用户新建、模型 `memu_lexicon_propose`、curator 带证据抽取都直接 active；`archiveLexiconTerm` / `restoreLexiconTerm` 负责可逆退场，删除只属于管理面。`rejected` 只作为 legacy 墓碑/指纹留在数据里，UI、注入、检索与计数都看不到；`pending` 只作为旧版本迁移输入：新提案 → active（敏感 → archived），revision 草稿 → archived。敏感 trigger 的新建/修改只能由用户完成，模型/curator 得到 typed 拒绝；非用户修改普通 active 词条的敏感字段也直接拒绝，不再生成 pending revision。RPC 的 `lexiconReview` 已删除（方法数见 `docs/contributing.md` 的 rpc-method-count 标记）。**哪些词条进得来**是另一层：全局词典 + 同域跨库，见 §8.16。
 
-**私有自动关联。** 整理结算后 `lib/private-links.js` 只做本地算法：同库、同 context/track、可见非 secret、标题共享稀有 name-like token、pairScore < 0.82 且无冲突时，建立 memory↔memory `relation` 并写 `source:'auto'`；≥2 条记忆共享该 token 时复用/创建实体枢纽（人物信号 → `person`，无信号的拉丁名保守 → `thing`，CJK 无信号或 kind 冲突 → 不确定候选）。高置信写库在算法侧完成；1.3.1 起整理 worker 不再接收 `link_suggest`，不确定候选只留在本地算法结果里，需要时由主会话用 `memu_private_link` 裁决；不另起整理、不重读转录。算法/写入失败只记 warn，不能让已经成功的整理失败；自动关联不改正文、不写向量、不删除，边可在关系图移除。worker 写工具为 remember/remember_batch/update，读工具为空（记忆目录与本地召回由插件在种子开头注入），但「有没有写能力」仍只由 remember/update 判定。
+**私有自动关联（v3 确定性版）。** 写边只有一条路径：`lib/auto-link/` 的纯函数判定。`settings.autoLinkMode` 三档：`suggest`（默认）只生成候选、**自动整理不写边**，但你显式确认实体仍会补挂（§14 S4 的迁移流程）；`deterministic` 自动整理也写由证据推出的确定性边；`off` 全关——连确认/新建/改名/合并触发的提及维护也不写。判定表只有两类：① `entity-mention`——记忆标题/正文按 NFKC+大小写/标点归一化后命中一个 **confirmed** 实体的名字/别名（CJK 子串 ≥2 字，Latin 词边界，`yuike` 不命中 `yuikeee`），产出 `memory→entity` 边；② 字段证据——`conflicts_with` / `supersedes` / 同 `fact_key`+同上下文签名的相邻版本，产出 memory↔memory 的 `conflict` / `supersede` / `fact-key` 边。两类边固定 `confidence: 1.0`、`schemaVersion: 2`，带 `evidence.rule`（枚举 `entity-mention` / `conflict` / `supersede` / `fact-key` / `worker-quote`）。词面相似度、共享 token、向量与所有统计量**永不建边**；它们只参与 `anchor-candidates.json` 的候选排序。
+
+**实体生命周期。** `provisional`（默认）不产生任何边，`confirmed` 才允许 R1，`archived` 视同不可用。手工创建（UI/RPC）直接 confirmed；worker 经 `memu_private_link` 点名只创建 provisional 实体与一条非 auto 边（`allowWorkerAssertion` 是 v3 预留开关，本版不读取）。确认/改名/合并/删除都会级联：确认立即跑一次增量提及（不等下次整理）；rename 重算该实体的提及边；merge 把来源实体的 `evidence.entityId` 改指主节点并继承 confirmed；delete（force）回收 auto 边并把 `(from,to,kind,rule)` 写进 `index/<lib>.link-suppression.json`。带 `conflicts_with` / `supersedes` / 同 `fact_key` 配对的写入，以及复核接受（replace 会把旧条目改成 superseded）也会立即重算受影响条目的字段证据边，不等下一次整理。用户在关系图删除 auto 边同样写抑制键，后续重算不会复活。
+
+**候选队列与迁移。** `anchor-candidates.json` 是派生物：CJK 2–4gram / Latin token 的 df/titleDf/边界/凝聚/PMI/LLR 只用于排序；Tier 1 是有表面证据（引号/名字引导/标识符/用户维护词典）的候选，Tier 2 仅统计特征。没有 status 的旧实体按 DESIGN §9.3 分级：只有 `origin ∈ {user,agent,worker}` 或被非 auto 边引用才保留 confirmed，其余落 provisional。`scripts/rebuild-auto-links.mjs`（默认 dry-run，`--apply` 先整库备份）删除全部 `source:'auto'` 旧边、落实体状态，并为已确认实体重建确定性边；确认与 dry-run 幂等后再把 `autoLinkMode` 切到 `deterministic`。
+
+**召回治理与失败隔离。** `recallRelations` 的 top-2 扩展显式排除 `evidence.rule === 'entity-mention'`——提及是事实索引不是关系，`confidence=1.0` 不能挤掉手动边与字段证据；字段证据边照常参与。判定层纯函数、无 IO/时钟/随机；写库失败只 warn，绝不让已经成功的整理失败；`links[]` 仍只是元数据，不改正文、不写向量、不删记忆。worker 写工具为 remember/remember_batch/update，读工具为空（记忆目录与本地召回由插件在种子开头注入），但「有没有写能力」仍只由 remember/update 判定。
 
 ### 8.14 日期联动、到点唤醒与实体合并（1.2.3）
 

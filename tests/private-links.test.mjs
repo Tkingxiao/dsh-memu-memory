@@ -19,6 +19,10 @@ const {
   inferEntityKind,
 } = privateLinks
 
+// 旧写路径的用例验证 deterministic 模式下的行为；默认的 suggest（只出候选）
+// 与 off 由文件末尾的专门用例覆盖。
+state.updateSettings({ autoLinkMode: 'deterministic' })
+
 test.after(() => {
   try { state.flushState() } catch {}
   try { fs.rmSync(home, { recursive: true, force: true }) } catch {}
@@ -301,25 +305,22 @@ test('an existing entity with a conflicting kind blocks the auto-link and become
 
 // ---- 应用层 ----
 
-test('autoLinkPrivateMemories applies the link, reuses Yuike and is idempotent', async () => {
+test('deterministic mode links mentions of a confirmed entity and never writes lexical pairs', async () => {
   activity.clearEvents()
   const binding = bind('links-apply')
   const libraryId = binding.libraryId
-  const yuike = graph.createEntity({ libraryId, name: 'Yuike', kind: 'person' })
+  const yuike = graph.createEntity({ libraryId, name: 'Yuike', kind: 'person', status: 'confirmed', confirmedBy: 'user' })
   state.savePrivateIndex(libraryId, snapshot({
     'mem-a': entry('猫娘yuike', 'yuike 是一只住在窗台的猫娘，喜欢在午后晒太阳。'),
     'mem-b': entry('yuike名字的由来', '这个名字来自小时候养过的一只白猫，后来一直被沿用。'),
   }))
 
-  const result = await autoLinkPrivateMemories({ libraryId, sessionId: 'links-apply', ids: ['mem-a'] })
-  assert.equal(result.linked, 1)
-  assert.equal(result.entities, 2)
+  const result = await autoLinkPrivateMemories({ libraryId, sessionId: 'links-apply', ids: ['mem-a', 'mem-b'] })
+  assert.equal(result.linked, 0, 'the old lexical memory↔memory edge is never written')
+  assert.equal(result.entities, 2, 'both memories mention the confirmed entity')
   assert.equal(result.suggested, 0)
   assert.deepEqual(result.candidates, [])
-  // The compact return the worker tool forwards: edges only, no bodies or notes, and
-  // one entry per write (the memory pair first, then both hub links).
   assert.deepEqual(result.autoLinked.map(item => `${item.from}->${item.to}:${item.kind}`), [
-    'mem-a->mem-b:relation',
     `mem-a->${yuike.id}:person`,
     `mem-b->${yuike.id}:person`,
   ])
@@ -327,64 +328,51 @@ test('autoLinkPrivateMemories applies the link, reuses Yuike and is idempotent',
 
   const index = state.loadPrivateIndex(libraryId)
   const outbound = index.entries['mem-a'].links || []
-  const memoryLink = outbound.find(link => link.to === 'mem-b')
-  assert.ok(memoryLink, 'the high-confidence memory link is persisted')
-  assert.equal(memoryLink.kind, 'relation')
-  assert.equal(memoryLink.source, 'auto', 'the auto source is persisted on the link record')
-  assert.match(memoryLink.note, /自动关联/)
-  assert.match(memoryLink.note, /yuike/)
-  assert.ok(memoryLink.confidence >= 0.6 && memoryLink.confidence <= 0.78)
+  assert.equal(outbound.some(link => link.to === 'mem-b'), false, 'no lexical pair edge survives')
   const entityLink = outbound.find(link => link.to === yuike.id)
-  assert.ok(entityLink, 'the memory links to the reused entity hub')
+  assert.ok(entityLink, 'the confirmed-entity mention is persisted')
   assert.equal(entityLink.kind, 'person')
   assert.equal(entityLink.source, 'auto')
-  assert.match(entityLink.note, /自动实体枢纽/)
-  assert.equal(entityLink.confidence, 0.65)
-  assert.ok((index.entries['mem-b'].links || []).some(link => link.to === yuike.id),
-    'every memory sharing the stable name is linked to the hub')
-
-  const entities = Object.values(graph.graphExport(libraryId).entities)
-  assert.equal(entities.length, 1, 'Yuike is reused, not duplicated as yuike')
-  assert.equal(entities[0].id, yuike.id)
+  assert.equal(entityLink.confidence, 1, 'deterministic edges are confidence 1.0')
+  assert.equal(entityLink.schemaVersion, 2)
+  assert.equal(entityLink.evidence.rule, 'entity-mention')
+  assert.equal(entityLink.evidence.entityId, yuike.id)
+  assert.equal(entityLink.evidence.surface, 'Yuike')
+  assert.equal(entityLink.evidence.field, 'title')
+  assert.match(entityLink.note, /已确认实体/)
 
   const events = activity.listEvents({ kind: 'write', sessionId: 'links-apply' })
-  const linkEvent = events.find(event => event.detail?.op === 'auto-link' && event.ok)
-  const entityEvents = events.filter(event => event.detail?.op === 'auto-entity' && event.ok)
-  assert.ok(linkEvent, 'the applied link is recorded in the activity log')
-  assert.equal(linkEvent.detail.source, 'auto', 'source travels through the apply layer')
-  assert.deepEqual(new Set(linkEvent.refs), new Set(['mem-a', 'mem-b']))
-  assert.equal(entityEvents.length, 2)
-  assert.ok(entityEvents.every(event => event.detail.source === 'auto'))
-  assert.ok(entityEvents.every(event => event.detail.kind === 'person'))
+  const applyEvent = events.find(event => event.detail?.op === 'auto-link-apply' && event.ok)
+  assert.ok(applyEvent, 'the deterministic write is recorded in the activity log')
+  assert.equal(applyEvent.detail.added, 2)
+  assert.equal(applyEvent.detail.entity, 2)
 
   activity.clearEvents()
-  const again = await autoLinkPrivateMemories({ libraryId, sessionId: 'links-apply', ids: ['mem-a'] })
-  assert.equal(again.linked, 0, 'an existing relation link makes the pair idempotent')
-  assert.equal(again.entities, 0, 'a memory already linked to the entity is skipped')
+  const again = await autoLinkPrivateMemories({ libraryId, sessionId: 'links-apply', ids: ['mem-a', 'mem-b'] })
+  assert.equal(again.linked, 0)
+  assert.equal(again.entities, 0, 'an unchanged pass is a no-op')
+  assert.deepEqual(again.autoLinked, [])
   const after = state.loadPrivateIndex(libraryId)
-  assert.equal((after.entries['mem-a'].links || []).filter(link => link.to === 'mem-b').length, 1)
   assert.equal((after.entries['mem-a'].links || []).filter(link => link.to === yuike.id).length, 1)
 })
 
-test('autoLinkPrivateMemories links a thing hub with kind relation', async () => {
+test('a confirmed non-person entity produces relation-kind mention edges', async () => {
   activity.clearEvents()
   const binding = bind('links-thing')
   const libraryId = binding.libraryId
+  const nebula = graph.createEntity({ libraryId, name: 'nebula', kind: 'thing', status: 'confirmed', confirmedBy: 'user' })
   state.savePrivateIndex(libraryId, snapshot({
     'mem-c': entry('nebula kickoff', 'the nebula survey starts at dawn near the outer ring.'),
     'mem-d': entry('nebula notes', 'a nebula chart was folded inside the old folder.'),
   }))
-  const result = await autoLinkPrivateMemories({ libraryId, sessionId: 'links-thing', ids: ['mem-c'] })
-  assert.equal(result.linked, 1)
+  const result = await autoLinkPrivateMemories({ libraryId, sessionId: 'links-thing', ids: ['mem-c', 'mem-d'] })
+  assert.equal(result.linked, 0)
   assert.equal(result.entities, 2)
-  const entity = Object.values(graph.graphExport(libraryId).entities)
-    .find(item => normalizeEntityName(item.name) === 'nebula')
-  assert.ok(entity)
-  assert.equal(entity.kind, 'thing')
   const index = state.loadPrivateIndex(libraryId)
-  const link = (index.entries['mem-c'].links || []).find(item => item.to === entity.id)
+  const link = (index.entries['mem-c'].links || []).find(item => item.to === nebula.id)
   assert.ok(link)
-  assert.equal(link.kind, 'relation', 'non-person hubs use kind relation')
+  assert.equal(link.kind, 'relation', 'non-person entities use kind relation')
+  assert.equal(link.evidence.rule, 'entity-mention')
 })
 
 test('autoLinkPrivateMemories never throws on a missing or broken index and logs a warning path', async () => {
@@ -435,6 +423,54 @@ test('autoLinkPrivateMemories never throws on a missing or broken index and logs
     ZERO,
   )
   assert.equal(activity.listEvents({ kind: 'write' }).length, before, 'no ids means no work and no log row')
+})
+
+test('suggest is the default mode and the only valid values are suggest/deterministic/off', () => {
+  assert.equal(state.DEFAULT_SETTINGS.autoLinkMode, 'suggest', 'migration starts with the write gate closed')
+  assert.equal(state.DEFAULT_SETTINGS.allowWorkerAssertion, false, 'worker assertion is reserved and off')
+  assert.throws(() => state.updateSettings({ autoLinkMode: 'auto' }), /invalid setting autoLinkMode/)
+  assert.throws(() => state.updateSettings({ allowWorkerAssertion: 'yes' }), /must be boolean/)
+})
+
+test('suggest mode returns candidates without writing edges or creating entities', async () => {
+  state.updateSettings({ autoLinkMode: 'suggest' })
+  try {
+    const binding = bind('links-suggest')
+    const libraryId = binding.libraryId
+    state.savePrivateIndex(libraryId, snapshot({
+      'mem-a': entry('星港入口', '深夜的星港入口很冷，风从卸货区一直灌进来。'),
+      'mem-b': entry('星港夜班', '星港的夜班登记表还压在值班室桌上。'),
+    }))
+    const result = await autoLinkPrivateMemories({ libraryId, sessionId: 'links-suggest', ids: ['mem-a'] })
+    assert.equal(result.linked, 0, 'suggest never writes a memory edge')
+    assert.equal(result.entities, 0, 'suggest never creates or links an entity')
+    assert.deepEqual(result.autoLinked, [])
+    assert.equal(result.candidates.length, 1, 'the uncertain pair is still returned for adjudication')
+    assert.equal(result.suggested, 1)
+    const index = state.loadPrivateIndex(libraryId)
+    assert.equal(index.entries['mem-a'].links, undefined, 'index is untouched')
+    assert.deepEqual(Object.keys(graph.graphExport(libraryId).entities), [], 'no entity is created')
+  } finally {
+    state.updateSettings({ autoLinkMode: 'deterministic' })
+  }
+})
+
+test('off mode skips the suggestion pass entirely', async () => {
+  state.updateSettings({ autoLinkMode: 'off' })
+  try {
+    const binding = bind('links-off')
+    const libraryId = binding.libraryId
+    state.savePrivateIndex(libraryId, snapshot({
+      'mem-a': entry('猫娘yuike', 'yuike 是一只住在窗台的猫娘，喜欢在午后晒太阳。'),
+      'mem-b': entry('yuike名字的由来', '这个名字来自小时候养过的一只白猫，后来一直被沿用。'),
+    }))
+    const result = await autoLinkPrivateMemories({ libraryId, sessionId: 'links-off', ids: ['mem-a'] })
+    assert.deepEqual(result, ZERO)
+    assert.equal(state.loadPrivateIndex(libraryId).entries['mem-a'].links, undefined)
+    assert.deepEqual(Object.keys(graph.graphExport(libraryId).entities), [])
+  } finally {
+    state.updateSettings({ autoLinkMode: 'deterministic' })
+  }
 })
 
 test('the default export exposes the whole module surface', () => {

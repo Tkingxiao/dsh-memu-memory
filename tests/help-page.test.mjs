@@ -219,7 +219,7 @@ test('the deep link #/settings/help lands on the help page when standalone', asy
   window.location.hash = '#/settings/help'
 
   await mountAndSettle(component, props, { standalone: true })
-  // hooks 已经带着 page=12（初始器读 hash）；再渲染一次即命中帮助页。
+  // hooks 已经带着 page=13（初始器读 hash）；再渲染一次即命中帮助页。
   forcedList = []
   effects = []
   cursor = 0
@@ -237,7 +237,7 @@ test('the help page shows five steps, eleven FAQ details and the feedback action
   await mountAndSettle(component, props)
   collectPageHook()
 
-  const { tree } = renderAt(component, props, 12)
+  const { tree } = renderAt(component, props, 13)
   const text = treeText(tree)
   for (const step of [1, 2, 3, 4, 5]) assert.ok(text.includes(`helpStep${step}`), `quick start step ${step} is missing`)
   for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) {
@@ -271,7 +271,7 @@ test('the detailed help sections and label table render between quick start and 
   await mountAndSettle(component, props)
   collectPageHook()
 
-  const { tree } = renderAt(component, props, 12)
+  const { tree } = renderAt(component, props, 13)
   const text = treeText(tree)
   for (const section of ['helpScopes', 'helpTitleCards', 'helpArchiveDelete', 'helpVector', 'helpAutoLink', 'helpLabels', 'helpSidebar']) {
     assert.ok(text.includes(section), `help section ${section} is missing`)

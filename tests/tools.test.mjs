@@ -160,11 +160,13 @@ test('lexicon propose writes an active entry immediately; search only sees activ
   dispose()
 })
 
-test('link suggest applies high-confidence links and returns only uncertain candidates', async () => {
+test('link suggest refreshes deterministic mention edges and returns only uncertain candidates', async () => {
   const { tools, dispose } = fakeCtx()
   const cwd = path.join(home, 'project-links')
   const execLinks = { agent: { session: { header: { id: 'tools-links', cwd, agentPreset: 'rp' } } } }
   const binding = state.ensureSession('tools-links', { cwd, agentPreset: 'rp' })
+  const graph = await import('../lib/graph.js')
+  const yuike = graph.createEntity({ libraryId: binding.libraryId, name: 'yuike', kind: 'person', status: 'confirmed', confirmedBy: 'user' })
   state.savePrivateIndex(binding.libraryId, { version: 1, entries: {
     'mem-a': { title: '猫娘yuike', content: 'yuike 是一只住在窗台的猫娘，喜欢晒太阳。', status: 'active', visibility: 'shared', layer: 'long_term' },
     'mem-b': { title: 'yuike名字的由来', content: '这个名字来自小时候养过的一只白猫。', status: 'active', visibility: 'shared', layer: 'long_term' },
@@ -179,24 +181,28 @@ test('link suggest applies high-confidence links and returns only uncertain cand
   const empty = await suggest.execute({ ids: [] }, execLinks)
   assert.match(empty, /1-20/)
 
-  const payload = JSON.parse(await suggest.execute({ ids: ['mem-a'] }, execLinks))
-  assert.deepEqual(Object.keys(payload).sort(), ['autoLinked', 'candidates'], 'the tool answers with the two-field contract only')
-  assert.deepEqual(payload.candidates, [], 'the yuike pair is high confidence, so nothing is handed over')
-  assert.equal(payload.autoLinked.length, 3, 'relation link plus one hub link per memory')
-  for (const edge of payload.autoLinked) {
-    assert.deepEqual(Object.keys(edge).sort(), ['from', 'kind', 'to'], 'no bodies or notes in the compact payload')
-  }
-  assert.ok(payload.autoLinked.some((edge) => edge.from === 'mem-a' && edge.to === 'mem-b' && edge.kind === 'relation'))
-  assert.ok(payload.autoLinked.some((edge) => edge.from === 'mem-a' && edge.kind === 'person'))
-  // The auto source survives into the graph the UI reads.
-  const graph = await import('../lib/graph.js')
-  const view = graph.getGraph({ libraryId: binding.libraryId, focusId: 'mem-a', depth: 1 })
-  assert.ok(view.edges.some((edge) => edge.from === 'mem-a' && edge.to === 'mem-b' && edge.source === 'auto'))
+  updateSettings({ autoLinkMode: 'deterministic' })
+  try {
+    const payload = JSON.parse(await suggest.execute({ ids: ['mem-a', 'mem-b'] }, execLinks))
+    assert.deepEqual(Object.keys(payload).sort(), ['autoLinked', 'candidates'], 'the tool answers with the two-field contract only')
+    assert.deepEqual(payload.candidates, [], 'the yuike pair is a deterministic mention, not an uncertain candidate')
+    assert.equal(payload.autoLinked.length, 2, 'one mention edge per memory, no lexical pair edge')
+    for (const edge of payload.autoLinked) {
+      assert.deepEqual(Object.keys(edge).sort(), ['from', 'kind', 'to'], 'no bodies or notes in the compact payload')
+      assert.equal(edge.to, yuike.id)
+      assert.equal(edge.kind, 'person')
+    }
+    // The deterministic edge survives into the graph the UI reads.
+    const view = graph.getGraph({ libraryId: binding.libraryId, focusId: 'mem-a', depth: 1 })
+    assert.ok(view.edges.some((edge) => edge.from === 'mem-a' && edge.to === yuike.id && edge.source === 'auto'))
 
-  // Running it again is idempotent: no new links, same empty candidate list.
-  const rerun = JSON.parse(await suggest.execute({ ids: ['mem-a', 'mem-b'] }, execLinks))
-  assert.deepEqual(rerun.autoLinked, [])
-  assert.deepEqual(rerun.candidates, [])
+    // Running it again is idempotent: no new links, same empty candidate list.
+    const rerun = JSON.parse(await suggest.execute({ ids: ['mem-a', 'mem-b'] }, execLinks))
+    assert.deepEqual(rerun.autoLinked, [])
+    assert.deepEqual(rerun.candidates, [])
+  } finally {
+    updateSettings({ autoLinkMode: 'suggest' })
+  }
   dispose()
 })
 

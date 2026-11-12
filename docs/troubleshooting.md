@@ -362,7 +362,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 ### 2.1 模块地图
 
-<!-- rpc-method-count: 97 -->
+<!-- rpc-method-count: 101 -->
 
 | 文件 | 职责 / 什么时候碰它 |
 |---|---|
@@ -376,12 +376,13 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | `lib/private.js` | 私有整理：当前对话、历史 fork、notice 消息 |
 | `lib/curator.js` / `lib/cycle.js` | 全局 curator 与 `pending_review`；空闲整理 pass（过期/降级/晋升/自动整理） |
 | `lib/mood.js` / `lib/budget.js` / `lib/snippet.js` | 情绪价与峰值；token 换算（中文≈1 字符/token、英文≈3.4，任何 token 都走它）；注入片段裁剪 |
-| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 95 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
+| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 101 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
 | `lib/graph.js` / `lib/context.js` / `lib/media.js` | 关系边与实体；说话人/频道/角色/世界线/知情边界；附件采集、缩略图、受保护路由、ZIP |
 | `lib/prompts.js` + `lib/prompts/` | 提示词加载/覆盖/恢复/domain 变体解析 |
 | `lib/engine.js` / `lib/memu.js` / `lib/memu-config.js` | Python 引擎安装探测切换回滚；MemU CLI 适配（**所有 CLI 字符串只在这里**）；`~/.memu/config.env` 的 embedding |
 | `lib/stats.js` | 私有库旁路计数（`written/injected/recalled/archived`，90 天滚动）；读失败只降级页面，不碰记忆 |
-| `lib/lexicon.js` / `lib/private-links.js` | 词典条目与 `active/archived` 生命周期、注入行渲染；整理后的本地自动关联候选与枢纽 |
+| `lib/lexicon.js` / `lib/private-links.js` | 词典条目与 `active/archived` 生命周期、注入行渲染；私有自动关联的旧候选纯函数（统计不再写边） |
+| `lib/auto-link/` / `scripts/rebuild-auto-links.mjs` | 确定性判定（confirmed 实体提及 / 字段证据）、suppression、候选队列与旧实体分级；迁移脚本（dry-run/apply，apply 先备份） |
 | `lib/freshness.js` / `lib/salient-wake.js` | 时间敏感信号的只读判定（喂 `<memory-freshness>` 提示）；用宿主 `ctx.schedule` 排「到点唤醒」一次性任务（默认关闭） |
 | `lib/remote-summary.js` | 远程摘要 |
 
@@ -523,7 +524,9 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 - **词典词条没注入**：按顺序查——是否 `archived`（不注入、不检索，可恢复）；是否 `secret`（不进锚点摘要，但用户点名时 B 通道可解释）；context/knownBy 是否匹配；是否在 30 分钟冷却内；是否被锚点摘要 top8/敏感词单列的名额挤掉。词典没有 pending 人审状态；新词条直接 active。
 - **模型说写了词典但没生效**：`memu_lexicon_propose` 命中 archived 词条会返回 notOwned（不复活）；修改敏感字段会被 typed 拒绝；sensitive trigger 只能由用户在词典页管理。检查活动日志/工具回执，不要假设 pending。
 - **旧库里的 pending 词条去哪了**：周期巡检（`runVisibilityMigrationPass` → `migrateLexiconLibraries`）把 pending 新提案转 active、敏感转 archived、pending revision 转 archived；rejected 保留为内部墓碑。迁移只写有变化的文件；损坏的词典文件不会被当空库覆盖，报 `LEXICON_CORRUPT` 并保持只读。
-- **私有自动关联没出现**：算法宁漏勿错。检查两条记忆是否同库、同 context/track、都可见且非 secret；标题是否共享稀有 name-like token（英文 ≥3 字母，或低频 CJK 名称；通用词被停用词表挡掉）；pairScore 是否 ≥0.82（重复应走 update/合并）、是否有冲突、是否已有同向 link；每轮还有 2 条/entry、5 条/轮、2 个实体/轮的上限。边上的「自动」Tag 与 `source:'auto'` 是算法写的，可在关系图移除。
-- **实体枢纽名称重复（Yuike / yuike）**：算法按 NFKC/大小写/空白/标点归一化复用实体；`memu_private_link` 的 `entity` 参数也按同一规则复用同名实体。若已存在但 kind 冲突，会拒绝并提示改用既有 kind，而不是静默建第二个。
-- **worker 没裁决不确定候选**：`memu_private_link_suggest` 只返回候选卡，不自动连；worker 未调用或证据不足就保持不连（宁漏勿错）。`lib/private.js` 的结算兜底只重跑高置信算法，不会把不确定候选偷偷连上。自动关联失败只写 warn，不影响整理成功。
+- **私有自动关联没写边**：先看设置 `autoLinkMode`——默认 `suggest` 只出候选、不写任何边（v3 迁移默认）。切到 `deterministic` 后也只写两类边：已确认实体的提及、字段证据；统计相似度永远不写。确认入口在节点图页「待确认实体」，确认后会立即补挂提及边。实体仍是 provisional、名字只有 1 个字、记忆已归档/待复核/secret、或命中 suppression 时都不会有边。
+- **旧库还挂着一堆自动边**：先跑 `node scripts/rebuild-auto-links.mjs` 看 dry-run（列出 legacy auto 边与旧实体分级计划）；确认后 `--apply`（自动先做整库备份）删除全部 `source:'auto'` 旧边，并为已确认实体重建确定性边；再跑一次 dry-run 应显示 legacy 0。
+- **删掉的自动边又回来了**：删除动作会把 `(from,to,kind)` 写进 `index/<lib>.link-suppression.json`（精确 rule + `|*` 通配）；检查该文件是否被手动清掉或从旧备份恢复。命中抑制键的边不会在下次整理/重算时重建。**想主动恢复**：节点图页「解除删除标记」（RPC `clearLinkSuppression`）；deterministic 模式下会顺带全量重算一次，被删的边按现有证据重建。
+- **实体确认后没有提及边**：确认只匹配已确认实体的名字/别名；检查名字是否 <2 字、记忆是否 archived/pending_review/secret、实体是否 archived（archived 不可确认）、抑制表是否有同名 (from,to,kind) 键（删过的边会写 `|*` 通配，换 rule 也不复活）、以及 `autoLinkMode` 是否为 `off`（off 连确认也不写）。worker 通过 `memu_private_link` 新建的实体默认 provisional，需要用户在审核区确认。
+- **worker 没裁决不确定候选**：`memu_private_link_suggest` 现在只刷新确定性边并返回统计候选卡，不自动连；worker 未调用或证据不足就保持不连（宁漏勿错）。`lib/private.js` 的结算兜底同样只跑确定性判定，不会把统计候选偷偷连上。自动关联失败只写 warn，不影响整理成功。
 - **要不要数据库/向量重算**：自动关联只是 `links[]` 元数据，不改正文、不写向量；移除边不会触发重建。实体删除仍按既有规则（有引用时需显式 force，避免悬空）。
