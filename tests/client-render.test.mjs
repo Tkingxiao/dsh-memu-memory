@@ -230,6 +230,99 @@ test('the settings page renders every page instead of a blank panel', async () =
   }
 })
 
+test('the immersive graph shell stays with the standalone WebUI', async () => {
+  // 点「关系图谱」把宿主页面的导航条掰成 158px 竖排，是 is-graph-wide 没分外壳造成的：
+  // 那套样式是为独立 WebUI 的全屏画布写的，宿主设置页只需要普通横排导航 + 一个入口按钮。
+  const ctx = fakeCtx()
+  globalThis.__dshMemuExports.apply(ctx)
+  const settings = registrations.filter((r) => r.slot === 'settings.section').pop()
+  assert.ok(settings?.component, 'settings.section was not registered')
+  const GRAPH_PAGE = 10
+
+  // The standalone shell resolves its page from the hash, so there is no
+  // numeric-zero page state to force on; the host shell has one.
+  const shell = async (props, { fromHash = false } = {}) => {
+    const first = await renderPage(settings.component, props, undefined, { remount: true })
+    if (!fromHash) collectPageHook()
+    for (const effect of first.effects) effect.fn()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    return (await renderPage(settings.component, props, fromHash ? undefined : GRAPH_PAGE)).tree
+  }
+
+  const inHost = await shell({ ctx, t: (key) => key })
+  assert.match(String(inHost.props?.className), /dshm-root/, 'the host graph page lost its shell')
+  assert.ok(!/is-graph-wide/.test(String(inHost.props?.className)),
+    `the host settings page must keep its horizontal rail, saw "${inHost.props?.className}"`)
+  const buttons = []
+  walkNodes(inHost, (node) => { if (node.type === 'button' && node.props?.children === 'openGraphStudio') buttons.push(node) })
+  assert.equal(buttons.length, 1, 'the host graph page should offer exactly one entry into the studio')
+  assert.equal(typeof buttons[0].props.onClick, 'function', 'the entry button has no handler')
+
+  const inWebUi = await withHash('#/settings/graph', () => shell({ ctx, t: (key) => key, standalone: true }, { fromHash: true }))
+  assert.match(String(inWebUi.props?.className), /is-graph-wide/, 'the standalone graph page lost its immersive shell')
+})
+
+test('the manual consolidation button rides the sidebar channel, not a new RPC', async () => {
+  // 「立即整理」刻意不新增方法：它查 listSessions 的库绑定，再对每个绑定会话调用
+  // 侧边栏同一个 generatePrivate。多一个只给 UI 用的整理方法，就等于多一条模型也能
+  // 调用的写路径。
+  const rpcCalls = []
+  const ctx = fakeCtx({
+    rpcCalls,
+    answers: {
+      getState: { ...RPC_ANSWERS.getState, libraries: [{ id: 'lib-1', name: 'L1', privateCount: 3, pinnedCount: 0, boundSessions: 2 }] },
+      getSettingsState: { ...RPC_ANSWERS.getSettingsState, libraries: [{ id: 'lib-1', name: 'L1', privateCount: 3, pinnedCount: 0, boundSessions: 2 }] },
+      listSessions: { sessions: [
+        { id: 's1', libraryId: 'lib-1' }, { id: 's2', libraryId: 'lib-1' }, { id: 's3', libraryId: 'lib-2' },
+      ] },
+      generatePrivate: { ok: true },
+    },
+  })
+  globalThis.__dshMemuExports.apply(ctx)
+  const settings = registrations.filter((r) => r.slot === 'settings.section').pop()
+  const props = { ctx, t: (key) => key }
+  const LIBRARIES_PAGE = 4
+  const render = async (page, remount = false) => renderPage(settings.component, props, page, { remount })
+  const first = await render(undefined, true)
+  collectPageHook()
+  for (const effect of first.effects) effect.fn()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const second = await render(LIBRARIES_PAGE)
+  for (const effect of second.effects) effect.fn()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const tree = (await render(LIBRARIES_PAGE)).tree
+
+  const buttons = []
+  walkNodes(tree, (node) => { if (node.type === 'button' && node.props?.children === 'consolidateNow') buttons.push(node) })
+  assert.equal(buttons.length, 1, 'the library row lost its 立即整理 button')
+  rpcCalls.length = 0
+  await buttons[0].props.onClick()
+  assert.deepEqual(rpcCalls, [], 'the first click must only arm the confirmation')
+  const armed = []
+  walkNodes((await render(LIBRARIES_PAGE)).tree, (node) => { if (node.type === 'button' && node.props?.children === 'confirmAction') armed.push(node) })
+  assert.equal(armed.length, 1, 'the arming state did not reach the button label')
+  await armed[0].props.onClick()
+  for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.deepEqual(rpcCalls.map((c) => [c.endpoint, c.payload]), [
+    ['listSessions', { limit: 200 }],
+    ['generatePrivate', { sessionId: 's1' }],
+    ['generatePrivate', { sessionId: 's2' }],
+  ], 'consolidation must hit only the sessions bound to that library')
+})
+
+// The standalone shell reads `window.location.hash` to pick its page and rewrites
+// it as the user navigates, which the host-side fixture never provides.
+async function withHash(hash, run) {
+  const original = globalThis.window.location
+  const originalHistory = globalThis.window.history
+  globalThis.window.location = { ...original, hash }
+  globalThis.window.history = { ...originalHistory, replaceState: () => {} }
+  try { return await run() } finally {
+    globalThis.window.location = original
+    globalThis.window.history = originalHistory
+  }
+}
+
 test('the sidebar tab renders with the two-layer header', async () => {
   const ctx = fakeCtx()
   const tab = registrations.find((r) => r.slot === 'sidebar.right.pane.tab')
@@ -393,6 +486,84 @@ test('the memory browser badges what a memory is allowed to say', async () => {
     RPC_ANSWERS.getState = originalGetState
     RPC_ANSWERS.getSettingsState = originalSettingsState
     RPC_ANSWERS.listLibraries = originalLibraries
+    delete RPC_ANSWERS.browseLibrary
+  }
+})
+
+test('the browse search box filters the loaded library in place', async () => {
+  // 搜索是纯前端的：它只过滤已经拉回来的那一页，不新发 RPC。库一切换就清空，
+  // 否则上一个库的关键词会把当前库筛成「空库」。
+  const originalGetState = RPC_ANSWERS.getState
+  const originalSettingsState = RPC_ANSWERS.getSettingsState
+  const loaded = { ...EMPTY_STATE, libraries: [{ id: 'lib-1', name: 'demo', scopeKey: '/proj/demo', privateCount: 2 }] }
+  RPC_ANSWERS.getState = loaded
+  RPC_ANSWERS.getSettingsState = loaded
+  RPC_ANSWERS.browseLibrary = {
+    source: 'engine',
+    files: [
+      { id: 'mem-attic', title: 'the attic', content: 'he never told his brother', layer: 'long_term', status: 'active', decay: .5 },
+      { id: 'mem-loud', title: 'shared fact', content: 'anything', layer: 'long_term', status: 'active', decay: .9 },
+    ],
+  }
+  try {
+    const rpcCalls = []
+    const ctx = fakeCtx({ rpcCalls })
+    globalThis.__dshMemuExports.apply(ctx)
+    const settings = registrations.filter((r) => r.slot === 'settings.section').pop()
+    const props = { ctx, t: (key) => key }
+    const render = (page, remount = false) => renderPage(settings.component, props, page, { remount })
+    const first = await render(undefined, true)
+    collectPageHook()
+    for (const effect of first.effects) effect.fn()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    let tree = (await render(5)).tree
+    const picker = []
+    walkNodes(tree, (node) => {
+      const options = Array.isArray(node.props?.children) ? node.props.children : []
+      if (node.type === 'select' && options.some((option) => option?.props?.value === 'lib-1')) picker.push(node)
+    })
+    picker[0].props.onChange({ target: { value: 'lib-1' } })
+    tree = (await render(5)).tree
+    const reload = []
+    walkNodes(tree, (node) => { if (node.type === 'button' && node.props?.children === 'reload') reload.push(node) })
+    reload[0].props.onClick()
+    for (let i = 0; i < 3; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+    tree = (await render(5)).tree
+
+    // Rows carry their title in an editor input, so counting rendered values beats
+    // grepping the flattened tree.
+    const snapshot = (node) => {
+      const titles = []
+      let rows = 0
+      walkNodes(node, (n) => {
+        if (n.type === 'button' && n.props?.children === 'archive') rows++
+        if (n.type === 'input' && (n.props?.value === 'the attic' || n.props?.value === 'shared fact')) titles.push(n.props.value)
+      })
+      return { rows, titles }
+    }
+
+    const before = snapshot(tree)
+    assert.deepEqual(before, { rows: 2, titles: ['the attic', 'shared fact'] }, 'both rows render before filtering')
+    rpcCalls.length = 0
+    const box = []
+    walkNodes(tree, (node) => { if (node.type === 'input' && node.props?.placeholder === 'browseSearchPlaceholder') box.push(node) })
+    assert.equal(box.length, 1, 'no search box under 当前记忆库')
+    box[0].props.onChange({ target: { value: 'attic' } })
+    const filteredTree = (await render(5)).tree
+    assert.deepEqual(snapshot(filteredTree), { rows: 1, titles: ['the attic'] }, 'the filter keeps only the matching row')
+    assert.match(treeText(filteredTree), /1 \/ 2/, 'the counter says how much of the library the filter kept')
+    assert.match(treeText(filteredTree), /browseActiveTab \(1\)/, 'the tab counts follow the filter, not the whole library')
+    assert.deepEqual(rpcCalls, [], 'filtering an already loaded library must not re-fetch it')
+    box[0].props.onChange({ target: { value: 'no-such-memory' } })
+    assert.match(treeText((await render(5)).tree), /browseActiveTab \(0\)/, 'a query that matches nothing empties the tab counts')
+    const clear = []
+    walkNodes((await render(5)).tree, (node) => { if (node.type === 'button' && node.props?.children === 'browseSearchClear') clear.push(node) })
+    assert.equal(clear.length, 1, 'no way to clear the query')
+    clear[0].props.onClick()
+    assert.deepEqual(snapshot((await render(5)).tree), before, 'clearing the query brings the library back')
+  } finally {
+    RPC_ANSWERS.getState = originalGetState
+    RPC_ANSWERS.getSettingsState = originalSettingsState
     delete RPC_ANSWERS.browseLibrary
   }
 })

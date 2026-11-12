@@ -8,7 +8,7 @@
 
 1. **定位链路**：先用 §2.2 那条链找到「这个行为在哪一步决定」，再读那个函数，不要从 UI 往下猜。
 2. **最小改动**：一次只改一个语义，schema/文案/UI 不混在一个提交里——出了事无法二分。
-3. **三层验证**（§4.2）：语法 → 针对性单测 → 全量 + 验收 + 自检。**只跑自己新写的测试不够**，这个仓库多数回归是被别的文件抓到的。
+3. **三层验证**（§4.2）：语法 → 针对性单测 → 全量 + 验收 + 自检。**只跑自己新写的测试不够**，这个仓库多数回归是被别的文件抓到的。改过 `lib/webui/graph-view.js` 的话，验证之前先 `npm run build:graph`：浏览器加载的是 bundle，单测加载的是源码，不重打包就会出现「测试全绿、页面照旧」。
 4. **同步文档**（§4.4）。文档与代码不一致本身就是缺陷：读者照文档做就会出现「做了却不对」。
 
 ### 4.2 验证三件套
@@ -17,7 +17,7 @@
 node --check lib/<改过的文件>.js     # 语法（源码是 ESM，别用 require 试）
 npm test                             # 全量；真实引擎用例默认跳过
 node scripts/acceptance-local.mjs    # 50/50；视觉证据只证明本次已审查，UI 改动仍须重新看图
-npm run check                        # node --check + i18n 键对齐 + package.json 可解析
+npm run check                        # node --check + i18n 键对齐 + package.json 可解析 + 文档预算 + 图谱 bundle 漂移
 ```
 
 **结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。文档里出现的测试数字一律当作**带日期的快照**：2026-11-01 实测 1293 tests / 1291 pass / 0 fail / 2 skipped（curator 真实引擎与备份 venv/WAL 两条为 opt-in，按设计跳过）；更早的 1287 / 1280 / 1277 / 1273 / 1210 / 505 / 392 / 321 / 327 / 333 等是历史快照或转述，不能当作当前保证。**计时与日期敏感的断言要按「整包并行 + 一天中的任何时刻」写**：`tests/sidebar.test.mjs` 的大库首屏用 1500ms（空载 378–448ms，整包并行曾到 1808ms，500ms 测的是机器的空闲程度），`tests/client-render.test.mjs` 的短条目过期时刻用相对时间（曾 pin 在当天 09:30Z，下午必红）。
@@ -34,6 +34,7 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 | UI 任何东西 | §7 全部约定、zh/en 两字典、`renderXxxItem` 拆分 | `client-render`、`webui`、`new-session-gate` |
 | 提示词正文 | 各类型页变体、`{{变量}}` 是否都在 vars、`files` 白名单 | `prompts` |
 | 引擎/安装 | Python 顺序、镜像顺序、prune 白名单、备份内容、切换回滚 | `engine`、`backup` |
+| 图谱引擎 `lib/webui/graph-view.js` | 改完必须 `npm run build:graph`：浏览器只加载 `graph-view.bundle.js`，源码修复不重打包等于没修（`npm run check` 比对两者，漂移即红；生产安装没有 esbuild，该项自动 skip） | `graph-view` |
 | 设置项 | `DEFAULT_SETTINGS`、设置页控件、WebUI `settingRow`、反面语义 `invert`、`memoryStamp` 覆盖 | `state`、`config`、`sidebar-beat` |
 | 统计计数 | `bumpStats` 调用点（只有语义动作能加）、90 天裁剪、零值与降级、`getStats` 不建库 | `stats`、`client-render` |
 
@@ -42,6 +43,7 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 | 改动类别 | 要更新的文档 |
 |---|---|
 | 任何行为变化 | `README.md` 的能力/限制段（写「谁受益」不写「改了哪个函数」）+ `docs/troubleshooting.md` §3 对应小节的「会坏在哪」 |
+| UI 界面变化 | 两份 README 的截图也是产物：起预览后 `node scripts/make-readme-shots.mjs` 重录 `assets/screenshots/*.jpg`，并核对图注文字还描述得对（1.3.3 之前就漏过「关系图谱」独立成页，图注仍写着「与邻接列表同视图」） |
 | 设计决策 / 取舍 | `README.md` 限制段 + `docs/memory-semantics.md` §8（**只写为什么，不写施工流水**） |
 | 影响验收方式 | 能自动化的进 `scripts/acceptance-local.mjs`，行为级的进 `tests/`；都进不了说明还没想清楚 |
 | 新增能力 / 数据结构 | `README.md` 能力表 + `tests/` 或验收脚本 |

@@ -1,5 +1,35 @@
 # 更新日志 / Changelog
 
+## [1.3.3] - 2026-11-13
+
+> 小修复与体验优化版本：关系图谱最小缩放下「节点打架 / 闪现」的根因修掉（分离阈值曾跟缩放挂钩），开着图谱不再白吃 GPU，宿主设置页导航不再被掰竖；记忆库与记忆浏览新增「立即整理」与库内搜索；图谱产物纳入 `npm run check` 漂移闸门，README 截图与图注重录。
+
+### 关系图谱
+
+- **修掉最小缩放打架**：硬分离阈值原写为 `24 / clamp(viewScale, .06, 5)`，缩到最小（k≈.06）等于要求每对节点保持 400 世界像素间距，斥力与弹簧在 alpha 落地板后已经消失，于是每帧只剩分离力互推、永不收敛。现在阈值只看**世界坐标 + 节点半径**，完全重合时按 id 哈希给确定方向岔开；`viewScale` / `setScale` 一并删除——物理拿不到相机才是根本解。真实浏览器复测（60 节点、k=0.06、点「重新布局」）：每 250ms 最大位移 5.92 → 0.02 屏幕像素，静置后漂移 0.06px。
+- 「重新布局」同时重记弹簧原长，避免新位置配旧原长又拉成一团。
+- **冷下来零帧**：模拟落回 alpha 地板后不再申请下一帧，呼吸微动也只在模拟活着时画——WebUI 开着图谱 GPU 占用一路爬升的问题随之消失。
+- 最小缩放的命中迟滞：相邻节点在屏幕上只差 1–2px 时，悬停不再随 1px 抖动来回跳。
+- 缩略图只在主画布真正重绘后才更新（`onPaint` 计数），不再与画布各画各的。
+- 设置里的「关系图谱」改为**一个按钮**，点击直达 WebUI 全屏图谱页；`is-graph-wide` 只在独立外壳生效，宿主设置页保持原本的横排导航。
+
+### 记忆库与记忆浏览
+
+- 新增「立即整理」：记忆库每一行、记忆浏览页头各一个按钮，两段确认。它复用侧边栏同一条通道——`listSessions`（本次起返回每个会话绑定的 `libraryId`）筛出该库的会话，再逐个调用 `generatePrivate`，**不新增 RPC 方法**；单轮最多起 5 个整理，其余留给下一次扫描，回执说明已开始 / 在跑 / 失败条数。
+- 「当前记忆库」下方新增搜索框：按标题、正文、ID、标签即时过滤当前已加载的库，页签计数与「命中 / 总数」同步，切换记忆库自动清空；关系视图下不显示。
+
+### 工程与文档
+
+- `npm run check` 新增 **graph bundle 漂移闸门**：`node scripts/build-graph.mjs --check` 把源码重打包到内存与 `lib/webui/graph-view.bundle.js` 逐字节比对。此前改完引擎忘了 `npm run build:graph`，浏览器加载的还是旧产物，会出现「单测全绿、页面照旧」（单测 import 源码，浏览器加载 bundle）。生产安装没有 esbuild 时该项自动 skip，不算失败。
+- 新增 `scripts/make-readme-shots.mjs`：对着隔离数据预览用无头浏览器重录 README 的七张截图；本轮截图与图注已更新（关系图谱独立成页、自研连续力导向引擎、bundle 无第三方运行时），并清掉了残留的「D3 力导向」表述。
+- 文档：`AGENTS.md` 仓库事实改为「只有一个构建步骤」并加 §3.27 指针；`docs/client-conventions.md` 新增 §7.6 图谱工作台约定（物理不读相机、改引擎必重打包、冷下来零帧、命中迟滞、外壳归属、最小缩放必然压住不是 bug、整理不新增 RPC）；`docs/troubleshooting.md` 新增 §3.27；`docs/contributing.md` §4.1–§4.4 补构建步骤与截图连带项。
+
+### 测试
+
+- 引擎：`relayout cools down and separates instead of shoving nodes forever`（位移逐窗衰减 + 零重合 + 物理拿不到相机）、`a cooled layout stops requesting frames even while motion is enabled`、`hover keeps its target through 1px jitter at minimum zoom`。
+- 客户端渲染：`the immersive graph shell stays with the standalone WebUI`、`the manual consolidation button rides the sidebar channel, not a new RPC`、`the browse search box filters the loaded library in place`。
+- `listSessions` 返回库绑定由 `tests/browser.test.mjs` 覆盖。
+
 ## [1.3.2] - 2026-11-10
 
 > 独立「关系图谱」页与确定性自动关联：记忆墙里的内嵌节点图升级为侧边栏独立页面（自研力导向引擎，移除 d3 运行时依赖）；自动关联改为断言驱动（已确认实体提及 / 字段证据），默认只出候选，旧库可用脚本迁移。

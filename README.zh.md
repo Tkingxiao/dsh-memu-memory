@@ -46,7 +46,7 @@
     <td align="center"><img src="assets/screenshots/drawer.jpg" width="470" alt="原地详情"><br/><em>不离开记忆墙就能编辑、归档、恢复</em></td>
   </tr>
   <tr>
-    <td align="center"><img src="assets/screenshots/relations.jpg" width="470" alt="关系图与邻接列表"><br/><em>关系图与邻接列表在同一视图里</em></td>
+    <td align="center"><img src="assets/screenshots/relations.jpg" width="470" alt="关系图谱工作台"><br/><em>全屏关系图谱 · 画布与检视面板</em></td>
     <td align="center"><img src="assets/screenshots/settings.jpg" width="470" alt="设置"><br/><em>注入、预算、留存与自动化</em></td>
   </tr>
   <tr>
@@ -99,9 +99,9 @@
 
 **原地操作。** 点记忆卡片会从右侧滑出详情抽屉：完整正文，以及决定它行为的字段——标题、正文、标签、说出口径、置信度、未了之事——外加保存、归档、恢复，以及需要重编辑时的「在记忆浏览中打开」。已归档的记忆可以直接在抽屉里删除：第一次点击只是准备，第二次才真正删除。全局记忆在抽屉里只读，并给出跳转。筛选条件与滚动位置保持不动。带图片的卡片会把第一张可用附件作为封面，抽屉里展开完整图片组；`secret` 与 `never_say` 条目不会拿到像素 URL，只显示标签占位。
 
-**关系图与邻接列表一起看。** 「节点图」页签把关系画布与邻接列表并排显示（窄屏上下堆叠），焦点选择在上方，建边/实体/关系状态工具在下方；没有需要记得切换的模式。范围选择器除了私有库，还带一项**全局记忆**：节点是全局条目、边是 `related/refines/supports`，全局视图只读，移除边仍在全局记忆列表里完成。
+**图谱单独一页。** 「关系图谱」是 WebUI 里一个全屏页面（`#/settings/graph`）：左边画布、右边检视面板，列表视图在同页的**管理**页签下，用的是同一套筛选。来源（全部 / 仅自动 / 仅手动）、规则、记忆库与搜索都在收窄同一份数据，不是要记得切换的模式；设置里的「关系图谱」只有一个按钮，点了直达这一页。范围选择器仍然带一项**全局记忆**：节点是全局条目、边是 `related/refines/supports`，全局视图只读，移除边仍在全局记忆列表里完成。
 
-图谱使用本地打包的 D3 力导向布局，后台数据刷新保留节点位置与视角。支持拖拽节点、空白处平移、滚轮/双指缩放、适应全图与关联高亮；标签自动避让，设置中可调整斥力、连线距离，以及关闭标签或动态布局。图谱布局只表达已记录的关联，不会推断或写入新的关系。实体可以直接在图谱里删除（仍被引用时会明确拒绝）；永久删除一条记忆会连带清理指向它的边与孤立实体，孤立节点有启动扫描自动回收。节点图页还会列出**实体合并候选**（同 kind、名称包含或写法相近）：只是建议，两次点击确认；合并把来源实体的记忆链接改指主节点、别名并入，不删除任何记忆。
+图谱用的是**自研的连续力导向引擎**，bundle 里没有第三方运行时：模拟一直活着，后台数据刷新保留节点位置与视角，一旦冷下来就不再申请帧，开着图谱不会白吃 GPU。拖动把节点钉在你松手的地方（松手不会被拽回），并且只有你碰到的那一簇继续模拟，其余冻结簇充当障碍物，动的簇无法穿过去。斥力、连线距离、向心力在面板里可调，标签自动避让，缩略图只在主画布重绘后才更新。缩到最小时节点在屏幕上必然会压在一起——间距是世界坐标里的，要拉开簇请用斥力/连线距离，而不是缩放。设置里的「关系图谱」只有一个按钮，点开就是 WebUI 的全屏图谱页，那里还能新增/编辑/删除节点，并按生成这条边的规则筛选。图谱布局只表达已记录的关联，不会推断或写入新的关系。实体可以直接在图谱里删除（仍被引用时会明确拒绝）；永久删除一条记忆会连带清理指向它的边与孤立实体，孤立节点有启动扫描自动回收。节点图页还会列出**实体合并候选**（同 kind、名称包含或写法相近）：只是建议，两次点击确认；合并把来源实体的记忆链接改指主节点、别名并入，不删除任何记忆。
 
 | 页面 | 用途 |
 |---|---|
@@ -335,11 +335,12 @@ npm run build:graph                       # 修改图谱源码后重建随包分
 node scripts/acceptance-local.mjs         # 50 条自动验收
 node scripts/migrate-visibility.mjs       # 报告（--apply 才重写）仍存着旧 session 级别的库
 node --import ./tests/loader-register.mjs scripts/preview.mjs --port 7789
+node scripts/make-readme-shots.mjs        # 对着上面这个预览重录本文档的截图
 ```
 
 预览会在隔离示例数据上启动真实 WebUI：`http://127.0.0.1:7789/dsh-memu-memory/ui#/settings/memories`。
 
-预览运行后，可在另一终端执行 `npm run test:graph-browser -- http://127.0.0.1:7789/dsh-memu-memory/ui#/settings/memories`，验证 200 节点、桌面/窄屏、拖拽、刷新稳定性、主题与加载重试。首次使用需执行 `npx playwright install chromium`；Windows 也可设置 `GRAPH_BROWSER_CHANNEL=msedge` 使用已安装的 Edge。压力数据仅在测试浏览器内拦截，不写入记忆库。图谱运行时不依赖 CDN，D3 许可随资源保存在 `lib/webui/graph-LICENSE.txt`。
+预览运行后，可在另一终端执行 `npm run test:graph-browser -- http://127.0.0.1:7789/dsh-memu-memory/ui#/settings/memories`，验证 200 节点、桌面/窄屏、拖拽、刷新稳定性、主题与加载重试。首次使用需执行 `npx playwright install chromium`；Windows 也可设置 `GRAPH_BROWSER_CHANNEL=msedge` 使用已安装的 Edge。压力数据仅在测试浏览器内拦截，不写入记忆库。图谱运行时不依赖 CDN，bundle 内不含第三方运行时代码，这一点记录在 `lib/webui/graph-LICENSE.txt`。
 
 测试包含两条可选真实引擎集成用例：curator 写入需设置 `DSH_MEMU_TEST_ENGINE_PYTHON`，备份 venv/WAL 需设置 `DSH_MEMU_BACKUP_REAL_ENGINE=1`，默认按设计跳过；50 条自动验收全部通过。可选引擎已在隔离目录安装并跑通锁定 wheel 的 smoke；embedding 测试使用本机确定性服务，只证明协议可用，不证明语义质量。
 

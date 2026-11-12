@@ -314,6 +314,33 @@ test('the global curation picker hides archived and deleted conversations too', 
   assert.deepEqual(out.sessions.map((s) => s.id), ['global-visible'])
 })
 
+// 手动整理按钮按库找会话：listSessions 只多带一个只读 libraryId，
+// 整理本身仍走会话维度的 generatePrivate（与侧边栏同一通道）。
+test('listSessions reports the bound libraryId so a library can be consolidated', async () => {
+  const cwd = path.join(home, 'browser-lib-sessions')
+  const lib = createLibrary({ name: 'browser-lib-sessions', cwd })
+  setSessionBinding('sess-in-lib', { libraryId: lib.id })
+  setSessionBinding('sess-elsewhere', { libraryId: 'lib-other' })
+  const ctx = {
+    get(name) {
+      if (name !== 'sessionQuery') return null
+      return {
+        listSessions: async () => [
+          { header: { id: 'sess-in-lib', cwd }, live: false, persisted: true },
+          { header: { id: 'sess-elsewhere', cwd }, live: false, persisted: true },
+          { header: { id: 'sess-unbound', cwd }, live: false, persisted: true },
+        ],
+        readTitleSnapshots: async (ids) => ids.map((sessionId) => ({ sessionId, status: 'fulfilled', value: {} })),
+      }
+    },
+  }
+  const byId = Object.fromEntries((await dispatch(ctx, 'listSessions', { limit: 80 })).sessions
+    .map(row => [row.id, row.libraryId]))
+  assert.equal(byId['sess-in-lib'], lib.id, 'a bound conversation reports its library')
+  assert.equal(byId['sess-elsewhere'], 'lib-other', 'another library stays itself')
+  assert.equal(byId['sess-unbound'], null, 'an unbound conversation reports null, not undefined')
+})
+
 // ---- provenance in the browser, and the private review queue ----
 
 test('the browser shows where a memory came from, and lets it be corrected', async () => {

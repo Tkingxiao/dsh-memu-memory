@@ -46,7 +46,7 @@ All screenshots are the real WebUI on isolated example data, not anyone's memori
     <td align="center"><img src="assets/screenshots/drawer.jpg" width="470" alt="In-place memory drawer"><br/><em>Edit, archive or restore without leaving the wall</em></td>
   </tr>
   <tr>
-    <td align="center"><img src="assets/screenshots/relations.jpg" width="470" alt="Graph and adjacency list"><br/><em>Relationship graph and adjacency list in one view</em></td>
+    <td align="center"><img src="assets/screenshots/relations.jpg" width="470" alt="Relationship graph studio"><br/><em>Full-screen relationship graph · canvas and inspector</em></td>
     <td align="center"><img src="assets/screenshots/settings.jpg" width="470" alt="Settings"><br/><em>Injection, budgets, retention and automation</em></td>
   </tr>
   <tr>
@@ -100,9 +100,9 @@ The sidebar has exactly **one** entry: **MemU WebUI**. The memory wall and all s
 
 **In-place work.** Clicking a memory card opens a right-side drawer with the full text and the fields that decide how it behaves — title, content, tags, disclosure, confidence, open loop — plus save, archive, restore and "open in the browser" for heavier work. Archived memories can be deleted in the same drawer; the first click only arms it and the second confirms. Global memories are read-only in the drawer and link to their own page. Filters and scroll position stay where they were. Cards that carry images use the first usable attachment as a cover, and the drawer opens the full gallery; `secret` and `never_say` entries never receive a pixel URL, so they show a label instead.
 
-**Graph and list together.** The **Relations** tab renders the graph canvas and the adjacency list side by side (stacked on narrow screens), with the focus selector above them and link/entity/relationship tools below. There is no mode switch to forget. The scope selector also carries a **Global memory** entry: nodes are global entries and edges are `related/refines/supports`; the global view is read-only, and edges are removed from the global memory list.
+**One page for the graph.** **Relations** is its own full-screen page in the WebUI (`#/settings/graph`): the canvas on the left, the inspector on the right, and a **Manage** tab for the list view with the same filters. Source (all / automatic only / manual only), rule, library and search all narrow one shared dataset instead of switching modes, and Settings → Relations is a single button that opens that page. The scope selector still carries a **Global memory** entry: nodes are global entries and edges are `related/refines/supports`; the global view is read-only, and edges are removed from the global memory list.
 
-The locally bundled D3 force layout preserves positions and the camera across background data refreshes. Drag nodes, pan the background, zoom with the wheel or pinch, fit the graph, and highlight neighbors. Labels avoid collisions; graph settings adjust repulsion, link distance, labels and live layout. Layout only visualizes recorded links: it never infers or writes relationships. The graph page also lists **entity merge candidates** (same kind, contained or near-identical spellings) — suggestions only, confirmed by two clicks, and merging redirects links and folds aliases into the main node without deleting any memory.
+The graph runs on a **self-written continuous force engine** — no third-party runtime is bundled. It stays alive while you work, preserves node positions and the camera across background data refreshes, and stops requesting frames the moment it cools down, so an open graph costs no idle GPU. Dragging pins a node exactly where you drop it (release never yanks it back), and only the cluster you touched keeps simulating: frozen clusters act as obstacles the moving one cannot slide through. Repulsion, link distance and centering are adjustable in the panel, labels avoid collisions, and the minimap repaints only after the canvas does. Zoomed all the way out the nodes necessarily merge on screen — separation lives in world coordinates, so spread clusters with repulsion/link distance instead of the zoom. Settings → Relations is a single button that opens the full-screen graph page in the WebUI, where you can also add, edit and delete nodes, and filter edges by the rule that produced them. The layout only visualizes recorded links: it never infers or writes relationships. The graph page also lists **entity merge candidates** (same kind, contained or near-identical spellings) — suggestions only, confirmed by two clicks, and merging redirects links and folds aliases into the main node without deleting any memory.
 
 | Page | What it is for |
 |---|---|
@@ -347,11 +347,12 @@ npm run build:graph                       # rebuild shipped offline assets after
 node scripts/acceptance-local.mjs         # 50 automated acceptance checks
 node scripts/migrate-visibility.mjs       # report (add --apply to rewrite) libraries that still store the removed session level
 node --import ./tests/loader-register.mjs scripts/preview.mjs --port 7789
+node scripts/make-readme-shots.mjs        # re-record the screenshots above against that preview
 ```
 
 The preview serves the real WebUI against isolated example data at `http://127.0.0.1:7789/dsh-memu-memory/ui#/settings/memories`.
 
-With the preview running, use `npm run test:graph-browser -- http://127.0.0.1:7789/dsh-memu-memory/ui#/settings/memories` in another terminal to check 200 nodes, desktop/narrow layouts, dragging, refresh stability, themes and load retries. Run `npx playwright install chromium` once, or set `GRAPH_BROWSER_CHANNEL=msedge` on Windows to use installed Edge. Stress data is intercepted only in the test browser and never written to memory. No CDN is needed at runtime; bundled D3 licenses are in `lib/webui/graph-LICENSE.txt`.
+With the preview running, use `npm run test:graph-browser -- http://127.0.0.1:7789/dsh-memu-memory/ui#/settings/memories` in another terminal to check 200 nodes, desktop/narrow layouts, dragging, refresh stability, themes and load retries. Run `npx playwright install chromium` once, or set `GRAPH_BROWSER_CHANNEL=msedge` on Windows to use installed Edge. Stress data is intercepted only in the test browser and never written to memory. No CDN is needed at runtime; the bundle carries no third-party runtime code, which `lib/webui/graph-LICENSE.txt` records.
 
 The suite includes two optional real-engine integration cases: curator writing requires `DSH_MEMU_TEST_ENGINE_PYTHON`, and the backup venv/WAL case requires `DSH_MEMU_BACKUP_REAL_ENGINE=1`; both are skipped by default. The 50 automated acceptance checks pass. The optional engine was installed and smoke-tested in an isolated directory with the pinned wheel; embedding tests use a local deterministic server, which proves the protocol, not semantic quality.
 

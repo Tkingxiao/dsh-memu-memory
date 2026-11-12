@@ -2,7 +2,7 @@
 
 给**改这个仓库的人和 agent** 的**索引**：只答「去哪份文件找」。细节全在 `docs/`，本文件刻意短。
 
-仓库事实：纯 JS、ESM、**无构建步骤**；源码与测试**全 CRLF**；全量测试 + 验收 50 条（均由脚本核对）；版本见 `package.json`；MIT。
+仓库事实：纯 JS、ESM、**只有一个构建步骤**——图谱引擎 bundle（改 `lib/webui/graph-view.js` 必须 `npm run build:graph`，浏览器加载的是产物不是源码）；源码与测试**全 CRLF**；全量测试 + 验收 50 条（均由脚本核对）；版本见 `package.json`；MIT。
 
 2026-10-28：包名 `dsh-memu-memory`（目录仍由用户手动改名）。旧 `/dsh-memu` 路由兼容正式前缀；旧数据目录在没有新 `state.json` 时原地使用，不自动搬迁。WebUI 的 MemU 记忆墙与九页设置是同一个 SettingsPage，仅一个入口。旧「整理失败也标记已睡」的口径作废，失败必须退避重试。能力与限制 → `README.md`。
 
@@ -52,6 +52,7 @@
 日期到点没唤醒 → T3.21              时效提示没出现 → T3.22
 实体合并 / 怕丢记忆 → T3.23
 失败一轮后锚点/日期没了 → T3.24
+图谱改了没生效 / 缩到最小打架 → T3.27
 ```
 
 ---
@@ -62,8 +63,10 @@
 node --check lib/<改过的文件>.js     # 语法（源码是 ESM，别用 require 试）
 npm test                             # 全量；真实引擎用例默认跳过
 node scripts/acceptance-local.mjs    # 50/50
-npm run check                        # node --check + i18n + package.json + 文档预算
+npm run check                        # node --check + i18n + package.json + 文档预算 + 图谱 bundle 漂移
 ```
+
+**图谱引擎是唯一的产物**：改 `lib/webui/graph-view.js` 后先 `npm run build:graph` 再验证——单测 import 源码、浏览器加载 bundle，不重打包就是「测试全绿、页面照旧」（→ `docs/troubleshooting.md` §3.27）。
 
 **结果口径**：以 `node --test` 输出的 `ℹ tests / pass / fail / skipped` 为准。用例数变了先问「是不是我加的」，失败先问「是不是并发写了同一个库」——这仓库真会多个会话同时改它。测试数字只作**带日期快照**引用（2026-11-06 实测 1473 tests / 1471 pass / 0 fail / 2 skipped；两条真实引擎用例按设计跳过，历史 1293/1291/1287/1280/1277/1273/1210/505/493/463/409/392 等不再代表当前），不当成当前保证。提交前逐条对 `docs/contributing.md` §10。
 
@@ -77,7 +80,7 @@ npm run check                        # node --check + i18n + package.json + 文�
 | `docs/contributing.md` | §4 改动流程（四步 / 验证三件套 / 连带清单 / 文档同步）+ §5 六个扩展点 + §10 提交前清单 |
 | `docs/host-api.md` | §6.1 / 6.2 / 6.4–6.8：embedding、workspaceRegistry、历史会话与标题、fork/followup、定时器、RPC+slot+折叠、预设工具面真机证据边界 |
 | `docs/host-adaptation.md` | 宿主版本适配手册：事实来源、memu 的宿主面清单、新版本检查流程、隔离真机搭法、0.2.2-rc.1 实测记录与陷阱 |
-| `docs/client-conventions.md` | §7：两个壳一份实现、颜色 token、控件纪律、数据与刷新、文案与结构 |
+| `docs/client-conventions.md` | §7：两个壳一份实现、颜色 token、控件纪律、数据与刷新、文案与结构、图谱工作台（§7.6） |
 | `docs/memory-semantics.md` | §8：三层、写入规则、全局记忆、注入（含预设会话首步 `<memory-guide>` 一次性投放）、提示词管理 |
 | `docs/env-and-commands.md` | §9：Windows 跑命令的 env、CRLF 补丁法、本地 link、引擎安装与回滚、本地向量受管运行时的安装/状态命令（§9.5）、MemU CLI 事实 |
 

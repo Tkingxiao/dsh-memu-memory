@@ -102,6 +102,31 @@ test('pin/unpin/relayout/unpinAll keep the physics state coherent', () => {
   layout.dispose()
 })
 
+test('relayout cools down and separates instead of shoving nodes forever', () => {
+  // 「缩到最小 → 重新布局 → 打架」的回归：硬分离阈值以前写成 24 / viewScale，
+  // k≈.06 时等于要求 400 世界像素间距，每帧互推、永不收敛。现在只看半径，
+  // 物理也拿不到相机（setScale 已删），缩放再小也不会改变力的量级。
+  assert.equal('setScale' in createForceLayout(), false, 'the physics must never be handed the camera scale')
+  const layout = createForceLayout()
+  layout.update(graph(60))
+  layout.relayout()
+  let previous = Infinity
+  for (let window = 0; window < 6; window++) {
+    const before = layout.nodes.map(node => [node.x, node.y])
+    for (let i = 0; i < 20; i++) layout.tick()
+    let maxMove = 0
+    layout.nodes.forEach((node, i) => { maxMove = Math.max(maxMove, Math.hypot(node.x - before[i][0], node.y - before[i][1])) })
+    assert.ok(maxMove < previous, `window ${window} must move less than the one before (${maxMove} >= ${previous})`)
+    previous = maxMove
+  }
+  assert.ok(previous < 4, `a cooled relayout must stop shoving, saw ${previous}px per window`)
+  for (let i = 0; i < layout.nodes.length; i++) for (let j = i + 1; j < layout.nodes.length; j++) {
+    const a = layout.nodes[i], b = layout.nodes[j]
+    assert.ok(Math.hypot(a.x - b.x, a.y - b.y) > a.radius + b.radius, 'relayout must not leave nodes overlapping')
+  }
+  layout.dispose()
+})
+
 test('configure maps all three force sliders and reheats without ever going non-finite', () => {
   assert.equal(DEFAULT_OPTIONS.center, 0, 'center force is off by default')
   assert.equal(DEFAULT_OPTIONS.clusterScope, true)
@@ -164,11 +189,11 @@ test('drag scope freezes other clusters and repels the dragged one from them', (
 
 function harness(reducedMotion = true) {
   const handlers = new Map(), windowHandlers = new Map(), frames = new Map(), arcs = [], focuses = [], texts = []
-  let id = 0
+  let id = 0, paints = 0
   const ctx = new Proxy({
     arc(x, y, radius) { arcs.push({ x, y, radius }) },
     measureText(text) { return { width: text.length * 7 } },
-    clearRect() { arcs.length = 0; texts.length = 0 },
+    clearRect() { paints++; arcs.length = 0; texts.length = 0 },
     fillText(text) { texts.push(String(text)) },
   }, { get(target, key) { return key in target ? target[key] : () => {} } })
   const win = {
@@ -198,7 +223,7 @@ function harness(reducedMotion = true) {
   const emit = (type, x, y, extra = {}) => handlers.get(type)?.({
     type, clientX: x, clientY: y, button: 0, pointerId: 1, pointerType: 'mouse', preventDefault() {}, ...extra,
   })
-  return { view, flush, emit, arcs, texts, frames, focuses, handlers, windowHandlers }
+  return { view, flush, emit, arcs, texts, frames, focuses, handlers, windowHandlers, getPaints: () => paints }
 }
 
 test('the detailed layer actually paints labels and the label switch silences them', () => {
@@ -296,6 +321,38 @@ test('pinch does not trigger focus and reduced-motion/paused views do not run an
   paused.view.configure({ motion: false }); paused.view.update(graph(10)); paused.flush()
   assert.equal(paused.frames.size, 0, 'paused motion must not keep a rAF loop alive')
   paused.view.dispose()
+})
+
+// GPU 守卫：动效开着也不能在冷却后空转重绘（曾经的实现是 30fps 永久整幅重绘）。
+test('a cooled layout stops requesting frames even while motion is enabled', () => {
+  const h = harness(false)
+  h.view.update(graph(60))
+  for (let i = 0; i < 900 && h.frames.size; i++) h.flush()
+  assert.equal(h.frames.size, 0, 'a settled layout must not keep a rAF loop alive')
+  const painted = h.getPaints()
+  for (let i = 0; i < 200; i++) h.flush()
+  assert.equal(h.getPaints(), painted, 'idle time must not repaint the canvas')
+  h.view.zoom(1.2)
+  assert.equal(h.frames.size, 1, 'an interaction schedules exactly one repaint')
+  h.flush()
+  assert.equal(h.frames.size, 0, 'that repaint must not restart the loop')
+  h.view.dispose()
+})
+
+// 极小缩放下两颗节点可能只差 2-3px：纯最近邻会随鼠标 1px 抖动来回换人，
+// 高亮反复切换就是用户看到的「节点互相打架闪现」。
+test('hover keeps its target through 1px jitter at minimum zoom', () => {
+  const h = harness()
+  h.view.update(graph(2)); h.flush()
+  h.view.zoom(.05); h.flush()
+  const p = { ...h.arcs[0] }
+  const before = h.getPaints()
+  h.emit('pointermove', p.x, p.y); h.flush()
+  const first = h.getPaints()
+  assert.ok(first > before, 'hovering a node must repaint once')
+  h.emit('pointermove', p.x + 1, p.y + 1); h.flush()
+  assert.equal(h.getPaints(), first, 'a 1px nudge must not flip the hover target')
+  h.view.dispose()
 })
 
 test('Escape cancels a drag and clears the focus; toolbar actions do not throw', () => {

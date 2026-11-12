@@ -35,6 +35,7 @@
 鉴权 / 401/403 行为说不清 → §3.20
 本地向量模型装不上 / 切不过去 / 召回 400 → §3.25
 整理超时（fork 预算不够）→ §3.26
+图谱改了没生效 / 缩到最小打架 / 导航被掰竖 → §3.27
 ```
 
 ## 3. 出过的问题：症状 → 落点 → 守卫
@@ -323,6 +324,19 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **守卫**：`tests/consolidation-fork.test.mjs` 的 `the consolidation wait budget scales with the transcript`、`the seed keeps conversation only, renumbers from zero, and strips replay/stream noise`、`a long tail is cut to one closed-turn window with a remainder`、`the same failed snapshot stops re-forking after the failure cap`，以及 `a fork still running at the deadline reports a timeout instead of silence`。
 
+### 3.27 关系图谱：改了引擎没生效 / 缩到最小节点打架 / 导航被掰竖
+
+**症状**：三种都来自 1.3.2→1.3.3 这一段。① 明明改了 `lib/webui/graph-view.js`，页面行为一点没变；② 进入关系图谱、缩到最小、点「重新布局」，节点开始互相顶、位置反复闪；③ 在宿主设置页点「关系图谱」，左侧导航整片变成 158px 竖排。
+
+**落点**：
+- ①**产物不同步**。图谱引擎是全仓库唯一有构建产物模块：浏览器注入的是 `lib/webui/graph-view.bundle.js`，而 `tests/graph-view.test.mjs` import 的是**源码**——所以「测试全绿 + 页面照旧」是这条路的特征签名。改完必须 `npm run build:graph`；`npm run check` 的 `graph bundle` 项比对两者字节，漂移即红（生产安装没有 esbuild，该项自动 skip，不算失败）。
+- ②**缩放被塞进了物理**。硬分离阈值当年写成 `24 / clamp(viewScale, .06, 5)`：k=.06 时等于命令每对节点保持 400 世界像素，弹簧与斥力在 alpha 落地板后已经没了，于是每帧只剩分离力在互推，整图永远收敛不了。现在阈值只看世界坐标与节点半径（`own = radius + 8`，`minSep = own + other.radius`），重合到 `<.01` 时用 id 哈希给确定方向岔开；`relayout()` 同时重记弹簧原长，否则新位置配旧原长，松手后又拉回一团。`viewScale`/`setScale` 已删——物理拿不到相机才是根本解。
+- ③**全屏外壳没分家**。`.dshm-root.is-graph-wide` 是为独立 WebUI 的全屏画布写的，判定要 `standalone && page === PAGE.graph`；只看 page 就会连宿主设置页一起改竖排。
+
+**用户侧的取舍**：缩到最小（k=.06）时整图只占几十像素，绘制半径有 2.5px 下限，**屏幕上必然压在一起**，这不是还在打架——判据是「位移是否逐窗衰减到 0」。要真的拉开簇，用「斥力 / 连线距离」滑杆，它们改的是世界尺度。
+
+**守卫**：`tests/graph-view.test.mjs` 的 `relayout cools down and separates instead of shoving nodes forever`（位移逐窗衰减 + 零重合 + 物理拿不到相机）、`a cooled layout stops requesting frames even while motion is enabled`（冷下来零帧，GPU 不再爬升）、`hover keeps its target through 1px jitter at minimum zoom`（命中迟滞）；`tests/client-render.test.mjs` 的 `the immersive graph shell stays with the standalone WebUI`（宿主页保持横排 + 一个入口按钮）。`npm run check` 的 `graph bundle` 拦产物漂移。
+
 
 ## 守卫索引表
 
@@ -357,6 +371,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.24 | 失败一轮后锚点/日期再不出现 | `tests/injection-rollback.test.mjs`（6 条：撤回+重投、completed 不重复、迟到事件撤不动、已进转录的 500 类失败不误撤、投放前取消撤回、纪念日复提时钟一起撤）。 |
 | §3.25 | 本地向量模型装不上 / 切不过去 / 召回 400 | `tests/embedding-catalog.test.mjs`（三条目指纹钉死、只有非对称前缀需要角色通道）、`tests/local-embedding-protocol.test.mjs`、`tests/local-embedding-worker.test.mjs`（前缀进推理、裸 id 拒且不入推理）、`tests/local-embedding-env.test.mjs`（对称模型 model 串逐字节不变）。 |
 | §3.26 | 整理超时（fork 预算） | `tests/consolidation-fork.test.mjs`：预算随事件数缩放（0/100/200/935/5000/非法值），显式 `maxWaitMs` 仍生效，超时不推进 `lastSleepSeq`。 |
+| §3.27 | 图谱改了没生效 / 缩到最小打架 / 导航被掰竖 | `npm run check` 的 `graph bundle`（源码与 bundle 逐字节比对）；`tests/graph-view.test.mjs` 的 relayout 收敛、冷启动零帧、最小缩放命中迟滞；`tests/client-render.test.mjs` 的独立外壳归属。 |
 
 ## 附录 A · 模块地图（原 §2.1）
 

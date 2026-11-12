@@ -43,4 +43,15 @@
 - `tests/client-render.test.mjs` 把 7 个页面和侧边栏各渲染一遍：渲染期抛错或文本出现 `[object Object]` 即失败。
 - WebUI 打开路径只有一条 `openWebUiPage()`（先新标签，被拦截再用应用内 overlay）。**禁止同标签导航兜底**——会卸载宿主 SPA，「返回」变成整页刷新。
 
+### 7.6 关系图谱工作台（`lib/webui/graph-view.js` + `GraphStudioPanel`）
+
+- **物理不许读相机。** 力导向里的斥力、弹簧原长、硬分离阈值一律用**世界坐标 + 节点半径**；把缩放塞进物理（曾经的 `24 / clamp(viewScale, .06, 5)`）在最小缩放等于要求 400 世界像素间距，节点每帧互推、永不收敛，用户看到的就是「缩到最小后打架 / 闪现」。缩放只影响**绘制**与**命中半径**。`tests/graph-view.test.mjs` 钉死两件事：`setScale` 之类把相机交给物理的入口不许回来，`relayout()` 后位移必须逐窗衰减且不留重合。
+- **改引擎必须重打包。** 浏览器加载的是 `lib/webui/graph-view.bundle.js`，不是源码；`npm run build:graph` 忘了跑，源码修复在真实页面上根本不存在，而单测照绿（它 import 的是源码）。`npm run check` 现在比对两者字节，漂移即红。
+- **冷下来就要零帧。** 渲染循环只在 `layout.active`（alpha 高于地板）或交互期申请下一帧；呼吸微动也只在模拟活着时画。每帧无条件 `requestAnimationFrame` 会让 GPU 占用一路爬升且不回落。
+- **命中判定带迟滞。** 最小缩放下相邻节点在屏幕上只差 1–2px，纯「最近距离」会在两者之间反复跳；`hit(p, prefer)` 必须优先保留上一个目标（`tests/graph-view.test.mjs` 用 1px 抖动断言）。
+- **`is-graph-wide` 只属于独立外壳**（`standalone && page === PAGE.graph`）。那套样式为全屏画布把导航改成 158px 竖排，套到宿主设置页上就会把原本横排的导航整片掰竖。宿主那一页只给一个按钮，点了走 `openWebUiPage('graph')`。
+- **缩到最小节点必然在屏幕上压在一起**：绘制半径有 2.5px 下限，而世界间距不变。这不是 bug，别去动物理补偿；要拉开簇就用「斥力 / 连线距离」滑杆，它们改的才是世界尺度。
+- **缩略图只跟主画布重绘**：`createGraphView` 的 `onPaint` 计数不变就不 `drawImage`，否则缩略图按自己的节奏重画，和主画布对不上。
+- **整理入口不新增 RPC**：「立即整理」= `listSessions`（带 `libraryId`）筛出该库绑定的会话，再逐个调用侧边栏同一个 `generatePrivate`，两段确认。UI 专用的写方法同时也是一条模型能调的写路径，能复用就别新开。
+
 ---

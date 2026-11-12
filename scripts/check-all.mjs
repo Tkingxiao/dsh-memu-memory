@@ -43,6 +43,8 @@ const budget = (rel, limit) => {
 budget('AGENTS.md', 60000)
 
 check('i18n', process.execPath, ['scripts/check-i18n.mjs'])
+// 图谱引擎是唯一有产物的模块：浏览器加载的是 bundle，源码改了不重打包就等于没改。
+check('graph bundle', process.execPath, ['scripts/build-graph.mjs', '--check'])
 // npm silently de-duplicates `files` on pack, so a repeated entry only rots in
 // source without any failing check. Pin the whitelist shape here instead.
 check('package.json', process.execPath, ['-e', 'const p=JSON.parse(require("fs").readFileSync("package.json","utf8"));if(!Array.isArray(p.files)||new Set(p.files).size!==p.files.length)throw new Error("package.json: files must be an array with no duplicates")'])
