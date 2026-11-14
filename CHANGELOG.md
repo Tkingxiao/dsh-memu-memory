@@ -1,5 +1,19 @@
 # 更新日志 / Changelog
 
+## [1.3.5] - 2026-11-14
+
+> 修复宿主对同一条用户消息给出两次 `agent/pre-step` 时的重复注入：第二次召回会把已投候选全去重、注入 0 条，还多推一格 memoryClock。现在按真实用户消息 id 幂等，一条消息只注入一次；回合回滚时清标记，真重试仍会重投。
+
+### 注入
+
+- **一条用户消息只跑一次注入**：`registerInjection` 记录 `lastInjectedUserMessageId`；同一 session 收到同一条用户消息的第二次 enter 决策时只保留 guide 检查，不再召回。压缩后的 reinject（`reinjectPending`）不参与该幂等。
+- **回滚清标记**：`rollbackInjectionForTurn` 撤回本轮账目时一并删除标记，宿主重试同一条消息仍会正常注入。
+
+### 文档与测试
+
+- `docs/troubleshooting.md` 新增 §3.30（症状 / 根因 / 守卫）与症状速查入口。
+- `tests/injection-rollback.test.mjs` 新增两条：两次 enter 决策只注入一次（memoryClock 不前进、去重账目不增加）；回合回滚后重试重投。
+
 ## [1.3.4] - 2026-11-14
 
 > 整理执行器（实验功能）与增量回合日志：设置页可选 fork / 持久 worker（worker 按 200k 字符 / 16 窗换新，窗内批量写）；整理快照增加持久日志交叉核对，修掉外部追加不可见导致的整理冻结；WebUI 空闲合成负载归零。产品文档移除 benchmark 记录与文档（测试资产不进产品文档）。

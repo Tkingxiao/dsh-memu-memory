@@ -38,6 +38,7 @@
 图谱改了没生效 / 缩到最小打架 / 导航被掰竖 → §3.27
 WebUI 开着 GPU 占用高 / 时钟钉高档 → §3.28
 长链跑批库不增长 / 考试大面积「不知道」→ §3.29
+同一条用户消息每轮注入两次 / 第二次召回 0 条 → §3.30
 ```
 
 ## 3. 出过的问题：症状 → 落点 → 守卫
@@ -391,6 +392,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.26 | 整理超时（fork 预算） | `tests/consolidation-fork.test.mjs`：预算随事件数缩放（0/100/200/935/5000/非法值），显式 `maxWaitMs` 仍生效，超时不推进 `lastSleepSeq`。 |
 | §3.27 | 图谱改了没生效 / 缩到最小打架 / 导航被掰竖 | `npm run check` 的 `graph bundle`（源码与 bundle 逐字节比对）；`tests/graph-view.test.mjs` 的 relayout 收敛、冷启动零帧、最小缩放命中迟滞；`tests/client-render.test.mjs` 的独立外壳归属。 |
 | §3.28 | WebUI 开着 GPU 占用高 / 时钟钉高档 | `tests/webui.test.mjs` 的 `the shell keeps no always-on compositor drivers`（无限动画只许 boot、ambient 静态、模糊只许小 chrome、缩略图不轮询）；`scripts/check-idle-compositing.mjs` 真机数帧（空闲 fps > 2 即 FAIL）。 |
+| §3.30 | 同一条用户消息每轮注入两次 | `tests/injection-rollback.test.mjs` 的 one-pass 幂等与回滚清标记两条（同一消息 id 只注入一次；回滚后重试重投）。 |
 
 ## 附录 A · 模块地图（原 §2.1）
 
@@ -574,3 +576,13 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 **根因（2026-11-14 复现实测）**：跑批脚本的 `seed-session.mjs` **直接重写** `session.v4.jsonl.zstd` 追加历史（不走网关 RPC）。宿主的 `observeSession`/`readSession` 都是 live-preferred：会话一旦是活对象，两者都读活视图、不再看持久日志，外部改写完全不可见。把种子会话钉成活对象的是 inherit 模式的 `inheritedAgentOptions` resume 回退；`host`/`custom` 模式本不需要父 route，旧代码却照样探测。于是追加 372 轮后活视图仍冻结在 6 事件 → 每窗恒等 → already-consolidated 洪水 → 游标不推进。**连带**：turn-log 录制器只收 `session/event`，直接改文件同样看不到。跑批侧 `consolidateAll` 又把 already-consolidated 当完成，不校验 `throughSeq`，把可检测故障变成静默腰斩。
 
 **守卫**：`captureSessionSnapshot` 在活视图落后于持久日志时，用 `sessionPersistence` + 宿主公开导出的 `readColdSessionLog` 冷读，取更长的一份（source `persisted-ahead`；60 秒 TTL 缓存，正常活会话不受影响）。`consolidationModelMode` 为 `host`/`custom` 时不探测父会话 route，避免无意义 resume。跑批的 `consolidateAll` 对 skipped 结果校验 `through >= targetSeq`，连续 3 次落后判定 `stale` 并终止本轮。
+
+### 3.30 同一条用户消息每轮注入两次（第二次召回 0 条）
+
+**症状**：WebUI 时间线里每条用户消息后出现两条「上下文注入 · plugin:dsh-memu-memory」；召回记录成对出现（例如 13:41:41 注入 4 条 / 0 条，13:45:14 / 13:45:15），turn 号成对跳（221→222、223→224）。不报错，第二次只是纯空跑。
+
+**根因**：宿主对同一条真实用户消息给出两次 `agent/pre-step` enter 决策；插件把每次 pre-step 都当成新的一轮，重新召回。第一次已把候选记入 `injectedIds`，第二次候选全被去重，注入 0 条，同时把 memoryClock 多推一格。
+
+**现在**：`registerInjection` 按真实用户消息 id 幂等（`binding.lastInjectedUserMessageId`）——一条消息只跑一次注入；`turn/end` 失败且注入没进转录时，`rollbackInjectionForTurn` 清掉标记，真重试仍会重投；压缩后的 reinject（`reinjectPending`）不受影响。
+
+**守卫**：`tests/injection-rollback.test.mjs` 的 `the same real user message gets one injection pass when the host emits two enter decisions`、`a rolled-back turn clears the one-pass marker so a real retry injects again`。

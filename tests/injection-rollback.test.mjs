@@ -228,3 +228,37 @@ test('rollback also clears the day marks so dated blocks can return', async () =
   assert.equal(Object.keys(after.anniversariesShown || {}).length, 0, 'the day mark is withdrawn with the turn')
   assert.equal(Object.keys(after.openLoopRemindedAt || {}).length, 0, 'and so is the re-reminder clock')
 })
+
+test('the same real user message gets one injection pass when the host emits two enter decisions', async () => {
+  const session = makeSession('dup-step')
+  const first = await step(session, 221, [user(1, '林眠的相机镜头维修到哪一步了？')])
+  const afterFirst = state.getSessionBinding(session.id)
+  assert.equal(afterFirst.lastInjectedUserMessageId, 'u-1', 'the first pass marks the message it handled')
+  const clockAfterFirst = afterFirst.inbound?.clock
+  const injectedAfterFirst = facts(session.id).injected
+  const pluginBlocks = (messages) => messages.filter((message) => message?.source?.kind === 'plugin:dsh-memu-memory').length
+  const blocksAfterFirst = pluginBlocks(first)
+  assert.ok(blocksAfterFirst > 0, 'the first pass actually injected something')
+
+  // 宿主把同一条用户消息又交给了一次 enter 决策（turn 号成对跳），第二次不应再召回。
+  const second = await step(session, 222, [...first])
+  assert.equal(pluginBlocks(second), blocksAfterFirst, 'the duplicate pass adds no second memory block')
+  const afterSecond = state.getSessionBinding(session.id)
+  assert.equal(afterSecond.lastInjectedUserMessageId, 'u-1', 'the marker stays on the handled message')
+  assert.equal(afterSecond.inbound?.clock, clockAfterFirst, 'the duplicate pass does not advance the memory clock')
+  assert.equal(facts(session.id).injected, injectedAfterFirst, 'nor does it write new dedupe accounting')
+})
+
+test('a rolled-back turn clears the one-pass marker so a real retry injects again', async () => {
+  const session = makeSession('dup-retry')
+  const first = await step(session, 1, [user(1, '林眠的相机镜头修好了吗')])
+  assert.equal(countWith(first, ANCHOR_RE), 1)
+  assert.equal(state.getSessionBinding(session.id).lastInjectedUserMessageId, 'u-1')
+
+  await failTurn(session, 1)
+  assert.equal(state.getSessionBinding(session.id).lastInjectedUserMessageId, undefined,
+    'the rollback forgets the message so a real retry can inject again')
+
+  const retry = await step(session, 1, [user(1, '林眠的相机镜头修好了吗')])
+  assert.equal(countWith(retry, ANCHOR_RE), 1, 'the retry places the anchor again')
+})
