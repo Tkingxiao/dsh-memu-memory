@@ -22,6 +22,8 @@
 8. **不碰共享 `/api`**：RPC 只走 `/dsh-memu-memory` 前缀（`webServer.register` + `connection.requestRejection`）。
 9. **日志与提示词里不放 API key。**
 10. **注入失败 fail-open，但必须留可观测信号。** 吞掉异常是允许的，但**不许把真实故障一起吞**：fail-open 必配 `logger.warn` + binding 上的 `lastRecallError`（侧边栏可见），单测断言**召回到的 id**，不能只断言「消息插进去了」。**不能靠「没报错就是好了」。** 成因与守卫 → `docs/troubleshooting.md` §3.1。
+11. **跑批与复测的输出一律重定向文件**（`> logs/x.log 2>&1`），禁用 `| tail` 管道——管道只留尾巴，故障段不可回查。清理宿主数据必须先确认宿主进程完全退出（活宿主的内存态会回写覆盖清理结果）。
+12. **整理快照必须做持久日志交叉核对**：`captureSessionSnapshot` 的活视图（observeSession/readSession）落后于持久日志时，用 `sessionPersistence` + `readColdSessionLog` 冷读并取更长的日志（source `persisted-ahead`）；只信活视图 = 外部追加不可见 → 快照冻结/整理洪水。`host`/`custom` 模型模式也不得探测父会话 route（resume 会把父会话钉成活视图）。成因链与排错路线 → `docs/troubleshooting.md` §3.29。
 
 ---
 
@@ -53,6 +55,7 @@
 实体合并 / 怕丢记忆 → T3.23
 失败一轮后锚点/日期没了 → T3.24
 图谱改了没生效 / 缩到最小打架 → T3.27
+WebUI 开着 GPU 占用高 / 时钟钉高档 → T3.28
 ```
 
 ---
@@ -80,11 +83,13 @@ npm run check                        # node --check + i18n + package.json + 文�
 | `docs/contributing.md` | §4 改动流程（四步 / 验证三件套 / 连带清单 / 文档同步）+ §5 六个扩展点 + §10 提交前清单 |
 | `docs/host-api.md` | §6.1 / 6.2 / 6.4–6.8：embedding、workspaceRegistry、历史会话与标题、fork/followup、定时器、RPC+slot+折叠、预设工具面真机证据边界 |
 | `docs/host-adaptation.md` | 宿主版本适配手册：事实来源、memu 的宿主面清单、新版本检查流程、隔离真机搭法、0.2.2-rc.1 实测记录与陷阱 |
-| `docs/client-conventions.md` | §7：两个壳一份实现、颜色 token、控件纪律、数据与刷新、文案与结构、图谱工作台（§7.6） |
+| `docs/client-conventions.md` | §7：两个壳一份实现、颜色 token、控件纪律、数据与刷新、文案与结构、图谱工作台（§7.6）、合成负载（§7.7） |
 | `docs/memory-semantics.md` | §8：三层、写入规则、全局记忆、注入（含预设会话首步 `<memory-guide>` 一次性投放）、提示词管理 |
 | `docs/env-and-commands.md` | §9：Windows 跑命令的 env、CRLF 补丁法、本地 link、引擎安装与回滚、本地向量受管运行时的安装/状态命令（§9.5）、MemU CLI 事实 |
 
 **W8（助手重复提示）已决定不做，不再重做。** 理由：120 次合成 A/B 未证明改善重复回答率，事实词面完整性反而下降。证据文档已删除，不得据此宣称“已证明任何防复读技术无效”。
+
+**整理执行器（实验功能）**：设置 → 记忆维护 →「整理执行器」，`fork`（默认，每窗新 fork）/ `worker`（持久 worker，按 200k 字符 / 16 窗换新）。作用、差异与回滚 → `docs/memory-semantics.md` §8.18。
 
 节号跨文件不变：看到「（§8.4）」就去 `docs/memory-semantics.md` 找 §8.4。
 

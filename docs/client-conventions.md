@@ -54,4 +54,14 @@
 - **缩略图只跟主画布重绘**：`createGraphView` 的 `onPaint` 计数不变就不 `drawImage`，否则缩略图按自己的节奏重画，和主画布对不上。
 - **整理入口不新增 RPC**：「立即整理」= `listSessions`（带 `libraryId`）筛出该库绑定的会话，再逐个调用侧边栏同一个 `generatePrivate`，两段确认。UI 专用的写方法同时也是一条模型能调的写路径，能复用就别新开。
 
+### 7.7 合成负载（GPU 占用）
+
+WebUI 的 GPU 问题几乎从来不是算力，是**空闲期仍在持续产帧**：合成器每帧有活干，时钟就降不下来（外部实测：开面板 GPU 时钟 765→1950MHz、功耗 29→72W，util 却只有三四成；关面板立刻回落）。
+
+- **装饰层不许有无限动画。** 全屏模糊光斑、品牌图标浮动、状态点脉冲这类 `animation: … infinite` 会让合成器永远不睡。要动效只给交互触发的一次性动画；boot 遮罩例外（ready 后 900ms 移除）。`will-change`  likewise 不许常驻在装饰层上。
+- **模糊只给小 chrome。** `backdrop-filter` 只允许 topbar 与 boot 卡；rail、卡片、抽屉、全屏遮罩一律不用——背后只要有东西在动，这些面每帧重算模糊，成本相乘。遮罩用纯色 scrim 就够。
+- **缩略图/副画布由主画布 `onPaint` 驱动**，不许自己 `setInterval` 轮询；主画布冷下来不重绘，副画布就一帧不画。
+- **改完要量**：`node scripts/check-idle-compositing.mjs`（先起预览）用 CDP screencast 数帧 + `document.getAnimations()`，空闲 fps > 2 即 FAIL。静态守卫在 `tests/webui.test.mjs` 的 `the shell keeps no always-on compositor drivers`。
+- **对照环境要先验**：若桌面本身被别的进程钉住时钟（不开浏览器也高频），真 GPU 前后对照在那台机器上无效；以帧计数为准，或到「关面板立刻回落」的宿主上复测。
+
 ---

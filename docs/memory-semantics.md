@@ -228,3 +228,20 @@
 **可观测性**：`getState` 增加 `recallCache` 段（`hits/misses/evictions/errors/staleSkipped/generations/...`）；`staleSkipped` 统计 TTL 过期、代数清理与按 query 失效时被丢弃的缓存条目。
 
 守卫：`tests/temporal.test.mjs`、`tests/memory-fields.test.mjs`、`tests/fact-version.test.mjs`、`tests/inject-conflict.test.mjs`、`tests/speaker-provenance.test.mjs`、`tests/commitment.test.mjs`、`tests/query-decompose.test.mjs`、`tests/recall-intent.test.mjs`、`tests/injection-intent-budget.test.mjs`、`tests/memory-chain.test.mjs`。
+
+### 8.18 整理执行器（实验功能）：fork 与持久 worker
+
+**作用**：决定私有记忆整理在后台以什么形态执行。入口是设置 → 记忆维护 →「整理执行器」（带红色「实验功能」标记），键为 `consolidationRunner`：`fork`（默认）或 `worker`。切换从下一窗生效，不需要重启；「恢复默认」回到 `fork`。两条路径写同一套账本与库，回滚不涉及数据迁移（turn-log 只是缓存，账本与库才是权威）。
+
+**fork（默认）**：每个整理窗口新建一次后台整理会话，窗口结束即弃。上下文最干净、单窗开销稳定，是现有生产路径与回滚路径。
+
+**worker（实验）**：跨窗复用同一个后台 worker 会话。
+
+- **换新**：acquire 时按模型上下文分档检查预算——≤128k 上下文 → 120k 字符 / 8 窗，其余 → 200k 字符 / 16 窗；字符预算或窗口上限到顶、scope 变化、空闲超时、回合失败、连续两次超时都会退役换新。
+- **交接**：除 scope 变化外，新 epoch 用交接包接续——已结算尾部（≤20k 字符）+ 已写入摘要（最近 20 条 id + 标题）+ 记忆目录头；未结算的增量仍按窗口原文下发。尾部只是跨窗指代的参考，不是正确性防线；去重仍由目录、已写入摘要与库级去重兜底。
+- **批量写**：任务书要求把本窗新增条目合并成一次 `memu_private_remember_batch`，只有 1 条时才逐条 `remember`，更新也放在同一轮；批量参数畸形时下一轮退回逐条写（`consolidationSingleOnly`），不会把整窗判死。
+- **代价**：worker 的会话内上下文会随窗口累积，token 总量取决于换新节奏；fork 没有这段累积。
+
+**边界**：worker 仍运行在父预设的 system prompt 下（宿主没有公开 API 可替换），身份靠任务书缓解而不是消除；工具面只有 remember / remember_batch / update；失败窗口保持 pending，按原有退避重试。
+
+守卫：`tests/worker-lifecycle.test.mjs`（分档、预算、退役、交接、工具面）、`tests/settings-coverage.test.mjs`（`consolidationRunner` 可设置且默认值合法）、`tests/ui-defaults.test.mjs`。

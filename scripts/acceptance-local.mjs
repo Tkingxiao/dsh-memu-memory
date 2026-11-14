@@ -688,11 +688,12 @@ await auto('F-4', 'the activation log prints the settings the engine actually ra
   assert.equal(Number(match[7]), settings.unpinBudgetPerSession)
   assert.deepEqual(
     handlers.filter((entry) => ['agent/pre-step', 'session/event'].includes(entry.event)).map((entry) => entry.event).sort(),
-    ['agent/pre-step', 'session/event'],
-    'the same activation must wire the injection hooks',
+    // 两个 session/event：注入管线一个 + 增量回合日志记录器一个（设计文档 §3.2，T0 起挂载）。
+    ['agent/pre-step', 'session/event', 'session/event'],
+    'the same activation must wire the injection hooks and the turn-log recorder',
   )
   for (const dispose of disposers) { try { dispose() } catch {} }
-  return 'line matches live settings, both hooks wired'
+  return 'line matches live settings, injection + turn-log hooks wired'
 })
 
 await auto('G-1', 'the kept docs exist and nothing points at a retired one', async () => {
@@ -717,8 +718,8 @@ await auto('G-1', 'the kept docs exist and nothing points at a retired one', asy
   const ruleLead = (text) => text.split(String.fromCharCode(10)).filter((l) => /^[0-9]+[.] [*][*]/.test(l)).map((l) => { const end = l.indexOf('**', 5); return end < 0 ? l.slice(0, 40) : l.slice(0, end + 2) })
   const inIndex = ruleLead(agents)
   const inAppendix = ruleLead(appendix)
-  assert.equal(inIndex.length, 10, 'the index carries all ten hard rules')
-  assert.equal(inAppendix.length, inIndex.length, 'the appendix carries the same ten hard rules')
+  assert.ok(inIndex.length >= 10, 'the index carries at least ten hard rules, got ' + inIndex.length)
+  assert.equal(inAppendix.length, inIndex.length, 'the appendix carries the same hard rules')
   for (const lead of inIndex) assert.ok(inAppendix.includes(lead), 'rule drifted between AGENTS.md and appendix E: ' + lead)
   const pointers = agents.match(new RegExp('docs/[A-Za-z0-9._-]+[.]md', 'g')) || []
   for (const rel of new Set(pointers)) {

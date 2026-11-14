@@ -44,6 +44,7 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 |---|---|
 | 任何行为变化 | `README.md` 的能力/限制段（写「谁受益」不写「改了哪个函数」）+ `docs/troubleshooting.md` §3 对应小节的「会坏在哪」 |
 | UI 界面变化 | 两份 README 的截图也是产物：起预览后 `node scripts/make-readme-shots.mjs` 重录 `assets/screenshots/*.jpg`，并核对图注文字还描述得对（1.3.3 之前就漏过「关系图谱」独立成页，图注仍写着「与邻接列表同视图」） |
+| UI 动效 / 模糊 / 副画布 | 合成负载（§7.7）：装饰层不许无限动画、模糊只给小 chrome、副画布由 `onPaint` 驱动；改完跑 `node scripts/check-idle-compositing.mjs` 数空闲帧 | `webui`（静态守卫） |
 | 设计决策 / 取舍 | `README.md` 限制段 + `docs/memory-semantics.md` §8（**只写为什么，不写施工流水**） |
 | 影响验收方式 | 能自动化的进 `scripts/acceptance-local.mjs`，行为级的进 `tests/`；都进不了说明还没想清楚 |
 | 新增能力 / 数据结构 | `README.md` 能力表 + `tests/` 或验收脚本 |

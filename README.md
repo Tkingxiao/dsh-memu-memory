@@ -30,11 +30,7 @@ It is **local-first by default**. The default `agent` backend stores full text i
 > [!WARNING]
 > **Early-stage software.** This plugin is still early and may contain unforeseen errors, bugs or breaking changes. Back up your data, and please [report an issue](https://github.com/Tkingxiao/dsh-memu-memory/issues) or send a pull request — feedback helps the project improve.
 
-> **Status:** 1.3.0. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
-
-## Benchmark
-
-The public [chat-memory-benchmark](https://github.com/Ornn8/chat-memory-benchmark) full 714-question run (2026-11-06, `dys-router / deepseek-v4.1-flash`, high reasoning) passed **653 / 714 (91.46%)**. The run's actual measured memory cost was **¥16.05**; the full run, including non-memory overhead, cost **¥24.45** (75,517,851 tokens total, at the provider's off-peak rate) — measured end to end, not extrapolated from a single session.
+> **Status:** 1.3.4. The first public release was 1.0.0. The manual now lives in [`docs/`](docs/), with [`AGENTS.md`](AGENTS.md) as a short index. Back up `~/.dsh/dsh-memu-memory` before upgrades, and read [Compatibility & limits](#compatibility--limits) before storing data you cannot re-create.
 
 ## Screenshots
 
@@ -89,8 +85,6 @@ Four real long sessions from this machine were replayed read-only (no new chat) 
 | `edf7dc5c…` | 78 | 4 | 0 | 4 | 0 |
 
 Below-threshold turns on the two small sessions can still wake through starvation; on the 2,000+ event sessions they do not. None of the four had new human input after its real cursor, so none would fork again immediately.
-
-End-to-end accuracy and the measured cost of the 714-question run are in [Benchmark](#benchmark).
 
 ## One WebUI
 

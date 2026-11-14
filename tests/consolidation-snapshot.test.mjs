@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-const { captureSessionSnapshot, safePrefix, toolPairing, lastClosedTurnSeq, snapshotHash } = await import('../lib/consolidation-snapshot.js')
+const { captureSessionSnapshot, reconcilePersistedAhead, safePrefix, toolPairing, lastClosedTurnSeq, snapshotHash } = await import('../lib/consolidation-snapshot.js')
 const { probeToolSurface, lastHeaderTools, buildWorkerBrief } = await import('../lib/consolidation-worker.js')
 
 // C 包第 1、2 条：安全前缀必须可解释。这里逐条钉住「什么算完整」，
@@ -235,6 +235,94 @@ test('a failing observeSession is a retryable failure with the host message', as
   assert.equal(captured.ok, false)
   assert.equal(captured.code, 'failed')
   assert.match(captured.error, /disk gone/)
+})
+
+// ---- 外部追加恢复：活视图落后于持久日志时改读冷日志（bench S1 冻结） ----
+
+function coldAheadHost({ sessionId, liveEvents, coldEvents, coldHeader = null, liveHeader = null }) {
+  const rec = { coldReads: 0, disposed: 0 }
+  const ctx = {
+    rec,
+    on: () => () => {},
+    get: (name) => {
+      if (name === 'sessionQuery') {
+        return {
+          observeSession: async () => ({
+            source: 'live',
+            header: liveHeader || { id: sessionId, cwd: 'D:/proj', createdAt: 1 },
+            inheritedEventCount: 0,
+            events: liveEvents,
+            cursor: liveEvents.at(-1)?.seq ?? -1,
+            [Symbol.dispose]: () => { rec.disposed += 1 },
+          }),
+        }
+      }
+      if (name === 'sessionPersistence') return { open: async () => ({}) }
+      return undefined
+    },
+  }
+  const loadColdLogModule = async () => ({
+    readColdSessionLog: async () => {
+      rec.coldReads += 1
+      return {
+        header: coldHeader || { id: sessionId, cwd: 'D:/proj', createdAt: 1 },
+        inheritedEventCount: 0,
+        events: coldEvents,
+      }
+    },
+    assertSessionHeadersCompatible: (a, b) => {
+      if (a.id !== b.id || a.createdAt !== b.createdAt || a.cwd !== b.cwd) throw new Error('header conflict')
+    },
+  })
+  return { ctx, rec, loadColdLogModule }
+}
+
+test('a live observation behind the persisted log is replaced by the cold log', async () => {
+  const liveEvents = turn(1, 1) // seq 0-5
+  const coldEvents = [...turn(1, 1), ...closeTurn([], 2, 6)] // seq 0-10
+  const { ctx, rec, loadColdLogModule } = coldAheadHost({
+    sessionId: 'sess-ahead', liveEvents, coldEvents,
+  })
+  const captured = await captureSessionSnapshot(ctx, 'sess-ahead', { loadColdLogModule })
+  assert.equal(captured.ok, true)
+  assert.equal(captured.snapshot.source, 'persisted-ahead', 'the persisted log wins when it is ahead')
+  assert.equal(captured.snapshot.throughSeq, 10)
+  assert.equal(captured.snapshot.eventCount, coldEvents.length)
+  assert.equal(rec.coldReads, 1)
+  assert.equal(rec.disposed, 1, 'the original live lease is still released')
+})
+
+test('a live observation that is already the newest keeps the live cut', async () => {
+  const liveEvents = [...turn(1, 1), ...closeTurn([], 2, 6)]
+  const { ctx, rec, loadColdLogModule } = coldAheadHost({
+    sessionId: 'sess-live-wins', liveEvents, coldEvents: liveEvents,
+  })
+  const captured = await captureSessionSnapshot(ctx, 'sess-live-wins', { loadColdLogModule })
+  assert.equal(captured.ok, true)
+  assert.equal(captured.snapshot.source, 'lease-live')
+  assert.equal(captured.snapshot.throughSeq, 10)
+  assert.equal(rec.coldReads, 1, 'one probe is enough; the TTL cache skips the next few seconds')
+})
+
+test('a cold log with a conflicting header never replaces the live cut', async () => {
+  const liveEvents = turn(1, 1)
+  const coldEvents = [...turn(1, 1), ...closeTurn([], 2, 6)]
+  const { ctx, loadColdLogModule } = coldAheadHost({
+    sessionId: 'sess-conflict', liveEvents, coldEvents,
+    coldHeader: { id: 'sess-conflict', cwd: 'D:/elsewhere', createdAt: 1 },
+  })
+  const captured = await captureSessionSnapshot(ctx, 'sess-conflict', { loadColdLogModule })
+  assert.equal(captured.ok, true)
+  assert.equal(captured.snapshot.source, 'lease-live')
+  assert.equal(captured.snapshot.throughSeq, 5)
+})
+
+test('reconcilePersistedAhead degrades silently without persistence or the cold-read module', async () => {
+  assert.equal(await reconcilePersistedAhead({ persistence: null, sessionId: 'x', liveEvents: turn(1, 1) }), null)
+  assert.equal(await reconcilePersistedAhead({
+    persistence: { open: async () => ({}) }, sessionId: 'x', liveEvents: turn(1, 1),
+    loadModule: async () => { throw new Error('module missing') },
+  }), null)
 })
 
 // ---- 工具面：标准 / PTC / 未知 三种都要能分辨 ----

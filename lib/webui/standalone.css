@@ -140,8 +140,9 @@ html[data-theme="dark"] body {
   border-radius: 50%;
   filter: blur(74px);
   opacity: .62;
-  will-change: transform;
-  animation: ambient-drift 52s ease-in-out infinite alternate;
+  /* 静态光斑。曾经这里是 52s 无限漂移 + will-change: transform：一个全屏模糊层
+     永远在动，合成器就永远不睡，GPU 时钟被钉在高档（实测空闲 ~99fps 产帧）。
+     装饰层不许有无限动画；要动效只给交互触发的一次性动画。 */
 }
 .ambient i:nth-child(1) {
   width: 54vw;
@@ -198,12 +199,6 @@ html[data-theme="dark"] body {
 }
 body[data-pointer="fine"] .ambient-spot {
   opacity: 1;
-}
-
-@keyframes ambient-drift {
-  0%   { transform: translate3d(0, 0, 0) scale(1); }
-  50%  { transform: translate3d(3vw, 2vh, 0) scale(1.06); }
-  100% { transform: translate3d(-2vw, 4vh, 0) scale(.98); }
 }
 
 /* ── app frame ─────────────────────────────────────────────────────────── */
@@ -278,7 +273,6 @@ body[data-scrolled="true"] .topbar {
   box-shadow:
     0 12px 24px -16px rgba(16, 22, 48, .5),
     inset 0 1px 0 rgba(255, 255, 255, .9);
-  animation: brand-float 7s ease-in-out infinite;
 }
 :root[data-theme="dark"] .brand-icon {
   background: #fff;
@@ -364,7 +358,6 @@ body[data-scrolled="true"] .topbar {
   border-radius: 50%;
   background: var(--dshm-ok);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--dshm-ok) 18%, transparent);
-  animation: dot-pulse 2.8s ease-in-out infinite;
 }
 .icon-btn {
   height: 38px;
@@ -430,15 +423,6 @@ body[data-scrolled="true"] .topbar {
 }
 .back-label {
   padding-right: 2px;
-}
-
-@keyframes brand-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2px); }
-}
-@keyframes dot-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: .45; }
 }
 
 /* ── stage ─────────────────────────────────────────────────────────────── */
@@ -638,9 +622,7 @@ html[data-standalone] .dshm-nav {
   border-radius: 0 var(--dshm-radius) var(--dshm-radius) 0;
   border: 1px solid var(--dshm-line);
   border-left: 0;
-  background: color-mix(in srgb, var(--dshm-panel) 74%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(1.4);
-  backdrop-filter: blur(18px) saturate(1.4);
+  background: color-mix(in srgb, var(--dshm-panel) 92%, transparent);
   box-shadow: var(--dshm-shadow-soft);
   overflow-y: auto;
   z-index: 20;
@@ -748,8 +730,6 @@ html[data-standalone] .dshm-card {
     linear-gradient(180deg,
       color-mix(in srgb, var(--dshm-panel-strong) 94%, transparent),
       color-mix(in srgb, var(--dshm-panel) 88%, transparent)) !important;
-  -webkit-backdrop-filter: blur(16px) saturate(1.25);
-  backdrop-filter: blur(16px) saturate(1.25);
   box-shadow: var(--dshm-shadow-card);
   transition: transform .28s cubic-bezier(.22, 1, .36, 1), box-shadow .28s ease,
     border-color .28s ease;
@@ -1028,8 +1008,6 @@ html[data-standalone] .dshm-drawer {
   padding: 26px;
   gap: 12px;
   background: var(--dshm-panel-strong);
-  -webkit-backdrop-filter: blur(22px) saturate(1.3);
-  backdrop-filter: blur(22px) saturate(1.3);
   border-left-color: var(--dshm-line);
   box-shadow: -30px 0 80px -40px rgba(0, 0, 0, .55);
 }
@@ -1142,9 +1120,6 @@ html[data-standalone] .dshm-wall-graph {
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  .ambient i,
-  .brand-icon,
-  .sync-pill i,
   .boot-icon::after,
   .boot-bar i,
   .boot-card {

@@ -1,5 +1,31 @@
 # 更新日志 / Changelog
 
+## [1.3.4] - 2026-11-14
+
+> 整理执行器（实验功能）与增量回合日志：设置页可选 fork / 持久 worker（worker 按 200k 字符 / 16 窗换新，窗内批量写）；整理快照增加持久日志交叉核对，修掉外部追加不可见导致的整理冻结；WebUI 空闲合成负载归零。产品文档移除 benchmark 记录与文档（测试资产不进产品文档）。
+
+### 整理（实验功能）
+
+- **设置页可选「整理执行器」**：设置 → 记忆维护 →「整理执行器」，红色「实验功能」标记。`fork`（默认）= 每个窗口新建一次整理会话；`worker` = 跨窗复用同一后台会话，按模型上下文分档换新（≤128k 上下文 → 120k 字符/8 窗，其余 → 200k 字符/16 窗），新 epoch 用交接包接续。切换从下一窗生效，无需重启；「恢复默认」回到 fork，数据层没有依赖。
+- **窗口内批量写**：worker 任务书要求把本窗新增条目合并成一次 `memu_private_remember_batch` 提交，只有 1 条时才逐条写；更新也合并在同一轮。原有「批量参数畸形 → 下一轮退回逐条写」的回退保留。
+- **增量回合日志（`lib/turn-log.js`）**：按回合落盘，作为持久 worker 的上下文缓存；`consolidationTurnLog=off` 时退回现场压缩。配套 `scripts/prune-turnlogs.mjs` 清理旧日志。
+
+### 整理可靠性
+
+- **快照冷日志交叉核对**：`captureSessionSnapshot` 的活视图落后于持久日志时，用 `sessionPersistence` + `readColdSessionLog` 冷读取更长的一份（source `persisted-ahead`，60s TTL 缓存），避免外部追加不可见导致的快照冻结与整理洪水。
+- **不无意义 resume**：`consolidationModelMode` 为 `host` / `custom` 时不再探测父会话 route，避免把父会话钉成活视图。
+
+### WebUI
+
+- **空闲合成负载归零**：装饰层去掉无限动画与常驻 `will-change`，`backdrop-filter` 只保留 topbar 与 boot 卡，缩略图改由主画布 `onPaint` 驱动；新增 `scripts/check-idle-compositing.mjs` 真机数帧（空闲 fps > 2 即 FAIL）与 `tests/webui.test.mjs` 静态守卫。
+
+### 文档
+
+- `docs/memory-semantics.md` 新增 §8.18：整理执行器的作用、fork 与 worker 的差异、epoch/交接/批量写边界与回滚方式。
+- `docs/troubleshooting.md` 新增 §3.28（WebUI 空闲合成负载）与 §3.29（外部追加导致快照冻结）；`docs/client-conventions.md` 新增 §7.7（合成负载约定）。
+- `AGENTS.md` §4 增加实验功能指针；移除 benchmark 实测引用。
+- `README.md` / `README.zh.md` 移除 Benchmark/基准测试章节与交叉引用；`CHANGELOG.md` 移除历史 benchmark 成绩记录；删除 `docs/recall-benchmark.md`。测试与 harness 代码保留在仓库内，产品文档不再包含 benchmark 记录。
+
 ## [1.3.3] - 2026-11-13
 
 > 小修复与体验优化版本：关系图谱最小缩放下「节点打架 / 闪现」的根因修掉（分离阈值曾跟缩放挂钩），开着图谱不再白吃 GPU，宿主设置页导航不再被掰竖；记忆库与记忆浏览新增「立即整理」与库内搜索；图谱产物纳入 `npm run check` 漂移闸门，README 截图与图注重录。
@@ -82,7 +108,7 @@
 
 ## [1.3.0] - 2026-11-08
 
-> 整理成本与可靠性：worker 工具面 14 → 6、remember/update schema 压缩、窗口 500 事件 / 每窗上限 8 条；新增本地零 Token 的“必写候选”与跨窗顺延；回执对账改为以库 diff 为权威，`snapshot-failed` 不再被当成完成。两组匿名测试（共 9 题）综合 Token 比 1.2.7 下降 **21.8%**，其中硬题组下降 **32.9%**。未重跑 714 全量，不把 1.2.7 的旧成绩写成 1.3.0 成绩。
+> 整理成本与可靠性：worker 工具面 14 → 6、remember/update schema 压缩、窗口 500 事件 / 每窗上限 8 条；新增本地零 Token 的“必写候选”与跨窗顺延；回执对账改为以库 diff 为权威，`snapshot-failed` 不再被当成完成。
 
 ### 整理成本
 
@@ -169,7 +195,6 @@
 
 ### 评测
 
-- [chat-memory-benchmark](https://github.com/Ornn8/chat-memory-benchmark) 714 题完整卷（2026-11-06，`dys-router / deepseek-v4.1-flash`，high 思考强度）：通过 **653 / 714（91.46%）**；同轮**实测记忆成本 ¥16.05**，含非记忆开销的总成本 ¥24.45（谷价，总 token 75,517,851）。
 - 全量 **1473 tests / 1471 pass / 0 fail / 2 skipped**、acceptance 50/50、`npm run check` 全绿。
 - 升级兼容：旧条目缺新字段按空处理，不强制迁移；`disclosure` 行为有变（`never_say` / `only_if_asked` 不再自动注入），需要它们自动出现的旧用法请改回 `can_tell`。
 
@@ -185,7 +210,6 @@
 - **召回缓存（`lib/recall-cache.js`）**：`managedRecall` 成功语义召回段进程内 LRU（256 条 / 120s），键含 `memoryRevision()`（全部索引/状态落盘自增，写后无 stale）+ 向量代数 + domain/sessionId/context 等九分量；fail-open + `warn` 留痕，降级/fallback 结果一律不缓存。显式召回命中率 ~0 属正确行为（touchAccess 参与 decay 加成）。文档见 `docs/memory-semantics.md` §8.12。
 - **冲突检测增强**：新增 `polarityAt` 子句级否定作用域（双重否定、对比结构分段、无关子句隔离），`globalConflictCheck` 改用共享锚点双侧极性对比（无共享词回退整文本口径）；修复「截止日期 5月1日，别忘了」类无关子句否定与「不是不喜欢」双重否定两类误报。`negationPolarity` 原口径与导出不变。
 - **修复：整理 fork 在 DSH 0.2.2-rc.1 上必挂**——rc.1 的种子校验（`assertAssistantSettlementShape`）要求 `assistant/message.data.stream` 是数组，而插件种子清噪曾直接删除该字段，导致 0.2.2-rc.1 上每个整理 fork 种子被拒（"invalid settlement fields"；**1.2.6 已发布版同样中招**——`host-adaptation.md` §5.4 声明的未测面被内部真机评测实证）。修复：种子携带**空 stream 数组**（清噪初衷不变——分块日志不进种子；旧宿主不校验该字段，惰性兼容）。新增 `scripts/check-seed-compat.mjs`（用目标宿主自己的 dsh-session 包验证种子兼容性），列入宿主适配检查表必跑项。
-- **基准台（`scripts/bench-recall.mjs`）**：确定性合成语料前后对照。终局：全量 **1406 tests / 1404 pass / 0 fail / 2 skipped**、acceptance 50/50；簇构建较 1.2.6 快约 3%（5041→~4900ms）；Recall@10 与基线持平（0.7650 vs 0.7675，差 1/400 条，MRR 0.4200 vs 0.4218）——合成基准只能当回归门。
 - **守卫**：新增 4 个测试文件共 58 条（tokenizer-v2 17、dynamic-rrf 11、recall-cache 14、negation-polarity 14、边界带守卫 2）；阈值常量零改动。
 
 ### RP/混合提示词：生活日常采集线

@@ -217,6 +217,25 @@ test('the settings button preserves the host SPA and links to individual pages',
   assert.match(client, /h\(SettingsPage, \{ ctx, t, embedded: false, standalone: true \}\)/)
   assert.match(client, /mountStandalone/)
 })
+test('the shell keeps no always-on compositor drivers', () => {
+  // GPU 占用高的根因不是算力，是「空闲期仍在持续产帧」：无限 CSS 动画让合成器
+  // 永远不睡（1.3.3 实测空闲 ~99fps），全屏 backdrop-filter 再每帧重算模糊。
+  // 守卫用 scripts/check-idle-compositing.mjs 真机数帧；这里静态拦复发。
+  const css = fs.readFileSync(new URL('../lib/webui/standalone.css', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '') // 注释里会引用旧写法（will-change / infinite），不能算声明
+  const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const infinite = [...css.matchAll(/animation:[^;]*infinite[^;]*/g)].map(m => m[0])
+  assert.ok(infinite.every(rule => /boot-ring|boot-shimmer/.test(rule)),
+    `always-on animation outside the boot veil: ${infinite.join(' | ')}`)
+  const ambient = css.slice(css.indexOf('.ambient i {'), css.indexOf('}', css.indexOf('.ambient i {')))
+  assert.ok(!/will-change|animation/.test(ambient), 'the ambient blobs must stay static, unlayered')
+  const blurred = css.split('}').filter(block => /backdrop-filter:/.test(block))
+  assert.ok(blurred.every(block => /\.topbar\s*\{|\.boot-card\s*\{/.test(block)),
+    'blur belongs to small chrome only, never to the rail, cards or drawer')
+  assert.ok(!/backdrop-filter:/.test(client), 'the shared UI must not blur full-screen surfaces')
+  assert.ok(!/const timer = setInterval\(paint/.test(client), 'the minimap is driven by onPaint, not a poll')
+  assert.match(client, /notifyRef\.current = paint/)
+})
 test('RPC still uses stable envelopes and rejects non-UI GETs', async () => {
   const res = await request('/dsh-memu-memory/listLibraries', 'POST', { type: 'client-request', rpcId: 'wall-test', method: 'listLibraries', payload: {} })
   assert.equal(res.status, 200)

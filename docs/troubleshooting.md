@@ -36,6 +36,8 @@
 本地向量模型装不上 / 切不过去 / 召回 400 → §3.25
 整理超时（fork 预算不够）→ §3.26
 图谱改了没生效 / 缩到最小打架 / 导航被掰竖 → §3.27
+WebUI 开着 GPU 占用高 / 时钟钉高档 → §3.28
+长链跑批库不增长 / 考试大面积「不知道」→ §3.29
 ```
 
 ## 3. 出过的问题：症状 → 落点 → 守卫
@@ -337,6 +339,22 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **守卫**：`tests/graph-view.test.mjs` 的 `relayout cools down and separates instead of shoving nodes forever`（位移逐窗衰减 + 零重合 + 物理拿不到相机）、`a cooled layout stops requesting frames even while motion is enabled`（冷下来零帧，GPU 不再爬升）、`hover keeps its target through 1px jitter at minimum zoom`（命中迟滞）；`tests/client-render.test.mjs` 的 `the immersive graph shell stays with the standalone WebUI`（宿主页保持横排 + 一个入口按钮）。`npm run check` 的 `graph bundle` 拦产物漂移。
 
+### 3.28 WebUI 开着 GPU 占用高 / 时钟钉在高档 / 风扇转
+
+**症状**：打开 WebUI 后 Electron/浏览器 GPU 进程占用翻倍、GPU 时钟从低频钉到接近满载、功耗上涨，而利用率并不高；关掉面板立刻回落，可重复。典型读数（外部测试者，1.3.3）：GPU 12.7%→24.8%，时钟 765→1950MHz（满 2100），功耗 29→72W，util 仅 37–44%。**这是持续合成，不是算力占用**：合成器每帧都有活干，时钟就降不下来。
+
+**落点**（1.3.3 实测，按贡献排）：
+- **装饰层的无限动画**。`standalone.css` 的 `.ambient i` 曾是全屏 `filter: blur(74px)` + `will-change: transform` + `ambient-drift 52s infinite alternate`：一个永远在动的全屏模糊层，合成器永远不睡。同族还有 `.brand-icon` 的 `brand-float 7s infinite`、`.sync-pill i` 的 `dot-pulse 2.8s infinite`。实测空闲产帧 ~99fps，`document.getAnimations()` 列出 5 条 running；**图谱页冷却后也照跑**，因为光斑层在整页背后。
+- **大面 backdrop-filter**。抽屉遮罩 `.dshm-drawer-backdrop` 的全屏 `blur(3px)`、独立壳的 rail / 卡片 / 抽屉 `blur(16–22px)`：背后只要有东西在动（上一条），这些面每帧都要重算模糊，成本相乘。
+- **缩略图轮询**。`GraphStudioMinimap` 曾 `setInterval(paint, 600)`；即使加了「主画布没重绘就不拷贝」的闸门，定时器本身仍常开。现改由主画布 `onPaint` 直接驱动，零定时器。
+- 心跳 `useMemoryBeat` **不是**元凶：marker 不变就 return，不会每 2.5s 重渲染（外部猜测的第 3 条在当前代码不成立）。
+
+**现在**：装饰层静态（光斑保留观感、去掉动画与 will-change）；模糊只留在小 chrome（topbar）与 boot 卡（boot 900ms 后移除）；抽屉遮罩改纯色 scrim；缩略图由 `onPaint` 驱动。实测同三态空闲产帧 99fps → **0.2fps（6 秒 1 帧）**，running 动画清单为空。
+
+**怎么自己量**：`node scripts/check-idle-compositing.mjs`（先起预览）用 CDP screencast 数帧 + `document.getAnimations()`；空闲 fps > 2 即 FAIL。**注意对照环境**：若桌面本身被别的进程钉住时钟（本机对照：不开浏览器也 2250MHz），真 GPU 的前后对照在这台机器上无效，要以帧计数为准，或到「关面板立刻回落」的那台宿主上复测。
+
+**守卫**：`tests/webui.test.mjs` 的 `the shell keeps no always-on compositor drivers`（无限动画只许出现在 boot；ambient 不许 will-change/animation；backdrop-filter 只许 topbar/boot-card；共享 UI 不许全屏模糊；缩略图不许轮询）+ `scripts/check-idle-compositing.mjs` 真机数帧。
+
 
 ## 守卫索引表
 
@@ -372,6 +390,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.25 | 本地向量模型装不上 / 切不过去 / 召回 400 | `tests/embedding-catalog.test.mjs`（三条目指纹钉死、只有非对称前缀需要角色通道）、`tests/local-embedding-protocol.test.mjs`、`tests/local-embedding-worker.test.mjs`（前缀进推理、裸 id 拒且不入推理）、`tests/local-embedding-env.test.mjs`（对称模型 model 串逐字节不变）。 |
 | §3.26 | 整理超时（fork 预算） | `tests/consolidation-fork.test.mjs`：预算随事件数缩放（0/100/200/935/5000/非法值），显式 `maxWaitMs` 仍生效，超时不推进 `lastSleepSeq`。 |
 | §3.27 | 图谱改了没生效 / 缩到最小打架 / 导航被掰竖 | `npm run check` 的 `graph bundle`（源码与 bundle 逐字节比对）；`tests/graph-view.test.mjs` 的 relayout 收敛、冷启动零帧、最小缩放命中迟滞；`tests/client-render.test.mjs` 的独立外壳归属。 |
+| §3.28 | WebUI 开着 GPU 占用高 / 时钟钉高档 | `tests/webui.test.mjs` 的 `the shell keeps no always-on compositor drivers`（无限动画只许 boot、ambient 静态、模糊只许小 chrome、缩略图不轮询）；`scripts/check-idle-compositing.mjs` 真机数帧（空闲 fps > 2 即 FAIL）。 |
 
 ## 附录 A · 模块地图（原 §2.1）
 
@@ -490,6 +509,8 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 8. **不碰共享 `/api`**：RPC 只走 `/dsh-memu-memory` 前缀（`webServer.register` + `connection.requestRejection`）。
 9. **日志与提示词里不放 API key。**
 10. **注入失败 fail-open，但必须留可观测信号。** 抛错不许改变宿主的 turn 错误语义（吞掉是允许的），代价是真实故障一起被吞：`inject.js` 若把 pre-step 的 `agent` 当 `exec` 传给 `buildRecall`（正确形状 `{ agent }`，§6.3），`no bound session` 就只被空 catch 吃掉——**每回合召回静默失效、只剩锚点、日志一个字都没有**。所以 fail-open 必配 `logger.warn` + binding 上的 `lastRecallError`（侧边栏可见），单测断言**召回到的 id**，不能只断言「消息插进去了」。**不能靠「没报错就是好了」。**
+11. **跑批与复测的输出一律重定向文件**（`> logs/x.log 2>&1`），禁用 `| tail` 管道——管道只留尾巴，故障段不可回查。清理宿主数据必须先确认宿主进程完全退出（活宿主的内存态会回写覆盖清理结果）。
+12. **整理快照必须做持久日志交叉核对**：`captureSessionSnapshot` 的活视图（observeSession/readSession）落后于持久日志时，用 `sessionPersistence` + `readColdSessionLog` 冷读并取更长的日志（source `persisted-ahead`）；只信活视图 = 外部追加不可见 → 快照冻结/整理洪水。`host`/`custom` 模型模式也不得探测父会话 route（resume 会把父会话钉成活视图）。成因链与排错路线 → §3.29。
 
 ---
 
@@ -545,3 +566,11 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 - **实体确认后没有提及边**：确认只匹配已确认实体的名字/别名；检查名字是否 <2 字、记忆是否 archived/pending_review/secret、实体是否 archived（archived 不可确认）、抑制表是否有同名 (from,to,kind) 键（删过的边会写 `|*` 通配，换 rule 也不复活）、以及 `autoLinkMode` 是否为 `off`（off 连确认也不写）。worker 通过 `memu_private_link` 新建的实体默认 provisional，需要用户在审核区确认。
 - **worker 没裁决不确定候选**：`memu_private_link_suggest` 现在只刷新确定性边并返回统计候选卡，不自动连；worker 未调用或证据不足就保持不连（宁漏勿错）。`lib/private.js` 的结算兜底同样只跑确定性判定，不会把统计候选偷偷连上。自动关联失败只写 warn，不影响整理成功。
 - **要不要数据库/向量重算**：自动关联只是 `links[]` 元数据，不改正文、不写向量；移除边不会触发重建。实体删除仍按既有规则（有引用时需显式 force，避免悬空）。
+
+### 3.29 长链跑批整库不增长 / 考试大面积「不知道」（S7 整理 → S1 快照冻结 → S3 账本洪水）
+
+**症状**：persona 全链复测通过率腰斩；失败判分理由几乎全是「答不知道、否认已有事实」（无编造/越界）；库条数远低于全链累积预期（实测 59 ck 只写出 4 条，涉事事实关键词全零命中）。
+
+**根因（2026-11-14 复现实测）**：跑批脚本的 `seed-session.mjs` **直接重写** `session.v4.jsonl.zstd` 追加历史（不走网关 RPC）。宿主的 `observeSession`/`readSession` 都是 live-preferred：会话一旦是活对象，两者都读活视图、不再看持久日志，外部改写完全不可见。把种子会话钉成活对象的是 inherit 模式的 `inheritedAgentOptions` resume 回退；`host`/`custom` 模式本不需要父 route，旧代码却照样探测。于是追加 372 轮后活视图仍冻结在 6 事件 → 每窗恒等 → already-consolidated 洪水 → 游标不推进。**连带**：turn-log 录制器只收 `session/event`，直接改文件同样看不到。跑批侧 `consolidateAll` 又把 already-consolidated 当完成，不校验 `throughSeq`，把可检测故障变成静默腰斩。
+
+**守卫**：`captureSessionSnapshot` 在活视图落后于持久日志时，用 `sessionPersistence` + 宿主公开导出的 `readColdSessionLog` 冷读，取更长的一份（source `persisted-ahead`；60 秒 TTL 缓存，正常活会话不受影响）。`consolidationModelMode` 为 `host`/`custom` 时不探测父会话 route，避免无意义 resume。跑批的 `consolidateAll` 对 skipped 结果校验 `through >= targetSeq`，连续 3 次落后判定 `stale` 并终止本轮。
