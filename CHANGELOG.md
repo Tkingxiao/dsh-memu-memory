@@ -1,5 +1,20 @@
 # 更新日志 / Changelog
 
+## [1.3.6] - 2026-11-15
+
+> 修复 macOS 一键安装 MemU 引擎失败（issue #1）：受管 Python（python-build-standalone）带 Developer ID 签名 + hardened runtime，macOS 库校验拒绝加载 PyPI wheel 里 ad-hoc 签名的 `pydantic_core` 二进制（dlopen 报 "different Team IDs"），所有候选解释器连环失败。
+
+### 引擎安装
+
+- **macOS 签名校验自修复**：`installEngine` / `switchEngineVersion` / `ensureEngine` 的 verify 统一走 `verifyEngineRepaired`——错误文本命中签名校验形状时（`isMacOSLibraryValidationError`），对 venv 解释器的 realpath 执行 `codesign --force --sign -` ad-hoc 重签（去掉 hardened runtime 标志）并重试一次，仅 darwin 生效；已有安装下次 ensure 时同样自愈。
+- **受管 Python 主动重签**：`ensureManagedPython` 装好自己的受管解释器后立即 ad-hoc 重签，在任何 venv 创建之前摘掉 hardened runtime。
+- **可读的失败出口**：全部候选失败且错误呈签名形状时，错误末尾附用户侧旁路提示（`DSH_MEMU_PYTHON` 指向 Homebrew/官方 Python，或手动 codesign）。空目录说明：失败的 tmp venv 会被清理，属预期，不是数据丢失。
+
+### 文档与测试
+
+- `docs/troubleshooting.md` 新增 §3.31（症状 / 落点 / 守卫）与症状速查入口。
+- `tests/engine.test.mjs` 新增签名错误识别用例（issue #1 原文命中、普通 ImportError 不误触发重签）。
+
 ## [1.3.5] - 2026-11-14
 
 > 修复宿主对同一条用户消息给出两次 `agent/pre-step` 时的重复注入：第二次召回会把已投候选全去重、注入 0 条，还多推一格 memoryClock。现在按真实用户消息 id 幂等，一条消息只注入一次；回合回滚时清标记，真重试仍会重投。

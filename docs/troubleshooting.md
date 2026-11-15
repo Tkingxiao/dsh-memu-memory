@@ -39,6 +39,7 @@
 WebUI 开着 GPU 占用高 / 时钟钉高档 → §3.28
 长链跑批库不增长 / 考试大面积「不知道」→ §3.29
 同一条用户消息每轮注入两次 / 第二次召回 0 条 → §3.30
+mac 一键安装引擎报 dlopen 签名错 / 事后引擎目录是空的 → §3.31
 ```
 
 ## 3. 出过的问题：症状 → 落点 → 守卫
@@ -393,6 +394,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.27 | 图谱改了没生效 / 缩到最小打架 / 导航被掰竖 | `npm run check` 的 `graph bundle`（源码与 bundle 逐字节比对）；`tests/graph-view.test.mjs` 的 relayout 收敛、冷启动零帧、最小缩放命中迟滞；`tests/client-render.test.mjs` 的独立外壳归属。 |
 | §3.28 | WebUI 开着 GPU 占用高 / 时钟钉高档 | `tests/webui.test.mjs` 的 `the shell keeps no always-on compositor drivers`（无限动画只许 boot、ambient 静态、模糊只许小 chrome、缩略图不轮询）；`scripts/check-idle-compositing.mjs` 真机数帧（空闲 fps > 2 即 FAIL）。 |
 | §3.30 | 同一条用户消息每轮注入两次 | `tests/injection-rollback.test.mjs` 的 one-pass 幂等与回滚清标记两条（同一消息 id 只注入一次；回滚后重试重投）。 |
+| §3.31 | mac 引擎装不上（dlopen 签名错） | `tests/engine.test.mjs` 断言 `isMacOSLibraryValidationError` 认得 issue #1 的原文错误、不误报普通 ImportError；真机验收：mac 上安装成功，install.log 出现 `re-signing interpreter ad-hoc`。 |
 
 ## 附录 A · 模块地图（原 §2.1）
 
@@ -586,3 +588,11 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 **现在**：`registerInjection` 按真实用户消息 id 幂等（`binding.lastInjectedUserMessageId`）——一条消息只跑一次注入；`turn/end` 失败且注入没进转录时，`rollbackInjectionForTurn` 清掉标记，真重试仍会重投；压缩后的 reinject（`reinjectPending`）不受影响。
 
 **守卫**：`tests/injection-rollback.test.mjs` 的 `the same real user message gets one injection pass when the host emits two enter decisions`、`a rolled-back turn clears the one-pass marker so a real retry injects again`。
+
+### 3.31 macOS 一键安装引擎失败：dlopen 报「different Team IDs」（引擎安装 → macOS 签名校验）
+
+**症状**：mac 上一键安装 MemU 引擎，安装日志里 `import memu` 在 `import pydantic_core` 处崩：`dlopen(..._pydantic_core.cpython-312-darwin.so): code signature ... not valid for use in process: mapping process and mapped file (non-platform) have different Team IDs`，最终 `no Python candidate could install MemU`。事后按网上教程想去 `engine/0.11.0b3/` 手动 codesign，却发现目录是空的。
+
+**落点，可能的原因**：uv 受管 Python 与 DSH 自带 runtime 都是 python-build-standalone 构建，macOS 上带 **Developer ID 签名 + hardened runtime**；macOS 库校验因此拒绝加载 PyPI wheel 里 ad-hoc 签名的 `.so`——pydantic_core 是纯二进制扩展，必撞。修复对象不是 `.so` 而是解释器本身：`codesign --force --sign -` 重签会同时去掉 hardened runtime 标志，之后所有 wheel 都能加载（Homebrew / python.org 官方安装器没有这个签名组合，所以多数 mac 用户遇不到）。**空目录是正常现象**：verify 失败后 `installEngine` 会清掉失败的 tmp venv（`cleanupDir`），所以“到那个目录里 codesign”无从下手，只能靠插件自己修。修法：`installEngine` / `switchEngineVersion` / `ensureEngine` 的 verify 统一走 `verifyEngineRepaired`——错误文本命中 `isMacOSLibraryValidationError` 时，对 venv 解释器的 realpath 做 ad-hoc 重签并重试一次；`ensureManagedPython` 对自己的受管解释器装完即主动重签（是插件下载的产物，随便签）。所有候选都失败时，错误末尾带用户侧旁路提示：`DSH_MEMU_PYTHON` 指向 Homebrew/官方 Python。
+
+**守卫**：`tests/engine.test.mjs` 的 `the macOS library-validation dlopen error is recognized for the signing repair`（issue #1 原文错误命中、普通 ImportError 不误触发重签）；真机验收项：mac + 受管 Python 安装成功，install.log 里出现 `re-signing interpreter ad-hoc` 一行。
