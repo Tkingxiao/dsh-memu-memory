@@ -157,7 +157,7 @@
 
 **标题卡与标题写作。** 锚点/召回的可见单位从正文改为标题卡，标题因此成为索引而不是装饰：提示词要求 8–40 字、含具体人名/物名/事件/结论关键词，禁止「一些事」「那段对话」「关于 XX 的事」；合并/吸收稿的标题要覆盖全部来源关键词。Lexicon 的注入行仍保留「term + ≤80 字短义」（不是裸词），因为词典的唯一价值是解释；UI 卡片也是 term 标题 + meaning 正文。
 
-**词典生命周期。** 公开状态只有 `active` / `archived`：用户新建、模型 `memu_lexicon_propose`、curator 带证据抽取都直接 active；`archiveLexiconTerm` / `restoreLexiconTerm` 负责可逆退场，删除只属于管理面。`rejected` 只作为 legacy 墓碑/指纹留在数据里，UI、注入、检索与计数都看不到；`pending` 只作为旧版本迁移输入：新提案 → active（敏感 → archived），revision 草稿 → archived。敏感 trigger 的新建/修改只能由用户完成，模型/curator 得到 typed 拒绝；非用户修改普通 active 词条的敏感字段也直接拒绝，不再生成 pending revision。RPC 的 `lexiconReview` 已删除（方法数见 `docs/contributing.md` 的 rpc-method-count 标记）。**哪些词条进得来**是另一层：全局词典 + 同域跨库，见 §8.16。
+**词典生命周期。** 公开状态只有 `active` / `archived`：用户新建、模型 `memu_lexicon_propose`、curator 带证据抽取都直接 active；`archiveLexiconTerm` / `restoreLexiconTerm` 负责可逆退场，删除只属于管理面。`rejected` 只作为 legacy 墓碑/指纹留在数据里，UI、注入、检索与计数都看不到；`pending` 只作为旧版本迁移输入：新提案 → active（敏感 → archived），revision 草稿 → archived。敏感 trigger 的新建/修改只能由用户完成，模型/curator 得到 typed 拒绝；非用户修改普通 active 词条的敏感字段也直接拒绝，不再生成 pending revision。RPC 的 `lexiconReview` 已删除（方法数见 `docs/contributing.md` 的 rpc-method-count 标记）。**哪些词条进得来**是另一层：全局词典 + 同域跨库，见 §8.16。**编辑交互**（2026-11-15）：点卡片「编辑词条」在右侧栏展开抽屉（与记忆详情卡同款 `.dshm-drawer`，不透明背景），释义/例句给足纵向空间，取代旧的卡片内向下展开；聚合视图（§8.16「全部词典」）里编辑仍按词条所属库路由。
 
 **私有自动关联（v3 确定性版）。** 写边只有一条路径：`lib/auto-link/` 的纯函数判定。`settings.autoLinkMode` 三档：`suggest`（默认）只生成候选、**自动整理不写边**，但你显式确认实体仍会补挂（§14 S4 的迁移流程）；`deterministic` 自动整理也写由证据推出的确定性边；`off` 全关——连确认/新建/改名/合并触发的提及维护也不写。判定表只有两类：① `entity-mention`——记忆标题/正文按 NFKC+大小写/标点归一化后命中一个 **confirmed** 实体的名字/别名（CJK 子串 ≥2 字，Latin 词边界，`yuike` 不命中 `yuikeee`），产出 `memory→entity` 边；② 字段证据——`conflicts_with` / `supersedes` / 同 `fact_key`+同上下文签名的相邻版本，产出 memory↔memory 的 `conflict` / `supersede` / `fact-key` 边。两类边固定 `confidence: 1.0`、`schemaVersion: 2`，带 `evidence.rule`（枚举 `entity-mention` / `conflict` / `supersede` / `fact-key` / `worker-quote`）。词面相似度、共享 token、向量与所有统计量**永不建边**；它们只参与 `anchor-candidates.json` 的候选排序。
 
@@ -165,7 +165,7 @@
 
 **候选队列与迁移。** `anchor-candidates.json` 是派生物：CJK 2–4gram / Latin token 的 df/titleDf/边界/凝聚/PMI/LLR 只用于排序；Tier 1 是有表面证据（引号/名字引导/标识符/用户维护词典）的候选，Tier 2 仅统计特征。没有 status 的旧实体按 DESIGN §9.3 分级：只有 `origin ∈ {user,agent,worker}` 或被非 auto 边引用才保留 confirmed，其余落 provisional。`scripts/rebuild-auto-links.mjs`（默认 dry-run，`--apply` 先整库备份）删除全部 `source:'auto'` 旧边、落实体状态，并为已确认实体重建确定性边；确认与 dry-run 幂等后再把 `autoLinkMode` 切到 `deterministic`。
 
-**召回治理与失败隔离。** `recallRelations` 的 top-2 扩展显式排除 `evidence.rule === 'entity-mention'`——提及是事实索引不是关系，`confidence=1.0` 不能挤掉手动边与字段证据；字段证据边照常参与。判定层纯函数、无 IO/时钟/随机；写库失败只 warn，绝不让已经成功的整理失败；`links[]` 仍只是元数据，不改正文、不写向量、不删记忆。worker 写工具为 remember/remember_batch/update，读工具为空（记忆目录与本地召回由插件在种子开头注入），但「有没有写能力」仍只由 remember/update 判定。
+**召回治理与失败隔离。** `recallRelations` 的 top-2 扩展显式排除 `evidence.rule === 'entity-mention'`——提及是事实索引不是关系，`confidence=1.0` 不能挤掉手动边与字段证据；字段证据边照常参与。判定层纯函数、无 IO/时钟/随机；写库失败只 warn，绝不让已经成功的整理失败；`links[]` 仍只是元数据，不改正文、不写向量、不删记忆。worker 写工具为 remember/remember_batch/update/link/link_suggest（2026-11-15 起 link 两件挂回：auto-link 的不确定候选留给整理回合逐条裁决），读工具为空（记忆目录与本地召回由插件在种子开头注入），但「有没有写能力」仍只由 remember/update 判定。
 
 ### 8.14 日期联动、到点唤醒与实体合并（1.2.3）
 
@@ -201,6 +201,8 @@
 **计数落库**：candidate / injection 按词条所属词典分组落账，同 §8.15 的 `touchAccessMany` 分组一个道理——跨库命中不把热度全记到当前库，否则那本库的频率先验永远读不到真实使用。冷却按会话记，与来源无关。
 
 **只读边界**：`lexiconUpdate` / `Delete` / `Archive` / `Restore` 与 `memu_lexicon_propose` 只作用于显式选中的那一本；`memu_lexicon_search` 给外来命中标 `home=…（跨库只读；写入仍落在当前库）`，全局命中标 `home=全局词典`。词典页是**浏览面**：选一本看一本（与记忆浏览器、与 `browseLibrary` 一致），合并只发生在注入与模型检索；页顶的口径说明就是为这句差异写的。RPC 层 `lexiconSearch` 不带 `libraryId` 时是会话视角（跨源），带 `libraryId`（含传 `global`）时只看那一本。
+
+**「全部词典」聚合浏览（2026-11-15）**：词典页作用域选择器顶部新增 `all`（`ALL_LEXICON_ID`，与 `global` 一样是保留作用域名、不是存储），选中后 `lexiconList` 合并全局词典 + 所有私有库的词条，复用单库同一套筛选/计数/排序/分页（`lexiconFilterPage`），每条带 `libraryId`/`libraryName`，卡片标注来源书。它是**只读聚合**：编辑/归档/删除按词条所属库路由（`bookOf`），新建按钮在聚合视图隐藏（没有唯一写入目标）。授权与记忆墙 `browseWall` 的「全部记忆库」同模型——没有单库目标，带 `sessionId` 一律拒，standalone 走 `libraryId=null` 的 capability 聚合读；宿主拒绝多库枚举（403）时客户端退回第一本私有库（没有就全局词典）并禁用该选项。损坏/被隔离的书跳过并进 `errors`（fail-open 必配可观测信号），不塌掉整个聚合。注入与模型检索不受此浏览视图影响，仍按召回作用域合并。
 
 **坏一本不塌整段**：辅源（同域库、全局词典）读失败只降级成 `errors`，锚点与匹配照常出；主源读失败继续抛，由调用方按 §1-规则 10 记 `logger.warn` + `lastRecallError`。`errors` 非空时才多带这一个字段——没有降级时返回体与单库时代逐字节一致。
 

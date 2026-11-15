@@ -1007,7 +1007,10 @@ html[data-standalone] .dshm-drawer {
   width: min(560px, 100%);
   padding: 26px;
   gap: 12px;
-  background: var(--dshm-panel-strong);
+  /* 详情/编辑抽屉必须不透明（与嵌入壳 client.js 的 .dshm-drawer 同口径）：
+     --dshm-panel-strong 是 .87/.84 的半透明霜面，拿它做抽屉底板会透出背后页面。
+     独立壳的 --dsw-alias-bg-layer-1 是实色（#fff / #171a23），用它做不透明底板。 */
+  background: var(--dsw-alias-bg-layer-1, #fff);
   border-left-color: var(--dshm-line);
   box-shadow: -30px 0 80px -40px rgba(0, 0, 0, .55);
 }
@@ -1037,6 +1040,30 @@ html[data-standalone] .dshm-drawer-label {
   font-size: 11px;
   color: var(--dshm-muted);
   white-space: nowrap;
+}
+/* 2026-11-16 扫雷修复：纵向表单字段不再拉伸（抽屉下半空白）、标签左对齐、
+   开关行底对齐输入行、抽屉高度自适应内容。覆盖上面 inline-flex/center 的旧口径。 */
+/* 2026-11-16 复盘：抽屉保持全高（嵌入壳里缩成小浮卡下面空一大块，更难看）；
+   「太空」的真凶是字段纵向拉伸，已在下方字段规则里修掉。 */
+html[data-standalone] .dshm-drawer-form .dshm-drawer-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+html[data-standalone] .dshm-drawer-form > input,
+html[data-standalone] .dshm-drawer-form > textarea {
+  flex: 0 0 auto;
+}
+html[data-standalone] .dshm-drawer-form .dshm-drawer-inline {
+  align-items: flex-end;
+}
+html[data-standalone] .dshm-drawer-form .dshm-drawer-inline .dshm-drawer-field {
+  flex: 1 1 160px;
+}
+html[data-standalone] .dshm-drawer-form .dshm-drawer-inline .dshm-drawer-field.is-narrow {
+  flex: 0 1 150px;
 }
 html[data-standalone] .dshm-drawer-actions {
   border-top-color: var(--dshm-line);

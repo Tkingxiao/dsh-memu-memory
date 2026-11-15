@@ -1,5 +1,34 @@
 # 更新日志 / Changelog
 
+## [1.3.7] - 2026-11-16
+
+> 联合扫雷 + 交互修复：整理 worker 的 link 工具断链、整理超时/租约/冻结三族、召回常驻错误与向量代际缺库自愈、抽屉排版。另含「全部词典」聚合浏览。
+
+### 整理（consolidation）
+
+- **link 工具挂回整理 worker**：`memu_private_link` / `memu_private_link_suggest` 在裁剪"未使用工具"时被误伤——worker 没有这两件，link 维护（含整理期间）结构性停摆。任务书新增裁决步骤与触发时机（同事实新版本→取代；同实体多记忆→挂实体；承诺→commitment；互斥→conflict；候选逐条裁决）。工具描述同步。
+- **思考强度被模型拒自动降档**：`provider/model does not support reasoning effort "X"` 的 fork 失败被学习（进程内拒绝表），之后同组合不再带档起 fork；同时清该快照失败连击——冻结闸门由此放行，已冻结的会话自愈。冻结跳过日志带上账本 `lastError`（此前只报结论不报原因）。
+- **整理预算抬到 600s**：慢推理模型下 420s 不够（实测 500 事件窗两次超时）；`CONSOLIDATION_WAIT_POLICY` 定为 flat 600s。
+- **租约跟随预算**：`beginJob` 的租约 = 预算 + 90s（原固定 15 分钟）——走不到超时路径就死的任务（重启/外杀）不再阻塞重试到 15 分钟，由 `recoverStaleJobs` 在真死后 ~90s 自愈回收。
+- **冻结日志可诊断**：`snapshot-failed-too-many` 跳过记录带上账本 `lastError`。
+
+### 向量与召回
+
+- **召回 no-database 静默降级**：库的向量库不在当前代际时（持久状态）不再每轮召回挂常驻错误，降级 local-only + vector 域诊断记录；该库向量生成入册后语义腿自动恢复。
+- **向量代际缺库自动追平**：`getMissingVectorLibraries()`（索引非空但不在代际）+ `maybeAutoRebuildVectorGeneration()`（向量已启用且无迁移在途时自动 force 重建，每代际 ≤2 次、并发闸）。`memu_status` 新增 `vector_missing:` 行、`getLocalVectorState().vector.missingLibraries` 给 WebUI/RPC。
+- **worker 环境凭据剥离泛化**：`childEnvironment` 按意图剥离任何 `*_API_KEY`（原厂商前缀名单漏 `glm_` 等）。
+
+### WebUI
+
+- **词典/记忆编辑抽屉排版修复**：纵向表单字段不再 flex-grow 拉伸（抽屉下半大片空白的真凶），标签左对齐，`说出口径/置信度/开关` 行底对齐输入行（standalone.css 的 `html[data-standalone]` 覆盖层与 client.js 嵌入壳基础层同步）。抽屉保持全高侧边栏形态。
+- **「全部词典」聚合浏览**：`ALL_LEXICON_ID = all` 聚合视图（只读合并全局词典与全部私有库，写操作按词条所属库路由）。
+
+### 文档与测试
+
+- `docs/troubleshooting.md` 新增 §3.32（link 断链/整理超时/租约/召回错误四族）、§3.33（思考强度拒绝冻结）；`AGENTS.md` 硬规则 13。
+- 契约测试同步：worker 工具清单、brief 教学契约（link_suggest 从 doesNotMatch 改 match）、`RUNTIME_STATE` 行号、思考强度拒绝学习/降档/闸门重置守卫、预算常量。
+- 实测快照：1681 tests / 1679 pass / 0 fail / 2 skipped（真实引擎用例按设计跳过）。
+
 ## [1.3.6] - 2026-11-15
 
 > 修复 macOS 一键安装 MemU 引擎失败（issue #1）：受管 Python（python-build-standalone）带 Developer ID 签名 + hardened runtime，macOS 库校验拒绝加载 PyPI wheel 里 ad-hoc 签名的 `pydantic_core` 二进制（dlopen 报 "different Team IDs"），所有候选解释器连环失败。

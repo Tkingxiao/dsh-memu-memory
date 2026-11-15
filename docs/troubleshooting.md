@@ -318,11 +318,11 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **落点**：整理是一次**会话 fork**。2026-11-02 的真实读数（935 条事件的会话）：开始后 **125 s 才写出第一条**，180 s 到点时只写完 3 条 → 超时；退避重试 131 s 完成。也就是说固定预算对大会话必然偏紧，**不是卡死、不是死锁，也不会丢已写入的记忆**。
 
-**现在（2026-11-05 起）不再把整段转录种进 fork**：每次只种一个窗口（`CONSOLIDATION_WINDOW_EVENTS = 300` 事件，尾部按完整回合对齐），种子只保留真人消息 / 助手正文 / 工具调用与结果，去掉 reasoning、`source.replayState`、`data.stream`、插件召回、运行时上下文、`request/header` 等后台事件；工具结果截断到 1600 字并去重，重复角色卡只留第一份。窗口开头再放一条 `[memory-catalog]` 已有记忆目录（id + 标题 + layer + status），worker 用它去重/合并，不需要为了解旧库再读整段历史。剩余事件留给下一次扫描，游标只在回执对账后前进。
+**现在（2026-11-05 起）不再把整段转录种进 fork**：每次只种一个窗口（`CONSOLIDATION_WINDOW_EVENTS = 500` 事件，尾部按完整回合对齐），种子只保留真人消息 / 助手正文 / 工具调用与结果，去掉 reasoning、`source.replayState`、`data.stream`、插件召回、运行时上下文、`request/header` 等后台事件；工具结果截断到 1600 字并去重，重复角色卡只留第一份。窗口开头再放一条 `[memory-catalog]` 已有记忆目录（id + 标题 + layer + status），worker 用它去重/合并，不需要为了解旧库再读整段历史。剩余事件留给下一次扫描，游标只在回执对账后前进。
 
 **触发与频率**：默认 `sleepAfterIdleMinutes = 2`；每 5 分钟扫描时还可能因为「pending ≥ 200 事件 / ≥10 个真人回合」的**水位**触发，不依赖空闲。新活动但水位不足时会做一次**探针**（读转录、评估，不起 fork），探针之间至少隔 15 分钟。寒暄 / 无新事件是终态：写入 `lastSleepAt`，下一条真人消息到达前不再重扫。同一快照连续失败 2 次后跳过（`snapshot-failed`），新事件会改变快照哈希，重新获得机会。
 
-**预算**：按**这一窗**的事件数推（`consolidationWaitBudget(windowEvents)`，政策 `120 s + 0.35 s/事件`，夹在 `[180 s, 600 s]`）。显式传 `maxWaitMs` 的调用方（测试、工具）仍然完全由调用方决定。「整理已开始」日志会写「窗口 N 条 / 父会话 M 条 / 新 F 条 / 还余 R / 预算 Ns」，失败行写「over N events」。**超时仍然不会推进 `lastSleepSeq`**（没有回执就不算整理过），重试只重跑当前窗口，不会再重读整段历史。
+**预算**：`consolidationWaitBudget(windowEvents)`，政策 `120 s + 0.35 s/事件`，但下限与封顶齐平为 **600 s**——预算恒为 600 s（10 分钟），不再随事件数缩放（2026-11-15：慢推理模型 + 500 事件窗需要完整 10 分钟余量）。显式传 `maxWaitMs` 的调用方（测试、工具）仍然完全由调用方决定。「整理已开始」日志会写「窗口 N 条 / 父会话 M 条 / 新 F 条 / 还余 R / 预算 Ns」，失败行写「over N events」。**超时仍然不会推进 `lastSleepSeq`**（没有回执就不算整理过），重试只重跑当前窗口（重试窗减半到 250），不会再重读整段历史。
 
 **常驻 MemU 进程（2026-11-05）**：本地向量模式（`memoryBackend=api` + `vectorSource=local`）下只起一个 Python 解释器，`import memu.cli` 只付一次，`retrieve` / `list-files` / `commit` 走 JSON 行协议复用；每条命令结束显式关闭 database，不把 sqlite 句柄留到空闲期。远端 API 路由仍是每命令一个进程。插件卸载与引擎安装/切换前会关闭常驻进程；进程异常退出后下一条命令冷启动，召回照旧 fail-open。
 
@@ -390,7 +390,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | §3.23 | 实体合并 / 担心丢记忆 | `tests/entity-merge.test.mjs`（链接改指、别名 cap、快照冲突取舍、拒绝形状）；合并只改指向，正文与条数不变。 |
 | §3.24 | 失败一轮后锚点/日期再不出现 | `tests/injection-rollback.test.mjs`（6 条：撤回+重投、completed 不重复、迟到事件撤不动、已进转录的 500 类失败不误撤、投放前取消撤回、纪念日复提时钟一起撤）。 |
 | §3.25 | 本地向量模型装不上 / 切不过去 / 召回 400 | `tests/embedding-catalog.test.mjs`（三条目指纹钉死、只有非对称前缀需要角色通道）、`tests/local-embedding-protocol.test.mjs`、`tests/local-embedding-worker.test.mjs`（前缀进推理、裸 id 拒且不入推理）、`tests/local-embedding-env.test.mjs`（对称模型 model 串逐字节不变）。 |
-| §3.26 | 整理超时（fork 预算） | `tests/consolidation-fork.test.mjs`：预算随事件数缩放（0/100/200/935/5000/非法值），显式 `maxWaitMs` 仍生效，超时不推进 `lastSleepSeq`。 |
+| §3.26 | 整理超时（fork 预算） | `tests/consolidation-fork.test.mjs`：预算恒为 600s（0/100/935/5000/非法值都返回 600000），显式 `maxWaitMs` 仍生效，超时不推进 `lastSleepSeq`。 |
 | §3.27 | 图谱改了没生效 / 缩到最小打架 / 导航被掰竖 | `npm run check` 的 `graph bundle`（源码与 bundle 逐字节比对）；`tests/graph-view.test.mjs` 的 relayout 收敛、冷启动零帧、最小缩放命中迟滞；`tests/client-render.test.mjs` 的独立外壳归属。 |
 | §3.28 | WebUI 开着 GPU 占用高 / 时钟钉高档 | `tests/webui.test.mjs` 的 `the shell keeps no always-on compositor drivers`（无限动画只许 boot、ambient 静态、模糊只许小 chrome、缩略图不轮询）；`scripts/check-idle-compositing.mjs` 真机数帧（空闲 fps > 2 即 FAIL）。 |
 | §3.30 | 同一条用户消息每轮注入两次 | `tests/injection-rollback.test.mjs` 的 one-pass 幂等与回滚清标记两条（同一消息 id 只注入一次；回滚后重试重投）。 |
@@ -499,7 +499,7 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 
 ## 附录 E · 硬规则全文（原 §1）
 
-`AGENTS.md` §1 是这十条的精简版（索引必须短）；**规则 10 的成因只在这一份里**，两边改一处就得改另一处，`acceptance-local.mjs` 的 G-1 会对比。
+`AGENTS.md` §1 是这些条的精简版（索引必须短）；**规则 10 的成因只在这一份里**，两边改一处就得改另一处，`acceptance-local.mjs` 的 G-1 会对比。
 
 ## 1. 硬规则（不放宽）
 
@@ -515,6 +515,7 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 10. **注入失败 fail-open，但必须留可观测信号。** 抛错不许改变宿主的 turn 错误语义（吞掉是允许的），代价是真实故障一起被吞：`inject.js` 若把 pre-step 的 `agent` 当 `exec` 传给 `buildRecall`（正确形状 `{ agent }`，§6.3），`no bound session` 就只被空 catch 吃掉——**每回合召回静默失效、只剩锚点、日志一个字都没有**。所以 fail-open 必配 `logger.warn` + binding 上的 `lastRecallError`（侧边栏可见），单测断言**召回到的 id**，不能只断言「消息插进去了」。**不能靠「没报错就是好了」。**
 11. **跑批与复测的输出一律重定向文件**（`> logs/x.log 2>&1`），禁用 `| tail` 管道——管道只留尾巴，故障段不可回查。清理宿主数据必须先确认宿主进程完全退出（活宿主的内存态会回写覆盖清理结果）。
 12. **整理快照必须做持久日志交叉核对**：`captureSessionSnapshot` 的活视图（observeSession/readSession）落后于持久日志时，用 `sessionPersistence` + `readColdSessionLog` 冷读并取更长的日志（source `persisted-ahead`）；只信活视图 = 外部追加不可见 → 快照冻结/整理洪水。`host`/`custom` 模型模式也不得探测父会话 route（resume 会把父会话钉成活视图）。成因链与排错路线 → §3.29。
+13. **整理 worker 工具面与租约口径（2026-11-15）**：link 两件（`memu_private_link` / `memu_private_link_suggest`）挂回 worker 写面——auto-link 的不确定候选本来就是留给整理回合逐条裁决的，裁掉它们让「模型不做 link 维护」成了结构性缺口；裁决步骤与触发时机写进任务书 `buildWorkerBrief`，工具描述同步加触发时机行，但 `prompts/private-consolidation*.md` 的共享正文**故意不写工具名**（与远程 JSON 路径共用，`tests/prompts.test.mjs` 有 doesNotMatch 守卫）。整理窗 `CONSOLIDATION_WINDOW_EVENTS` 500（重试窗减半到 250），`CONSOLIDATION_WAIT_POLICY` 下限与封顶齐平为 600s——预算恒为 600s，慢推理模型靠加时长而非砍窗；剩余区间留在 pending 由游标推进。整理租约 `beginJob` 的 `leaseMs` 跟随本次预算 +90s 余量，不再固定 15 分钟——走不到超时路径就死的任务（插件重启 / fork 被外力杀）不调 `failJob`，固定长租约让该会话重试一直撞 lease-held；每次整理请求开头 `recoverStaleJobs` 回收过期租约，最迟真死后 ~90s 自愈。召回 no-database（库的向量库不在当前代际 databases 里）是持久状态，`managedRecall` 静默降级 local-only + vector 域诊断记录，不再进 errors 教模型无谓重试。`childEnvironment` 凭据剥离按意图泛化：`*_API_KEY` / `API_KEY` 一律不进 worker 环境，厂商前缀清单追不完（`glm_` 曾漏）。向量代际缺库自动探测：索引非空但不在当前代际 databases 里的私有库 → `getLocalVectorState` 的 `missingLibraries` 显式提示，召回降级分支动态 import 触发 `maybeAutoRebuildVectorGeneration` 每代际自动 force 重建 ≤2 次（幂等护栏：未激活/迁移在途/已在跑/试过 2 次都跳过），把缺库索引补进向量库——静默降级治标，自动追平治本。成因与守卫 → §3.32。
 
 ---
 
@@ -532,7 +533,7 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 **库级授权模型（`authorizeLibraryRoute`）**：
 - 带 `sessionId` 的请求：持久绑定必须与目标 `libraryId` 完全一致——session A 不能操作库 B；带 sessionId 但解析不出库（空/悬空/非字符串）一律 403（坏凭据 ≠ 无凭据）。
 - 不带 sessionId（standalone 管理面）：宿主实现了 `connection.authorizeLibrary(req, { libraryId, operation })` 时严格 `=== true` 才放行（fail-closed）；**未实现时回退放行**（HTTP 边界的 requestRejection 仍是门）——fail-closed 会在真实宿主上把 standalone WebUI 全部 403（本条目的来源）。
-- 无 libraryId 的 `browseWall`（"全部记忆库"视图）走同一回退模型；实现了 capability 的宿主可拒绝多库枚举。
+- 无 libraryId 的 `browseWall`（"全部记忆库"视图）走同一回退模型；实现了 capability 的宿主可拒绝多库枚举。词典页的「全部词典」（`lexiconList` 传 `libraryId:'all'`）同模型：没有单库目标，带 sessionId 一律拒，standalone 走 `libraryId=null` 的 capability 聚合读；宿主拒绝时客户端退回第一本私有库并禁用该选项（与记忆墙 multiBlocked 同一退路）。
 - 全局复核队列：嵌入式会话可读、写需活绑定；standalone 需要 `review.manage` grant（capability 缺席时同样回退放行）。
 - 全局词典（`libraryId === 'global'`，§8.16）**不是库级路由**：不能让宿主去 authorize 一本不存在的库，也不能因为会话点名「全局」而不是自己的库就判越权。规则在 `authorizeGlobalLexiconRoute`——带 sessionId 要求会话存在且 `effectiveScope().useGlobal !== false`（全局层被关了这本词典对该会话就不存在）；不带 sessionId 与 `listGlobal` / `removeGlobalLink` 一样由 HTTP 边界把关，不问 `authorizeLibrary`。
 - 授权拒绝的 403 是 JSON 信封：`{"ok":false,"error":{"code":"dsh-memu-memory/forbidden",...}}`。
@@ -596,3 +597,60 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 **落点，可能的原因**：uv 受管 Python 与 DSH 自带 runtime 都是 python-build-standalone 构建，macOS 上带 **Developer ID 签名 + hardened runtime**；macOS 库校验因此拒绝加载 PyPI wheel 里 ad-hoc 签名的 `.so`——pydantic_core 是纯二进制扩展，必撞。修复对象不是 `.so` 而是解释器本身：`codesign --force --sign -` 重签会同时去掉 hardened runtime 标志，之后所有 wheel 都能加载（Homebrew / python.org 官方安装器没有这个签名组合，所以多数 mac 用户遇不到）。**空目录是正常现象**：verify 失败后 `installEngine` 会清掉失败的 tmp venv（`cleanupDir`），所以“到那个目录里 codesign”无从下手，只能靠插件自己修。修法：`installEngine` / `switchEngineVersion` / `ensureEngine` 的 verify 统一走 `verifyEngineRepaired`——错误文本命中 `isMacOSLibraryValidationError` 时，对 venv 解释器的 realpath 做 ad-hoc 重签并重试一次；`ensureManagedPython` 对自己的受管解释器装完即主动重签（是插件下载的产物，随便签）。所有候选都失败时，错误末尾带用户侧旁路提示：`DSH_MEMU_PYTHON` 指向 Homebrew/官方 Python。
 
 **守卫**：`tests/engine.test.mjs` 的 `the macOS library-validation dlopen error is recognized for the signing repair`（issue #1 原文错误命中、普通 ImportError 不误触发重签）；真机验收项：mac + 受管 Python 安装成功，install.log 里出现 `re-signing interpreter ad-hoc` 一行。
+
+### 3.32 2026-11-15 联合扫雷：link 断链、整理超时、租约卡死、召回常驻错误（四族）
+
+**S1 「模型不做 link 节点维护（含整理）」是结构性的**：整理 worker 的工具面（`WORKER_WRITE_TOOLS`）
+只有 remember/batch/update 三件——link 两件在 1.2.x 裁"从没用过的工具"时被误伤裁掉
+（auto-link 的不确定候选本来就是留给整理回合裁决的），提示词写得再好模型也用不了。
+修：`memu_private_link` / `memu_private_link_suggest` 重新挂进 worker 面；
+`buildWorkerBrief` 加裁决步骤与触发时机（同一事实新版本→连旧条取代；同一人的多条记忆→挂命名实体；
+承诺→commitment；互斥→conflict；候选逐条裁决，不许静默留置）。工具描述同步加触发时机行。
+**注意**：`prompts/private-consolidation*.md` 的共享正文**故意不写工具名**（该正文与远程 JSON 路径共用，
+那边没有工具；工具工作流归任务书）——`tests/prompts.test.mjs` 有 doesNotMatch 守卫，别把工具名写回去。
+
+**S2 整理超时（420s over ~500 events）**：慢推理模型下 500 事件窗稳定吃满旧 420s 预算。
+曾一度降窗到 250 止血；2026-11-15 定稿改为**加时长而非砍窗**：`CONSOLIDATION_WINDOW_EVENTS`
+回到 500（重试窗减半到 250），`CONSOLIDATION_WAIT_POLICY` 下限抬到 600s 与封顶齐平——
+预算恒为 600s（10 分钟），给慢推理模型完整的单窗余量。剩余区间留在 pending 由游标推进，不丢。
+
+**S3 lease-held 卡死**：租约原固定 15 分钟，但预算封顶 600s——走不到超时路径就死的任务
+（插件重启 / fork 被外力杀）不调 `failJob`，该会话重试最多撞锁 15 分钟。
+修：`beginJob` 的 `leaseMs` 跟随本次预算 +90s 余量（最迟真死后 ~90s 由
+`recoverStaleJobs` 回收）；lease-held 错误文案注明自愈时机。
+
+**S4 召回常驻错误 "managed vector generation has no database for library X"**：库的向量库
+不在当前向量代际的 databases 里（profile 切换后未重建）——持久状态，每轮召回在同一位置失败，
+把 "1 个错误" 常驻挂进召回结果教模型无谓重试。修：`managedRecall` 对 no-database 静默降级
+local-only + vector 域诊断记录，不再进 errors；该库向量生成入册后语义腿自动恢复。
+
+**S4 追平（2026-11-15 深夜）**：静默降级只是止血——该库新写的条目依然只有索引没有向量。
+追平机制：`local-vector-service` 的 `getMissingVectorLibraries()`（索引非空但不在代际 = 缺库；空库不算，写入 enroll 自愈）
++ `maybeAutoRebuildVectorGeneration()`（向量已启用且无迁移在途时自动 `switchLocalVectorProfile({force:true})`；
+每代际 ≤2 次、进程内并发闸、失败记 vector 域诊断）。触发点：managedRecall 的 no-database 降级分支（动态 import 防模块环）。
+显式出口：`memu_status` 增 `vector_missing:` 行、`getLocalVectorState().vector.missingLibraries` 给 WebUI/RPC。
+守卫：`tests/vector-missing-libraries.test.mjs`（探测语义/护栏分支/worker link 面）。
+**S5 childEnvironment 凭据剥离按名单追**：厂商前缀清单漏 `glm_` 等新厂商——按意图泛化为
+`*_API_KEY` / `API_KEY` 一律不进 worker 环境（`lib/local-embedding-manager.js`）。
+
+**契约测试同步**：worker 工具清单断言（consolidation-fork.test.mjs ×9）、brief 教学契约
+（consolidation-snapshot.test.mjs：link_suggest 从 doesNotMatch 改为 match——旧断言是
+"被裁掉时代"的遗迹）、`RUNTIME_STATE` 行号契约（binding-diagnostics：inFlight 982→986）。
+**教训**：改 private.js 行号后要同步 `binding-diagnostics.js` 的行号契约；改工具面后先
+grep tests 里的硬编码清单。守卫：全量 `npm test` 1676/1674 pass / 0 fail / 2 skipped
+（2026-11-15 快照）+ `npm run check` 全过。
+
+### 3.33 同一会话整理连续失败后每 5 分钟「snapshot-failed-too-many」循环（2026-11-15）
+
+**症状**：重启后空闲扫描每 5 分钟刷「整理跳过 · snapshot-failed · snapshot-failed-too-many」，同一条日志无限重复；账本 `lastError` 才能看到真因。
+
+**现场根因**：整理 fork 带着设置里的思考强度（如 medium）起回合，模型不支持——
+`provider "wb" model "glm-5.3-flash" does not support reasoning effort "medium"`，回合起点即失败（fork-turn-failed）。
+同一快照失败 2 次后冻结闸门生效，自动路径永远不再 fork；且冻结日志不带原因。
+
+**守卫**：`effortRefusalOf(failure)` 从失败信息学习「provider|model|effort」拒绝组合（进程内 Set；
+失败发生在回合起点，重启后再学一次代价极小）；学习过的组合起 fork 不再带档（按 inherit）；
+学习的同时清该快照的失败连击（否则闸门挡住自动重试，学习永远没机会生效）；
+冻结跳过日志带上 `lastError`。fork-turn-failed 的该类失败标记 retryable。
+**守卫测试**：`tests/consolidation-fork.test.mjs` 的 `an unsupported reasoning effort is learned, ...`。
+**用户侧**：重启后下一次空闲扫描即自动解冻；或手动整理一次，或在 WebUI 把整理思考强度改成该模型支持的档位。

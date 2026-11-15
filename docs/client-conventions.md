@@ -16,6 +16,8 @@
 
 只走**真实存在**的 DSH token：`bg-base`、`bg-layer-1..4`、`border-l1..l4`、`label-primary(-inverted)`、`label-secondary`、`label-error`、`brand-primary`、`brand-text`。写不存在的 token **不报错**，只会永远落到硬编码兜底色，换主题时特别难看。改色前先确认 token 名。
 
+**详情/编辑抽屉必须不透明**（`.dshm-drawer`，记忆详情卡与词典编辑共用）：DSW 的 `bg-layer-*` 按设计是半透明层色，主题插件 `dsh-any-background` 还会按滑块把它们接管得更透——直接用 `background:var(--dsw-alias-bg-layer-1)` 做抽屉底板，阅读/编辑面会透出背后的遮罩与页面。做法是把主题层色叠在 `light-dark(#ffffff,#1b1d23)` 实底上（`background:linear-gradient(层色,层色),light-dark(...)`，前置 `background-color:#fff` 兜底老引擎）：主题插件接管时层色已被它的 dialog 豁免臂（`[role=dialog][aria-modal=true]:not([aria-labelledby])`）钉成不透明字面量，盖住实底显示主题色；未接管时半透明层色叠在实底上仍不透明。所以抽屉 aside 必须带 `role="dialog" aria-modal="true"` 且用 `aria-label`（**不是** `aria-labelledby`，写了就掉出豁免臂）。别把抽屉背景改回单层 `bg-layer-*`。
+
 ### 7.3 控件纪律
 
 - **不新增内联 `S.*` 样式**（旧的在逐块删，不留双轨）；样式一律走 `dshm-` 作用域 CSS。
@@ -34,6 +36,7 @@
 - 侧边栏首屏只允许 **1 个 RPC**（`getSidebarState`）且不读记忆全文；其余分页懒加载，列表项预览就地截断。
 - 筛选是**两个独立维度，各自独占**：池（在用 / 已归档）× 层（全部 / 永久 / 长期 / 短期 / 锚点）。**所有选项恒定列出，没有记忆显示 0**；归档不是叠加开关。两池同一次读取全拿到，切换/归档/恢复只改状态重绘。
 - 反面语义设置项（如 `newSessionPromptDismissed`）在 WebUI 必须 `settingRow(..., { invert: true })`，否则开关显示与宿主页面相反。
+- **跨库聚合视图不带 sessionId**：记忆墙「全部记忆库」（`browseWall` 无 libraryId）与词典页「全部词典」（`lexiconList` 传 `libraryId:'all'`）都是管理面聚合读，会话凭据表达不了多库授权——省略 sessionId 走宿主 capability；宿主 403 时退回单库并禁用聚合选项（`multiBlocked` / `allBlocked`），不让整页空。聚合里的写操作按条目所属库路由（词典 `bookOf`），不能拿保留作用域名（`all`）去写。
 
 ### 7.5 文案与结构
 

@@ -10,7 +10,7 @@ process.env.DSH_MEMU_HOME = home
 const state = await import('../lib/state.js')
 const activity = await import('../lib/activity-log.js')
 const forkModel = await import('../lib/fork-model.js')
-const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY, CONSOLIDATION_WINDOW_EVENTS, compactSeedEvents, selectConsolidationWindow, selectTailTurnWindow, mustCoverCandidates, mergeMustCover, candidateCovered } = await import('../lib/private.js')
+const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY, CONSOLIDATION_WINDOW_EVENTS, isEffortRefused, effortRefusalOf, compactSeedEvents, selectConsolidationWindow, selectTailTurnWindow, mustCoverCandidates, mergeMustCover, candidateCovered } = await import('../lib/private.js')
 // 这些用例验证“路由继承”，不是推理强度；默认 medium 由 config 测试单独覆盖。
 state.updateSettings({ consolidationReasoningEffort: 'inherit' })
 
@@ -526,16 +526,16 @@ test('a PTC session (run_code only header) is consolidated and the worker gets w
   assert.equal(result.ok, true, 'a run_code header must not block consolidation: ' + String(result.error || ''))
   assert.equal(result.settled, true)
   assert.equal(ctx.rec.created.length, 1, 'the fork is created for the PTC conversation')
-  // 只挂 worker 真正用到的读写面（remember/update/link_suggest/list/recall/status）；
-  // lexicon、private_link、archive/delete/unpin 这些用不到或破坏性的工具不进 worker 面。
-  assert.deepEqual([...registered].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
+  // 只挂 worker 真正用到的写面（remember/batch/update + link/link_suggest 裁决两件）；
+  // lexicon、archive/delete/unpin 这些用不到或破坏性的工具不进 worker 面。
+  assert.deepEqual([...registered].sort(), ['memu_private_link', 'memu_private_link_suggest', 'memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
   // 整理结束（finally）必须卸载挂载，不能给这条一次性 worker 留常驻注册。
-  assert.deepEqual([...disposals].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
+  assert.deepEqual([...disposals].sort(), ['memu_private_link', 'memu_private_link_suggest', 'memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
   // 全量挂载的活动元数据：attached=实际子集（此处=完整 wanted）、requested=完整 wanted、
   // partial=false。三件一起钉住"成功路径不再含糊"。
   const started = startedEntryFor(ctx, 'fork-ptc')
-  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_link', 'memu_private_link_suggest', 'memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_link', 'memu_private_link_suggest', 'memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
   assert.equal(started.detail.workerToolsPartial, false, 'a full mount is not partial')
   const followup = ctx.rec.forkFollowups[0]?.message
   const brief = Array.isArray(followup?.content)
@@ -577,14 +577,14 @@ test('a host registry refusing one write tool leaves a structured partial mount 
   const result = await requestPrivateConsolidation(ctx, 'fork-ptc-partial')
   assert.equal(result.ok, true, String(result.error || ''))
   assert.equal(result.settled, true)
-  assert.deepEqual([...registered].sort(), ['memu_private_remember_batch', 'memu_private_update'],
+  assert.deepEqual([...registered].sort(), ['memu_private_link', 'memu_private_link_suggest', 'memu_private_remember_batch', 'memu_private_update'],
     'exactly the tools that actually registered are mounted')
-  assert.deepEqual([...disposals].sort(), ['memu_private_remember_batch', 'memu_private_update'],
+  assert.deepEqual([...disposals].sort(), ['memu_private_link', 'memu_private_link_suggest', 'memu_private_remember_batch', 'memu_private_update'],
     'dispose unmounts exactly what was mounted')
   const started = startedEntryFor(ctx, 'fork-ptc-partial')
-  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_remember_batch', 'memu_private_update'],
+  assert.deepEqual([...started.detail.workerToolsAttached].sort(), ['memu_private_link', 'memu_private_link_suggest', 'memu_private_remember_batch', 'memu_private_update'],
     'the log records the actual subset, not the full wanted list')
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_link', 'memu_private_link_suggest', 'memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
   assert.equal(started.detail.workerToolsPartial, true)
   // 挂载为部分子集时任务书仍带 PTC 调用形态：worker 知道写记忆走 run_code 的 SDK 绑定。
   const followup = ctx.rec.forkFollowups[0]?.message
@@ -605,7 +605,7 @@ test('a fork context without a tools service records a null mount, the request a
   assert.equal(result.ok, true, String(result.error || ''))
   const started = startedEntryFor(ctx, 'fork-ptc-notools')
   assert.equal(started.detail.workerToolsAttached, null, 'no mount completed, so the log must not claim one')
-  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
+  assert.deepEqual([...started.detail.workerToolsRequested].sort(), ['memu_private_link', 'memu_private_link_suggest', 'memu_private_remember', 'memu_private_remember_batch', 'memu_private_update'])
   assert.equal(started.detail.workerToolsPartial, true)
 })
 
@@ -618,16 +618,18 @@ test('a non-PTC header without write tools still refuses to fork', async () => {
   assert.equal(ctx.rec.created.length, 0, 'no fork when the model surface provably lacks the write tools')
 })
 
-// 超时预算按范围大小推：935 条事件那次实测「180 s 到点只写了 3 条，退避重试 131 s 完成」，
-// 约 0.14–0.2 s/事件；政策取 0.35 s/事件（≈2 倍余量）并夹在 [180 s, 600 s]。
-test('the consolidation wait budget scales with the transcript, not a fixed 180 s', () => {
-  assert.equal(consolidationWaitBudget(0), CONSOLIDATION_WAIT_POLICY.minMs, 'an empty range still gets the floor')
-  assert.equal(consolidationWaitBudget(100), 420_000, 'small sessions get the slow-reasoning floor')
-  assert.equal(consolidationWaitBudget(200), 420_000)
-  assert.equal(consolidationWaitBudget(935), 447_250, 'the session that timed out gets ~7.5 minutes')
-  assert.equal(consolidationWaitBudget(5_000), CONSOLIDATION_WAIT_POLICY.maxMs, 'a wedged fork still dies inside ten minutes')
-  assert.equal(consolidationWaitBudget(undefined), CONSOLIDATION_WAIT_POLICY.minMs)
-  assert.equal(consolidationWaitBudget('not-a-number'), CONSOLIDATION_WAIT_POLICY.minMs)
+// 超时预算（2026-11-15）：下限与封顶齐平为 600 s——预算恒为 600 s（10 分钟），不再随
+// 事件数缩放。慢推理模型（GLM-5.3-Flash）+ 500 事件窗需要完整的 10 分钟余量；卡死的
+// fork 仍会在 10 分钟到点后被收掉。显式 maxWaitMs 调用原样生效（另见 requestHistoricalConsolidation）。
+test('the consolidation wait budget is a flat 600 s for the slow-reasoning window', () => {
+  assert.equal(CONSOLIDATION_WAIT_POLICY.minMs, 600_000)
+  assert.equal(CONSOLIDATION_WAIT_POLICY.maxMs, 600_000)
+  assert.equal(consolidationWaitBudget(0), 600_000, 'an empty range still gets the full budget')
+  assert.equal(consolidationWaitBudget(100), 600_000, 'small sessions get the full ten minutes')
+  assert.equal(consolidationWaitBudget(935), 600_000, 'the session that timed out gets the full ten minutes')
+  assert.equal(consolidationWaitBudget(5_000), 600_000, 'a wedged fork still dies inside ten minutes')
+  assert.equal(consolidationWaitBudget(undefined), 600_000)
+  assert.equal(consolidationWaitBudget('not-a-number'), 600_000)
   assert.ok(CONSOLIDATION_WAIT_POLICY.minMs <= CONSOLIDATION_WAIT_POLICY.maxMs)
 })
 
@@ -918,4 +920,26 @@ test('a replace is dropped when filtering an inner checkpoint reveals a shadowed
   assert.deepEqual(seed.map(event => event.seq), [0, 1, 2])
   assert.deepEqual(seed.map(event => event.data.content[0].text), ['A', 'X', 'B'])
   assertSeedAcceptedByHost(seed)
+})
+
+
+// 2026-11-15 扫雷守卫：整理思考强度被模型拒绝 → 学习组合 → 清失败连击 → 下次 fork 不带档。
+// 现场：wb/glm-5.3-flash 不支持 medium，fork 回合起点即失败，同快照 2 次后被冻结数天。
+test('an unsupported reasoning effort is learned, the snapshot gate is reset, and the next fork drops the effort', async () => {
+  state.updateSettings({ consolidationReasoningEffort: 'medium' })
+  state.ensureSession('fork-effort-refusal', { cwd: path.join(home, 'proj-effort'), agentPreset: 'coding' })
+  const failureMessage = 'provider "test-provider" model "test-model" does not support reasoning effort "medium"'
+  assert.equal(effortRefusalOf(failureMessage).key, 'test-provider|test-model|medium')
+  assert.equal(isEffortRefused('test-provider|test-model|medium'), false, 'not learned before the first failure')
+  const ctx = host({ live: true, turnReason: { kind: 'error', error: { message: failureMessage } } })
+  const first = await requestPrivateConsolidation(ctx, 'fork-effort-refusal', { force: true })
+  assert.equal(first.ok, false)
+  assert.equal(first.reasonCode, 'fork-turn-failed')
+  assert.equal(isEffortRefused('test-provider|test-model|medium'), true, 'the refusal is learned from the failure')
+  const second = await requestPrivateConsolidation(ctx, 'fork-effort-refusal')
+  assert.equal(second.skipped, undefined, 'the retry gate was reset — the automatic path forks again')
+  const secondSpec = ctx.rec.created[1]
+  assert.ok(secondSpec, 'the second attempt forks again')
+  assert.equal(secondSpec.agentOptions?.reasoningEffort, undefined, 'the learned refusal drops the effort from the fork options')
+  state.updateSettings({ consolidationReasoningEffort: 'inherit' })
 })

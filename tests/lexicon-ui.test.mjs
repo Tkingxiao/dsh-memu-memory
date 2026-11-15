@@ -517,6 +517,53 @@ test('export bundles a versioned lexicon member; import merges in place with tom
   assert.equal(legacy.lexicon, undefined)
 })
 
+test('lexiconList libraryId=all merges the global lexicon and every private library, tagging each term with its book', async () => {
+  const aggA = state.createLibrary({ name: 'agg-a', cwd: path.join(home, 'agg-a') })
+  const aggB = state.createLibrary({ name: 'agg-b', cwd: path.join(home, 'agg-b') })
+  await dispatch({}, 'lexiconAdd', { libraryId: aggA.id, term: '甲书词', kind: 'slang', meaning: '来自甲库' })
+  await sleep(12)
+  await dispatch({}, 'lexiconAdd', { libraryId: aggB.id, term: '乙书词', kind: 'meme', meaning: '来自乙库' })
+  await sleep(12)
+  await dispatch({}, 'lexiconAdd', { libraryId: 'global', term: '全局词', kind: 'term', meaning: '来自全局词典' })
+  const all = await dispatch({}, 'lexiconList', { libraryId: 'all', pageSize: 200 })
+  assert.equal(all.libraryId, 'all')
+  assert.equal(all.scope, 'all')
+  const mine = all.items.filter((row) => ['甲书词', '乙书词', '全局词'].includes(row.term))
+  assert.equal(mine.length, 3, 'all three books contribute')
+  const byTerm = Object.fromEntries(mine.map((row) => [row.term, row]))
+  assert.equal(byTerm['甲书词'].libraryId, aggA.id)
+  assert.equal(byTerm['甲书词'].libraryName, 'agg-a')
+  assert.equal(byTerm['乙书词'].libraryId, aggB.id)
+  assert.equal(byTerm['全局词'].libraryId, 'global')
+  // 默认 active 页签：total 等于 active 计数（kind/搜索为空时筛选不额外收窄）。
+  assert.ok(all.total >= 3)
+  assert.equal(all.total, all.statusCounts.active)
+  // kind 筛选跨书生效：meme 命中乙书词，且结果全是 meme。
+  const memes = await dispatch({}, 'lexiconList', { libraryId: 'all', kind: 'meme', pageSize: 200 })
+  assert.ok(memes.items.some((row) => row.term === '乙书词'))
+  assert.ok(memes.items.every((row) => row.kind === 'meme'))
+  // 搜索跨书命中全局词。
+  const searched = await dispatch({}, 'lexiconList', { libraryId: 'all', q: '全局', pageSize: 200 })
+  assert.ok(searched.items.some((row) => row.term === '全局词'))
+  // 未知状态照样报错（与单库同一把尺）。
+  await assert.rejects(() => dispatch({}, 'lexiconList', { libraryId: 'all', status: 'pending' }), /unknown lexicon status/)
+  // 单库视图不受影响：仍只列自己的词，scope 仍是 private。
+  const single = await dispatch({}, 'lexiconList', { libraryId: aggA.id })
+  assert.ok(single.items.some((row) => row.term === '甲书词'))
+  assert.ok(!single.items.some((row) => row.term === '乙书词'))
+  assert.equal(single.scope, 'private')
+})
+
+test('lexiconList all skips an unreadable book and reports it instead of failing the whole aggregate', async () => {
+  const bad = state.createLibrary({ name: 'agg-bad', cwd: path.join(home, 'agg-bad') })
+  // 形状损坏的词典文件：readLexiconStrict 抛 LEXICON_CORRUPT，聚合应跳过并留痕。
+  fs.writeFileSync(path.join(dataDir(), 'lexicon', `${bad.id}.json`), '{ not valid json')
+  const all = await dispatch({}, 'lexiconList', { libraryId: 'all', pageSize: 200 })
+  assert.ok(Array.isArray(all.errors))
+  assert.ok(all.errors.some((x) => x.libraryId === bad.id), 'the corrupt book is reported')
+  assert.ok(all.items.length > 0, 'the rest of the aggregate still renders')
+})
+
 test('the lexicon panel is a two-tab card flow with no review/pending surface; auto graph edges get a badge', () => {
   const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   const start = src.indexOf('const LEXICON_TAB_LABELS')
@@ -541,12 +588,17 @@ test('the lexicon panel is a two-tab card flow with no review/pending surface; a
   // 来源记忆跳转与命中三计数 tooltip 保留。
   assert.match(panel, /onFocusMemory/)
   assert.match(panel, /lexiconHitsDetail/)
-  // 作用域选择器：全局词典是选择器里的第一项，不是一个私有库（与记忆墙节点图的
-  // 「全局记忆」同一款做法）；口径说明用设置页同一种 note 样式。
+  // 作用域选择器：「全部词典」聚合视图与全局词典都在顶部，都不是私有库（与记忆墙
+  // 节点图的「全局记忆」同一款做法）；口径说明用设置页同一种 note 样式。
   assert.match(panel, /lexiconGlobalScope/)
   assert.match(panel, /lexiconGlobalHint/)
   assert.match(panel, /lexiconBrowseScopeHint/)
   assert.match(panel, /dshm-settings-note/)
+  // 「全部词典」选项：聚合浏览所有书，卡片标注来源，写操作按词条所属库路由。
+  assert.match(panel, /lexiconAllScope/)
+  assert.match(panel, /lexiconAllHint/)
+  assert.match(panel, /value: ALL_LEXICON_ID/)
+  assert.match(panel, /bookOf/)
   // 全局词条跳记忆墙时 libraryId 必须落回 null（全局页），不能把保留字当库 id。
   assert.match(panel, /isGlobalLib \? null : activeLib/)
   // 没有私有库时这一页照样可用：全局词典由用户手写，不依赖任何库。
@@ -554,6 +606,39 @@ test('the lexicon panel is a two-tab card flow with no review/pending surface; a
   // 自动关联边带小 Tag，手动边不受影响（只认 source === 'auto'）。
   assert.match(src, /edge\.source === 'auto'/)
   assert.match(src, /t\('graphAutoLink'\)/)
+})
+
+test('lexicon editing opens a right-side drawer (like the memory detail card), not an inline card form', () => {
+  const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const start = src.indexOf('const LEXICON_TAB_LABELS')
+  const end = src.indexOf('function SettingsPage')
+  const panel = src.slice(start, end)
+  // 编辑改由右侧抽屉承载：复用记忆详情抽屉的 backdrop + aside 结构，role=dialog 让
+  // 主题插件的不透明豁免臂认得它；卡片内不再向下展开内联表单。
+  assert.match(panel, /const editDrawer/)
+  assert.match(panel, /dshm-drawer-backdrop/)
+  assert.match(panel, /className: 'dshm-drawer'/)
+  assert.match(panel, /'aria-modal': 'true'/)
+  assert.match(panel, /closeEdit/)
+  assert.match(panel, /bookLabelOf/)
+  assert.ok(!/const editForm/.test(panel), 'the inline downward edit form must be gone')
+  // Escape 与点击 backdrop 都能关；保存/取消在抽屉底部。
+  assert.match(panel, /event.key === 'Escape'/)
+  assert.match(panel, /dshm-drawer-actions/)
+  // 记忆详情抽屉与词典编辑抽屉共用不透明背景：主题层色叠在 light-dark 实底上，
+  // 不再直接用半透明的 bg-layer-1（主题插件未接管时会透）。
+  assert.match(src, /\.dshm-drawer\{[^}]*background-color:#fff;background:linear-gradient\(var\(--dsw-alias-bg-layer-1,transparent\),var\(--dsw-alias-bg-layer-1,transparent\)\),light-dark\(#ffffff,#1b1d23\)/)
+  // 抽屉表单字段有作用域 CSS（两个抽屉共用），不是裸 span。
+  assert.match(src, /\.dshm-drawer-field\{/)
+  assert.match(src, /\.dshm-drawer-label\{/)
+  // 独立壳的抽屉覆盖也必须不透明：曾用半透明的 --dshm-panel-strong（.87/.84）做底板，
+  // 把嵌入壳的不透明修复整个盖掉，独立 WebUI 里抽屉照样透。改用实色 layer-1。
+  const standalone = fs.readFileSync(new URL('../lib/webui/standalone.css', import.meta.url), 'utf8')
+  const drawerBlock = /html\[data-standalone\] \.dshm-drawer \{[^}]*\}/.exec(standalone)?.[0] || ''
+  assert.ok(drawerBlock, 'the standalone drawer override must exist')
+  const bgDecl = /background:[^;]+;/.exec(drawerBlock)?.[0] || ''
+  assert.match(bgDecl, /var\(--dsw-alias-bg-layer-1/)
+  assert.ok(!/dshm-panel-strong/.test(bgDecl), 'the translucent panel-strong must not paint the drawer')
 })
 
 // 全局词典的保留存储名由服务端定义、由前端复写一遍（client.js 是浏览器侧脚本，
@@ -566,5 +651,17 @@ test('the client and the server spell the global lexicon id the same way', () =>
   assert.ok(server, 'lib/lexicon.js must define GLOBAL_LEXICON_ID')
   assert.equal(browser, server)
   assert.ok(state.listLibraries().every((lib) => lib.id !== server), 'a library id may never be the reserved global id')
+})
+
+// 「全部词典」聚合浏览的保留作用域名同样由服务端定义、前端复写；漂移会让前端把 'all'
+// 当成一本不存在的私有库去写。
+test('the client and the server spell the all-lexicon scope id the same way', () => {
+  const core = fs.readFileSync(new URL('../lib/lexicon.js', import.meta.url), 'utf8')
+  const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const server = /export const ALL_LEXICON_ID = '([^']+)'/.exec(core)?.[1]
+  const browser = /const ALL_LEXICON_ID = '([^']+)'/.exec(client)?.[1]
+  assert.ok(server, 'lib/lexicon.js must define ALL_LEXICON_ID')
+  assert.equal(browser, server)
+  assert.ok(state.listLibraries().every((lib) => lib.id !== server), 'a library id may never be the reserved all scope id')
 })
 
