@@ -5,7 +5,9 @@ import os from 'node:os'
 import path from 'node:path'
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-memory-inject-'))
+process.env.DSH_HOME = home
 process.env.DSH_MEMU_HOME = home
+process.env.DSH_MEMU_MEMORY_HOME = home
 
 const state = await import('../lib/state.js')
 const inject = await import('../lib/inject.js')
@@ -208,6 +210,14 @@ test('pre-step inserts a plugin message before the user message', async () => {
   assert.ok(injected.includes('Deploy convention'), 'the title is what reaches the prompt')
   assert.equal(injected.includes('The deploy script lives in tools/deploy.ps1'), false,
     'the turn block is a title card; the body stays behind memu_private_recall')
+  assert.ok(!state.getSessionBinding('inject-step').injectedIds.includes('mem-recall'), 'returning a proposal is not admission')
+  const handlers = new Map()
+  inject.registerInjection({ on: (name, handler) => { handlers.set(name, handler); return () => {} }, logger: { warn() {} } })
+  agent.session.messages = []
+  for (const message of out.messages) {
+    agent.session.messages.push(message)
+    await handlers.get('session/event')(agent.session, { type: 'user/message', data: message })
+  }
   assert.ok(state.getSessionBinding('inject-step').injectedIds.includes('mem-recall'))
   assert.equal(state.getSessionBinding('inject-step').lastRecallError, undefined)
 

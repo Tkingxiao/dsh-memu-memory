@@ -3,14 +3,21 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-memory-fork-'))
+process.env.DSH_HOME = home
 process.env.DSH_MEMU_HOME = home
+process.env.DSH_MEMU_MEMORY_HOME = home
 
 const state = await import('../lib/state.js')
 const activity = await import('../lib/activity-log.js')
+const ledger = await import('../lib/consolidation-ledger.js')
 const forkModel = await import('../lib/fork-model.js')
-const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY, CONSOLIDATION_WINDOW_EVENTS, isEffortRefused, effortRefusalOf, compactSeedEvents, selectConsolidationWindow, selectTailTurnWindow, mustCoverCandidates, mergeMustCover, candidateCovered } = await import('../lib/private.js')
+const { dataDir, setWarnSink } = await import('../lib/paths.js')
+const { retireWorker } = await import('../lib/worker-pool.js')
+const { CORE_WRITE_TOOLS, WORKER_TOOL_ALLOW } = await import('../lib/consolidation-worker.js')
+const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY, CONSOLIDATION_WINDOW_EVENTS, isEffortRefused, markEffortRefused, effortRefusalOf, compactSeedEvents, selectConsolidationWindow, selectTailTurnWindow, mustCoverCandidates, mergeMustCover, candidateCovered } = await import('../lib/private.js')
 // 这些用例验证“路由继承”，不是推理强度；默认 medium 由 config 测试单独覆盖。
 state.updateSettings({ consolidationReasoningEffort: 'inherit' })
 
@@ -57,9 +64,10 @@ function assertHostCreateAccepts(spec = {}) {
   }
 }
 
-function host({ live = false, whenIdle = null, parentOptions = { provider: 'test-provider', model: 'test-model' }, requestConfig = null, extraEvents = [], transcriptSize = 0, turnReason = { kind: 'completed' }, emitTurnEnd = true, headerTools = null, childCtxFactory = null, llm = null } = {}) {
+function host({ live = false, whenIdle = null, parentOptions = { provider: 'test-provider', model: 'test-model' }, requestConfig = null, extraEvents = [], transcriptSize = 0, turnReason = { kind: 'completed' }, emitTurnEnd = true, headerTools = null, childCtxFactory = null, llm = null, cwd = path.join(home, 'proj') } = {}) {
   const rec = { liveFollowups: [], created: [], forkFollowups: [], disposed: [], sessionHandlers: [], workerToolRegistrations: [], workerToolDisposals: [] }
-  const childContexts = new Map()
+  // agents.get 返回裸 agent；dispose 注销活句柄，但会话 id 仍在磁盘上占用。
+  const childAgents = new Map()
   const tick = String.fromCharCode(96)
   const receiptFence = (range, identity) => [tick + tick + tick + 'memu-consolidation-receipt', JSON.stringify({ version: 1, ...identity, status: 'completed', outcome: 'no_value', checkedRange: range, createdIds: [], updatedIds: [], heldIds: [], reasonCode: null, retryable: false }), tick + tick + tick].join('\n')
   // 真实长会话的规模：补齐不产生证据的事件，只影响 fork 成本判定。
@@ -79,8 +87,7 @@ function host({ live = false, whenIdle = null, parentOptions = { provider: 'test
       if (name === 'agents') {
         return {
           get: (id) => {
-            // attachWorkerTools 用 childContexts 模拟"宿主在 create 后暴露的 agent ctx"。
-            if (childContexts.has(id)) return { ctx: childContexts.get(id) }
+            if (childAgents.has(id)) return childAgents.get(id)
             return (live
               ? {
                   followup: (message) => rec.liveFollowups.push({ id, message }),
@@ -94,16 +101,23 @@ function host({ live = false, whenIdle = null, parentOptions = { provider: 'test
           },
           create: async (spec) => {
             assertHostCreateAccepts(spec)
+            if (childAgents.has(spec.sessionId)) throw new Error('session already exists: ' + spec.sessionId)
             rec.created.push(spec)
-            if (childCtxFactory) childContexts.set(spec.sessionId, childCtxFactory())
             const childSession = { id: spec.sessionId }
-            return {
+            const dispose = async () => {
+              rec.disposed.push(spec.sessionId)
+              childAgents.set(spec.sessionId, null)
+            }
+            const handle = {
               agent: {
                 session: childSession,
+                ctx: childCtxFactory?.(),
+                dispose,
                 followup: (message) => {
                   rec.forkFollowups.push({ child: spec.sessionId, message })
                   if (emitTurnEnd) {
-                    if (turnReason?.kind === 'completed') {
+                    const reason = typeof turnReason === 'function' ? turnReason(spec) : turnReason
+                    if (reason?.kind === 'completed') {
                       // The worker receipt must match the window the fork was seeded
                       // with, not the whole parent transcript.
                       const child = state.getSessionBinding(spec.sessionId)
@@ -116,14 +130,16 @@ function host({ live = false, whenIdle = null, parentOptions = { provider: 'test
                       }
                     }
                     for (const handler of rec.sessionHandlers) {
-                      handler(childSession, { type: 'turn/end', seq: 100, data: { turn: 1, reason: turnReason } })
+                      handler(childSession, { type: 'turn/end', seq: 100, data: { turn: 1, reason } })
                     }
                   }
                 },
                 whenIdle: whenIdle || (async () => {}),
               },
-              dispose: async () => { rec.disposed.push(spec.sessionId) },
+              dispose,
             }
+            childAgents.set(spec.sessionId, handle.agent)
+            return handle
           },
         }
       }
@@ -140,7 +156,7 @@ function host({ live = false, whenIdle = null, parentOptions = { provider: 'test
               ...extraEvents,
               ...filler,
             ],
-            session: { cwd: path.join(home, 'proj'), agentPreset: 'coding' },
+            session: { cwd, agentPreset: 'coding' },
           }),
         }
       }
@@ -196,7 +212,75 @@ test('a live session is consolidated in a fork, not by queueing on itself', asyn
   assert.equal(result.scanned, 3, 'report how much of the transcript was scanned')
   assert.equal(result.fresh, 3, 'report how many events were new since the last consolidation')
   assert.equal(result.wrote, 0, 'the fake fork writes nothing, but the metric must still be measured')
+  const text = ctx.rec.forkFollowups[0].message.content[0].text
+  const { estTokens } = await import('../lib/budget.js')
+  assert.equal(result.measurement.runner, 'fork')
+  assert.equal(result.measurement.packet.inputChars, text.length)
+  assert.equal(result.measurement.packet.estimatedTokens, estTokens(text))
+  assert.equal(result.measurement.usage.inputTokens, null)
 })
+
+for (const restriction of ['succeeds', 'missing', 'throws twice']) {
+  test(`a fork keeps host permissions and dispatches when tools.restrict ${restriction}`, async (t) => {
+    const id = 'fork-permissions-' + restriction.replaceAll(' ', '-')
+    state.ensureSession(id, { cwd: home, agentPreset: 'coding' })
+    const setPermission = t.mock.fn()
+    const disposeRestriction = t.mock.fn()
+    const followupsAtRestriction = []
+    const restrict = t.mock.fn(() => {
+      followupsAtRestriction.push(ctx.rec.forkFollowups.length)
+      if (restriction === 'throws twice') throw new Error('host refused tool restriction')
+      return disposeRestriction
+    })
+    const ctx = host({
+      live: true,
+      headerTools: [...CORE_WRITE_TOOLS, 'read', 'shell'],
+      childCtxFactory: () => ({ tools: restriction === 'missing' ? {} : { restrict } }),
+    })
+    ctx.permissionPresets = { set: setPermission }
+
+    const result = await requestPrivateConsolidation(ctx, id)
+    assert.equal(setPermission.mock.callCount(), 0, 'the plugin must not change the host permission preset')
+    assert.equal(result.ok, true, String(result.error || ''))
+    assert.equal(result.settled, true, 'missing or failing restrict keeps the existing capability fallback')
+    assert.equal(ctx.rec.created.length, 1)
+    assert.equal(ctx.rec.forkFollowups.length, 1, 'the fork still receives the consolidation task')
+    assert.equal(ctx.rec.liveFollowups.length, 0, 'the parent never receives the task')
+    assert.equal(ctx.rec.disposed.length, 1, 'the scratch fork is still disposed')
+    const expectedAllows = restriction === 'missing' ? []
+      : restriction === 'throws twice' ? [WORKER_TOOL_ALLOW, CORE_WRITE_TOOLS] : [WORKER_TOOL_ALLOW]
+    assert.deepEqual(restrict.mock.calls.map((call) => call.arguments), expectedAllows.map((allow) => [{ allow }]),
+      'restriction still tries the full allowlist and falls back to the write core on failure')
+    assert.deepEqual(followupsAtRestriction, expectedAllows.map(() => 0), 'all restriction attempts precede dispatch')
+    assert.equal(disposeRestriction.mock.callCount(), restriction === 'succeeds' ? 1 : 0)
+  })
+}
+
+test('a fork preserves an existing parent cwd', async () => {
+  const cwd = fs.mkdtempSync(path.join(home, 'existing-cwd-'))
+  state.ensureSession('fork-cwd-existing', { cwd, agentPreset: 'coding' })
+  const ctx = host({ live: true, cwd })
+  const result = await requestPrivateConsolidation(ctx, 'fork-cwd-existing')
+  assert.equal(result.ok, true, String(result.error || ''))
+  assert.equal(ctx.rec.created.length, 1)
+  assert.notEqual(cwd, dataDir(), 'the existing cwd differs from the fallback')
+  assert.equal(ctx.rec.created[0].meta.cwd, cwd)
+  assert.equal(ctx.rec.forkFollowups.length, 1)
+})
+
+test('a fork falls back to the real dataDir when the parent cwd no longer exists', async () => {
+  const cwd = path.join(home, 'missing-cwd')
+  assert.equal(fs.existsSync(cwd), false)
+  state.ensureSession('fork-cwd-missing', { cwd, agentPreset: 'coding' })
+  const ctx = host({ live: true, cwd })
+  const result = await requestPrivateConsolidation(ctx, 'fork-cwd-missing')
+  assert.equal(result.ok, true, String(result.error || ''))
+  assert.equal(ctx.rec.created.length, 1)
+  assert.equal(ctx.rec.created[0].meta.cwd, dataDir())
+  assert.equal(fs.statSync(ctx.rec.created[0].meta.cwd).isDirectory(), true, 'the fallback is a real directory')
+  assert.equal(ctx.rec.forkFollowups.length, 1)
+})
+
 test('a live session inherits the route of its latest turn, not stale creation options', async () => {
   state.ensureSession('fork-route', { cwd: path.join(home, 'proj-route'), agentPreset: 'coding' })
   const ctx = host({
@@ -253,6 +337,12 @@ test('a failed fork turn is reported as failure and does not advance the sleep c
   assert.equal(state.getSessionBinding('fork-turn-error').lastSleepSeq, undefined, 'a failed turn must be retried, not marked asleep')
   assert.equal(ctx.rec.disposed.length, 1, 'the failed fork is still disposed')
   assert.equal(ctx.rec.sessionHandlers.length, 0, 'the failed fork listener is removed')
+  const { sessionState } = await import('../lib/consolidation-ledger.js')
+  const ledger = sessionState('fork-turn-error')
+  assert.equal(ledger.checked, null)
+  assert.equal(ledger.pending.fromSeq, 0)
+  assert.equal(ledger.pending.throughSeq, 2)
+  assert.ok(result.measurement.packet.inputChars > 0, 'failed dispatches still carry cost measurement')
 })
 
 test('a fork that never reports turn/end is a failure, not a success', async () => {
@@ -476,7 +566,7 @@ test('a candidate is covered only when a written entry carries the fact', () => 
 
 test('the same failed snapshot stops automatic re-forking after the failure cap', async () => {
   state.ensureSession('fork-failcap', { cwd: path.join(home, 'proj-failcap'), agentPreset: 'coding' })
-  const ctx = host({ live: true, turnReason: { kind: 'error', error: { message: 'provider refused' } } })
+  const ctx = host({ live: true, turnReason: { kind: 'error', error: { message: 'provider refused max-tokens argument' } } })
   const first = await requestPrivateConsolidation(ctx, 'fork-failcap', { force: true })
   const second = await requestPrivateConsolidation(ctx, 'fork-failcap', { force: true })
   assert.equal(first.ok, false)
@@ -491,6 +581,161 @@ test('the same failed snapshot stops automatic re-forking after the failure cap'
   const forcedAgain = await requestPrivateConsolidation(ctx, 'fork-failcap', { force: true })
   assert.equal(forcedAgain.ok, false)
   assert.equal(ctx.rec.created.length, 3, 'a manual retry is allowed past the cap')
+})
+
+for (const runner of ['fork', 'worker']) {
+  test(`${runner} preserves max-tokens pending and retries the same snapshot only after output configuration changes`, async () => {
+    state.updateSettings({ consolidationRunner: runner, consolidationModelMode: 'inherit', consolidationReasoningEffort: 'inherit' })
+    const id = 'output-limit-' + runner
+    state.ensureSession(id, { cwd: path.join(home, id), agentPreset: 'coding' })
+    const parentOptions = { provider: id, model: 'test-model', maxTokens: 4096, reasoningEffort: 'medium' }
+    markEffortRefused([id, 'test-model', 'medium'].join('|'))
+    const ctx = host({ live: true, parentOptions, turnReason: spec => spec.agentOptions.maxTokens <= 4096 ? { kind: 'max-tokens' } : { kind: 'completed' } })
+    try {
+      for (let i = 0; i < 2; i++) {
+        const failed = await requestPrivateConsolidation(ctx, id, { force: true })
+        assert.equal(failed.ok, false)
+        assert.equal(failed.settled, false)
+        assert.equal(failed.reasonCode, 'model-output-limit')
+        assert.equal(failed.retryable, true)
+        assert.equal(failed.configuredMaxTokens, 4096)
+        assert.match(failed.error, /输出预算不足/)
+        assert.equal(state.getSessionBinding(id).lastSleepSeq, undefined)
+        assert.ok(ledger.sessionState(id).pending)
+        assert.equal(parentOptions.maxTokens, 4096, 'the plugin never raises the parent limit')
+        assert.equal(parentOptions.reasoningEffort, 'medium')
+        assert.equal(ctx.rec.created.at(-1).agentOptions.reasoningEffort, undefined)
+      }
+      const suppressed = await requestPrivateConsolidation(ctx, id)
+      assert.equal(suppressed.skipped, 'snapshot-failed')
+      assert.equal(suppressed.settled, false)
+      assert.equal(ctx.rec.created.length, 2)
+      parentOptions.maxTokens = 32768
+      const recovered = await requestPrivateConsolidation(ctx, id)
+      assert.equal(recovered.ok, true, recovered.error || '')
+      assert.equal(recovered.settled, true)
+      assert.equal(ctx.rec.created.length, 3)
+      assert.equal(ctx.rec.created.at(-1).agentOptions.maxTokens, 32768)
+      assert.equal(state.getSessionBinding(id).lastSleepSeq, 2)
+      assert.equal(ledger.sessionState(id).pending, null)
+    } finally {
+      const worker = state.getSessionBinding(id)?.workerEpoch?.forkSessionId
+      if (worker) await retireWorker(ctx, worker, 'test-cleanup', { handoff: false })
+      state.updateSettings({ consolidationRunner: 'fork', consolidationModelMode: 'inherit' })
+    }
+  })
+}
+
+test('host-route output default changes unlock a truncated snapshot without inheriting a parent route or overriding its cap', async () => {
+  const id = 'output-default-host'
+  state.ensureSession(id, { cwd: path.join(home, id), agentPreset: 'coding' })
+  state.updateSettings({ consolidationRunner: 'fork', consolidationModelMode: 'host', consolidationModel: 'test-provider/test-model', consolidationReasoningEffort: 'inherit' })
+  let defaultMaxTokens = 4096
+  const ctx = host({ live: false, llm: { resolveModelInfo: async () => ({ defaultMaxTokens }) }, turnReason: () => defaultMaxTokens <= 4096 ? { kind: 'max-tokens' } : { kind: 'completed' } })
+  try {
+    for (let i = 0; i < 2; i++) {
+      const result = await requestPrivateConsolidation(ctx, id, { force: true })
+      assert.equal(result.reasonCode, 'model-output-limit')
+      assert.equal(result.configuredMaxTokens, 4096)
+    }
+    const frozen = await requestPrivateConsolidation(ctx, id)
+    assert.equal(frozen.skipped, 'snapshot-failed')
+    defaultMaxTokens = 32768
+    const resumed = await requestPrivateConsolidation(ctx, id)
+    assert.equal(resumed.ok, true, resumed.error || '')
+    assert.equal(resumed.settled, true)
+    assert.equal(ctx.rec.created.length, 3)
+    assert.ok(ctx.rec.created.every(spec => !Object.hasOwn(spec.agentOptions, 'maxTokens')))
+  } finally {
+    state.updateSettings({ consolidationModelMode: 'inherit', consolidationModel: '' })
+  }
+})
+
+test('a budget change during a truncated turn is not charged as a failed attempt of the new configuration', async () => {
+  const id = 'output-limit-mid-turn-change'
+  state.ensureSession(id, { cwd: path.join(home, id), agentPreset: 'coding' })
+  state.updateSettings({ consolidationRunner: 'fork', consolidationModelMode: 'inherit', consolidationReasoningEffort: 'inherit' })
+  const parentOptions = { provider: id, model: 'test-model', maxTokens: 4096 }
+  let oldAttempts = 0
+  let newAttempts = 0
+  const ctx = host({ live: true, parentOptions, turnReason: spec => {
+    if (spec.agentOptions.maxTokens === 4096) {
+      if (++oldAttempts === 2) parentOptions.maxTokens = 8192
+      return { kind: 'max-tokens' }
+    }
+    return ++newAttempts === 1 ? { kind: 'max-tokens' } : { kind: 'completed' }
+  } })
+  for (let i = 0; i < 2; i++) assert.equal((await requestPrivateConsolidation(ctx, id, { force: true })).reasonCode, 'model-output-limit')
+  assert.equal((await requestPrivateConsolidation(ctx, id)).reasonCode, 'model-output-limit')
+  const recovered = await requestPrivateConsolidation(ctx, id)
+  assert.equal(recovered.ok, true, recovered.error || '')
+  assert.equal(recovered.settled, true)
+  assert.equal(newAttempts, 2)
+  assert.equal(ctx.rec.created.length, 4)
+  assert.equal(state.getSessionBinding(id).lastSleepSeq, 2)
+})
+
+test('a provider default reasoning change reopens an output-limited host route without an explicit effort override', async () => {
+  const id = 'output-limit-default-reasoning'
+  state.ensureSession(id, { cwd: path.join(home, id), agentPreset: 'coding' })
+  state.updateSettings({ consolidationRunner: 'fork', consolidationModelMode: 'host', consolidationModel: id + '/test-model', consolidationReasoningEffort: 'inherit' })
+  let defaultEffort = 'high'
+  const ctx = host({ live: false, llm: { resolveModelInfo: async () => ({ defaultMaxTokens: 4096, reasoning: { defaultEffort } }) }, turnReason: () => defaultEffort === 'high' ? { kind: 'max-tokens' } : { kind: 'completed' } })
+  try {
+    for (let i = 0; i < 2; i++) assert.equal((await requestPrivateConsolidation(ctx, id, { force: true })).reasonCode, 'model-output-limit')
+    assert.equal((await requestPrivateConsolidation(ctx, id)).skipped, 'snapshot-failed')
+    defaultEffort = 'low'
+    const result = await requestPrivateConsolidation(ctx, id)
+    assert.equal(result.ok, true, result.error || '')
+    assert.equal(result.settled, true)
+    assert.equal(ctx.rec.created.length, 3)
+    assert.ok(ctx.rec.created.every(spec => !Object.hasOwn(spec.agentOptions, 'reasoningEffort')))
+  } finally {
+    state.updateSettings({ consolidationModelMode: 'inherit', consolidationModel: '' })
+  }
+})
+
+test('unavailable model metadata does not masquerade as an output configuration change', async () => {
+  const id = 'output-limit-unavailable-defaults'
+  state.ensureSession(id, { cwd: path.join(home, id), agentPreset: 'coding' })
+  state.updateSettings({ consolidationRunner: 'fork', consolidationModelMode: 'host', consolidationModel: id + '/test-model', consolidationReasoningEffort: 'inherit' })
+  let unavailable = false
+  let defaultMaxTokens = 4096
+  const ctx = host({ live: false, llm: { resolveModelInfo: async () => {
+    if (unavailable) throw new Error('model metadata unavailable')
+    return { defaultMaxTokens }
+  } }, turnReason: () => defaultMaxTokens <= 4096 ? { kind: 'max-tokens' } : { kind: 'completed' } })
+  try {
+    for (let i = 0; i < 2; i++) assert.equal((await requestPrivateConsolidation(ctx, id, { force: true })).reasonCode, 'model-output-limit')
+    unavailable = true
+    assert.equal((await requestPrivateConsolidation(ctx, id)).skipped, 'snapshot-failed')
+    unavailable = false
+    assert.equal((await requestPrivateConsolidation(ctx, id)).skipped, 'snapshot-failed')
+    assert.equal(ctx.rec.created.length, 2)
+    defaultMaxTokens = 32768
+    assert.equal((await requestPrivateConsolidation(ctx, id)).settled, true)
+    assert.equal(ctx.rec.created.length, 3)
+  } finally {
+    state.updateSettings({ consolidationModelMode: 'inherit', consolidationModel: '' })
+  }
+})
+
+test('an explicit live output limit supersedes a cached header budget only on the same route', async () => {
+  const id = 'output-limit-cached-header'
+  state.ensureSession(id, { cwd: path.join(home, id), agentPreset: 'coding' })
+  state.updateSettings({ consolidationRunner: 'fork', consolidationModelMode: 'inherit', consolidationReasoningEffort: 'inherit' })
+  const parentOptions = { provider: id, model: 'test-model', maxTokens: 4096 }
+  const requestConfig = Object.freeze({ provider: id, model: 'test-model', maxTokens: 4096 })
+  const ctx = host({ live: true, parentOptions, requestConfig, turnReason: spec => spec.agentOptions.maxTokens <= 4096 ? { kind: 'max-tokens' } : { kind: 'completed' } })
+  for (let i = 0; i < 2; i++) assert.equal((await requestPrivateConsolidation(ctx, id, { force: true })).reasonCode, 'model-output-limit')
+  assert.equal((await requestPrivateConsolidation(ctx, id)).skipped, 'snapshot-failed')
+  parentOptions.maxTokens = 32768
+  const result = await requestPrivateConsolidation(ctx, id)
+  assert.equal(result.ok, true, result.error || '')
+  assert.equal(result.settled, true)
+  assert.equal(ctx.rec.created.at(-1).agentOptions.maxTokens, 32768)
+  assert.equal(requestConfig.maxTokens, 4096)
+  assert.equal(ctx.rec.created.length, 3)
 })
 
 // ---------------------------------------------------------------- PTC 兼容
@@ -925,21 +1170,337 @@ test('a replace is dropped when filtering an inner checkpoint reveals a shadowed
 
 // 2026-11-15 扫雷守卫：整理思考强度被模型拒绝 → 学习组合 → 清失败连击 → 下次 fork 不带档。
 // 现场：wb/glm-5.3-flash 不支持 medium，fork 回合起点即失败，同快照 2 次后被冻结数天。
-test('an unsupported reasoning effort is learned, the snapshot gate is reset, and the next fork drops the effort', async () => {
+function rejectMedium(spec) {
+  const { provider, model, reasoningEffort } = spec.agentOptions
+  return reasoningEffort === 'medium'
+    ? { kind: 'error', error: { message: `provider "${provider}" model "${model}" does not support reasoning effort "medium"` } }
+    : { kind: 'completed' }
+}
+
+function cleanupEffortHost(t, ctx, sessionId) {
+  t.after(async () => {
+    const forkId = state.getSessionBinding(sessionId)?.workerEpoch?.forkSessionId
+    if (forkId) await retireWorker(ctx, forkId, 'test-finished', { handoff: false })
+    state.updateSettings({ consolidationRunner: 'fork', consolidationReasoningEffort: 'inherit' })
+    restoreSettings()
+  })
+}
+
+for (const runner of ['fork', 'worker']) {
+  for (const mode of ['inherit', 'custom']) {
+    for (const effort of ['inherit', 'medium']) {
+      test(`${runner} learns inherited medium with ${mode} route / ${effort} setting and really succeeds on retry`, async (t) => {
+        const id = `effort-${runner}-${mode}-${effort}`
+        const parentOptions = Object.freeze({ provider: id, model: 'test-model', reasoningEffort: 'medium', maxTokens: 32768 })
+        const key = `${id}|test-model|medium`
+        const ctx = host({ live: true, parentOptions, turnReason: rejectMedium })
+        ctx.permissionPresets = { set: t.mock.fn() }
+        cleanupEffortHost(t, ctx, id)
+        state.updateSettings({ ...(mode === 'custom' ? CUSTOM : {}), consolidationRunner: runner, consolidationReasoningEffort: effort })
+        state.ensureSession(id, { cwd: home, agentPreset: 'coding' })
+        assert.equal(effortRefusalOf(rejectMedium({ agentOptions: parentOptions }).error.message).key, key)
+        assert.equal(isEffortRefused(key), false)
+
+        const first = await requestPrivateConsolidation(ctx, id, { force: true })
+        assert.equal(first.ok, false)
+        assert.equal(first.reasonCode, 'fork-turn-failed')
+        assert.equal(state.getSessionBinding(id).lastSleepSeq, undefined)
+        assert.equal(isEffortRefused(key), true)
+        assert.deepEqual(ctx.rec.created[0].agentOptions, parentOptions)
+        assert.ok(ctx.rec.disposed.includes(first.childId), 'the failed child was retired')
+        assert.equal(state.getSessionBinding(first.childId), null, 'the failed child binding was removed')
+        if (runner === 'worker') assert.equal(state.getSessionBinding(id).workerEpoch ?? null, null)
+        if (mode === 'custom') assert.equal(startedEntryFor(ctx, id).detail.modelMode, 'inherit-fallback')
+
+        const second = await requestPrivateConsolidation(ctx, id)
+        assert.equal(second.skipped, undefined, 'the automatic retry is not frozen')
+        assert.equal(second.ok, true, second.error || '')
+        assert.equal(second.settled, true, 'the parameter-dependent host completed and its receipt settled')
+        assert.equal(state.getSessionBinding(id).lastSleepSeq, 2)
+        assert.equal(ctx.rec.created.length, 2, 'retry really creates a fresh child')
+        assert.notEqual(second.childId, first.childId)
+        const secondOptions = ctx.rec.created[1].agentOptions
+        assert.equal(Object.hasOwn(secondOptions, 'reasoningEffort'), false)
+        assert.deepEqual(secondOptions, { provider: id, model: 'test-model', maxTokens: 32768 })
+        assert.equal(ctx.get('agents').get(id).options, parentOptions, 'the parent object is not replaced')
+        assert.equal(parentOptions.reasoningEffort, 'medium', 'the parent effort is untouched')
+        assert.equal(ctx.permissionPresets.set.mock.callCount(), 0, 'no automatic permission elevation')
+      })
+    }
+  }
+
+  test(`${runner} applies an allowed explicit effort after custom fallback and checks only the effective route`, async (t) => {
+    const id = `effort-override-${runner}`
+    const parentOptions = Object.freeze({ provider: id, model: 'model', reasoningEffort: 'medium', maxTokens: 4096 })
+    const ctx = host({ live: true, parentOptions, turnReason: rejectMedium })
+    cleanupEffortHost(t, ctx, id)
+    state.updateSettings({ ...CUSTOM, consolidationRunner: runner, consolidationReasoningEffort: 'high' })
+    state.ensureSession(id, { cwd: home, agentPreset: 'coding' })
+    markEffortRefused(`${id}|model|medium`)
+    markEffortRefused('dsh-memu-custom|gateway-model|high')
+    const result = await requestPrivateConsolidation(ctx, id, { force: true })
+    assert.equal(result.ok, true, result.error || '')
+    assert.equal(result.settled, true)
+    assert.equal(startedEntryFor(ctx, id).detail.modelMode, 'inherit-fallback')
+    assert.deepEqual(ctx.rec.created[0].agentOptions, { ...parentOptions, reasoningEffort: 'high' })
+    assert.equal(parentOptions.reasoningEffort, 'medium')
+  })
+}
+
+test('a fresh worker shares the refusal learned by a fork', async (t) => {
+  const parentOptions = Object.freeze({ provider: 'shared-effort', model: 'model', reasoningEffort: 'medium', maxTokens: 8192 })
+  const ctx = host({ live: true, parentOptions, turnReason: rejectMedium })
+  cleanupEffortHost(t, ctx, 'effort-shared-worker')
+  state.updateSettings({ consolidationRunner: 'fork', consolidationReasoningEffort: 'inherit' })
+  state.ensureSession('effort-shared-fork', { cwd: home, agentPreset: 'coding' })
+  const failed = await requestPrivateConsolidation(ctx, 'effort-shared-fork', { force: true })
+  assert.equal(failed.reasonCode, 'fork-turn-failed')
+  state.updateSettings({ consolidationRunner: 'worker' })
+  state.ensureSession('effort-shared-worker', { cwd: home, agentPreset: 'coding' })
+  const result = await requestPrivateConsolidation(ctx, 'effort-shared-worker', { force: true })
+  assert.equal(result.ok, true, result.error || '')
+  assert.equal(result.settled, true)
+  assert.match(result.childId, /^memu-worker-/)
+  assert.deepEqual(ctx.rec.created[1].agentOptions, { provider: 'shared-effort', model: 'model', maxTokens: 8192 })
+  assert.equal(parentOptions.reasoningEffort, 'medium')
+})
+
+// 2026-11-18：学习表持久化。反代服务商签名各异（raccoon/sn-deepseek-v4-1-flash-1017
+// 拒 medium 实测），表只在内存时每次重启后的第一次整理都要再吃一次 fork-turn-failed。
+test('a learned effort refusal survives a restart — it is persisted to the data dir', async (t) => {
   state.updateSettings({ consolidationReasoningEffort: 'medium' })
-  state.ensureSession('fork-effort-refusal', { cwd: path.join(home, 'proj-effort'), agentPreset: 'coding' })
-  const failureMessage = 'provider "test-provider" model "test-model" does not support reasoning effort "medium"'
-  assert.equal(effortRefusalOf(failureMessage).key, 'test-provider|test-model|medium')
-  assert.equal(isEffortRefused('test-provider|test-model|medium'), false, 'not learned before the first failure')
-  const ctx = host({ live: true, turnReason: { kind: 'error', error: { message: failureMessage } } })
-  const first = await requestPrivateConsolidation(ctx, 'fork-effort-refusal', { force: true })
+  state.ensureSession('fork-effort-persist', { cwd: path.join(home, 'proj-effort-persist'), agentPreset: 'coding' })
+  const ctx = host({ live: true, parentOptions: { provider: 'persist-provider', model: 'persist-model' }, turnReason: rejectMedium })
+  cleanupEffortHost(t, ctx, 'fork-effort-persist')
+  const first = await requestPrivateConsolidation(ctx, 'fork-effort-persist', { force: true })
   assert.equal(first.ok, false)
   assert.equal(first.reasonCode, 'fork-turn-failed')
-  assert.equal(isEffortRefused('test-provider|test-model|medium'), true, 'the refusal is learned from the failure')
-  const second = await requestPrivateConsolidation(ctx, 'fork-effort-refusal')
-  assert.equal(second.skipped, undefined, 'the retry gate was reset — the automatic path forks again')
-  const secondSpec = ctx.rec.created[1]
-  assert.ok(secondSpec, 'the second attempt forks again')
-  assert.equal(secondSpec.agentOptions?.reasoningEffort, undefined, 'the learned refusal drops the effort from the fork options')
-  state.updateSettings({ consolidationReasoningEffort: 'inherit' })
+
+  const persisted = JSON.parse(fs.readFileSync(path.join(dataDir(), 'effort-refusals.json'), 'utf8'))
+  assert.ok(persisted.keys.includes('persist-provider|persist-model|medium'), 'the refusal was written to the data dir')
+  const child = effortChild(t, home, `assert.equal(api.isEffortRefused('persist-provider|persist-model|medium'), true)`)
+  await child.ready
+  child.release()
+  await child.done
+})
+
+// 子进程只加载测试 loader + private.js，home/cwd 全部指向临时目录。
+// IPC 屏障保证并发用例里的两个进程先各自读完旧表，再同时开始 mark。
+function effortChild(t, dir, before, after = '') {
+  const code = `
+    import assert from 'node:assert/strict'
+    const api = await import(${JSON.stringify(new URL('../lib/private.js', import.meta.url).href)})
+    ${before}
+    const released = new Promise(resolve => process.once('message', resolve))
+    process.send('loaded')
+    await released
+    ${after}
+    process.disconnect()
+  `
+  const child = spawn(process.execPath, ['--import', new URL('./loader-register.mjs', import.meta.url).href, '--input-type=module', '-e', code], {
+    cwd: dir, windowsHide: true, timeout: 20_000,
+    env: { ...process.env, DSH_HOME: dir, DSH_MEMU_HOME: dir, DSH_MEMU_MEMORY_HOME: dir },
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  })
+  let errors = ''
+  child.stdout.on('data', data => { errors += data })
+  child.stderr.on('data', data => { errors += data })
+  const ready = new Promise((resolve, reject) => {
+    child.on('message', message => { if (message === 'loaded') resolve() })
+    child.on('error', reject)
+    child.on('close', () => reject(new Error('child exited before barrier: ' + errors)))
+  })
+  const done = new Promise((resolve, reject) => {
+    child.on('error', reject)
+    child.on('close', code => code === 0 ? resolve() : reject(new Error('effort child failed: ' + errors)))
+  })
+  // 在等待另一个进程抵达屏障时也接住早退；原 promise 仍供断言 await。
+  ready.catch(() => {})
+  done.catch(() => {})
+  t.after(() => { if (child.exitCode === null) child.kill() })
+  return { ready, done, release: () => child.send('mark') }
+}
+
+function refusalStore(t) {
+  state.flushState()
+  const dir = fs.mkdtempSync(path.join(home, 'effort-store-'))
+  const previous = [process.env.DSH_MEMU_HOME, process.env.DSH_MEMU_MEMORY_HOME]
+  process.env.DSH_MEMU_HOME = process.env.DSH_MEMU_MEMORY_HOME = dir
+  const warnings = []
+  setWarnSink(message => warnings.push(message))
+  t.after(() => {
+    ;[process.env.DSH_MEMU_HOME, process.env.DSH_MEMU_MEMORY_HOME] = previous
+    setWarnSink(null)
+  })
+  return { dir, file: path.join(dir, 'effort-refusals.json'), warnings }
+}
+
+function seedRefusals(file, keys) {
+  const raw = JSON.stringify({ version: 1, keys })
+  fs.writeFileSync(file, raw)
+  return raw
+}
+
+function refusalKeys(file) {
+  return JSON.parse(fs.readFileSync(file, 'utf8')).keys.sort()
+}
+
+test('refusals load lazily once and clean queries/duplicate marks perform no file IO', async (t) => {
+  const { file } = refusalStore(t)
+  seedRefusals(file, ['initial|model|medium'])
+  const read = t.mock.method(fs, 'readFileSync')
+  const write = t.mock.method(fs, 'writeFileSync')
+  const fresh = await import('../lib/private.js?effort-lazy')
+  const tableReads = () => read.mock.calls.filter(call => call.arguments[0] === file).length
+  assert.equal(tableReads(), 0, 'import does not capture or read a home')
+  assert.equal(fresh.isEffortRefused('initial|model|medium'), true)
+  assert.equal(tableReads(), 1)
+  for (let i = 0; i < 20; i++) {
+    assert.equal(fresh.isEffortRefused('initial|model|medium'), true)
+    assert.equal(fresh.isEffortRefused('unknown|model|medium'), false)
+    fresh.markEffortRefused('initial|model|medium')
+  }
+  assert.equal(tableReads(), 1, 'a clean cache never rescans the table')
+  assert.equal(write.mock.callCount(), 0, 'queries and duplicate clean marks never rewrite the table')
+})
+
+test('a failed initial read never replaces old keys and retries after IO recovers', (t) => {
+  const { file, warnings } = refusalStore(t)
+  const original = seedRefusals(file, ['old|model|medium'])
+  const read = fs.readFileSync
+  let failing = true
+  t.mock.method(fs, 'readFileSync', function (target, ...args) {
+    if (target === file && failing) throw Object.assign(new Error('read failed api_key=secret123456789'), { code: 'EIO' })
+    return read.call(this, target, ...args)
+  })
+  assert.equal(isEffortRefused('old|model|medium'), false, 'an unreadable key is not yet known')
+  markEffortRefused('new|model|medium')
+  assert.equal(isEffortRefused('new|model|medium'), true, 'new knowledge survives the failed read')
+  assert.equal(read(file, 'utf8'), original, 'read failure cannot be saved back as an empty table')
+  assert.ok(warnings.length > 0)
+  assert.ok(warnings.every(message => !message.includes('secret123456789')), 'warnings use the existing redaction sink')
+  failing = false
+  assert.equal(isEffortRefused('old|model|medium'), true, 'the query retries the pending merge')
+  assert.deepEqual(refusalKeys(file), ['new|model|medium', 'old|model|medium'])
+})
+
+for (const retry of ['same-key mark', 'query']) {
+  test(`an atomic write failure keeps pending keys and recovers on ${retry}`, (t) => {
+    const { dir, file, warnings } = refusalStore(t)
+    const original = seedRefusals(file, ['old|model|medium'])
+    assert.equal(isEffortRefused('old|model|medium'), true)
+    const rename = fs.renameSync
+    let failing = true
+    t.mock.method(fs, 'renameSync', function (from, to) {
+      if (to === file && failing) throw Object.assign(new Error('injected rename failure'), { code: 'EIO' })
+      return rename.call(this, from, to)
+    })
+    markEffortRefused('new|model|medium')
+    assert.equal(isEffortRefused('new|model|medium'), true)
+    assert.equal(fs.readFileSync(file, 'utf8'), original, 'failed atomic replace preserves the previous bytes')
+    assert.deepEqual(fs.readdirSync(dir), ['effort-refusals.json'], 'temporary files and locks are cleaned')
+    assert.ok(warnings.some(message => message.includes('injected rename failure')))
+    failing = false
+    if (retry === 'same-key mark') markEffortRefused('new|model|medium')
+    else assert.equal(isEffortRefused('old|model|medium'), true, 'even an unrelated lookup flushes pending knowledge')
+    assert.deepEqual(refusalKeys(file), ['new|model|medium', 'old|model|medium'])
+    const reads = t.mock.method(fs, 'readFileSync')
+    const writes = t.mock.method(fs, 'writeFileSync')
+    isEffortRefused('new|model|medium')
+    markEffortRefused('new|model|medium')
+    assert.equal(reads.mock.callCount(), 0, 'successful recovery clears the pending state')
+    assert.equal(writes.mock.callCount(), 0)
+  })
+}
+
+for (const [label, raw] of [
+  ['broken JSON', '{"version":1,"keys":['],
+  ['invalid keys', JSON.stringify({ version: 1, keys: [123] })],
+  ['unknown schema', JSON.stringify({ version: 2, keys: [] })],
+]) {
+  test(`${label} is never overwritten, and pending knowledge merges after repair`, (t) => {
+    const { file, warnings } = refusalStore(t)
+    fs.writeFileSync(file, raw)
+    assert.equal(isEffortRefused('pending|model|medium'), false)
+    markEffortRefused('pending|model|medium')
+    assert.equal(isEffortRefused('pending|model|medium'), true)
+    assert.equal(fs.readFileSync(file, 'utf8'), raw)
+    assert.ok(warnings.length > 0)
+    seedRefusals(file, ['restored|model|high'])
+    assert.equal(isEffortRefused('restored|model|high'), true)
+    assert.deepEqual(refusalKeys(file), ['pending|model|medium', 'restored|model|high'])
+  })
+}
+
+test('refusal caches and writes follow the current home without leaking keys', (t) => {
+  const { file: firstFile } = refusalStore(t)
+  assert.equal(isEffortRefused('first|model|medium'), false, 'ENOENT starts an empty table')
+  markEffortRefused('first|model|medium')
+  const secondDir = fs.mkdtempSync(path.join(home, 'effort-other-'))
+  const secondFile = path.join(secondDir, 'effort-refusals.json')
+  seedRefusals(secondFile, ['second|model|high'])
+  process.env.DSH_MEMU_HOME = process.env.DSH_MEMU_MEMORY_HOME = secondDir
+  assert.equal(isEffortRefused('first|model|medium'), false)
+  assert.equal(isEffortRefused('second|model|high'), true)
+  markEffortRefused('second|model|medium')
+  process.env.DSH_MEMU_HOME = process.env.DSH_MEMU_MEMORY_HOME = path.dirname(firstFile)
+  assert.equal(isEffortRefused('first|model|medium'), true)
+  assert.equal(isEffortRefused('second|model|medium'), false)
+  assert.deepEqual(refusalKeys(firstFile), ['first|model|medium'])
+  assert.deepEqual(refusalKeys(secondFile), ['second|model|high', 'second|model|medium'])
+})
+
+test('two processes merge stale refusal snapshots under the file lock', async (t) => {
+  const { dir, file } = refusalStore(t)
+  seedRefusals(file, ['old|model|medium'])
+  const children = ['left', 'right'].map(name => effortChild(t, dir,
+    `assert.equal(api.isEffortRefused('old|model|medium'), true)`,
+    `api.markEffortRefused('${name}|model|medium'); assert.equal(api.isEffortRefused('${name}|model|medium'), true)`,
+  ))
+  await Promise.all(children.map(child => child.ready))
+  for (const child of children) child.release()
+  await Promise.all(children.map(child => child.done))
+  assert.deepEqual(refusalKeys(file), ['left|model|medium', 'old|model|medium', 'right|model|medium'])
+})
+
+test('missing buildForkSeed only disables fork; worker really completes without loading the seed API', async (t) => {
+  const dir = fs.mkdtempSync(path.join(home, 'missing-seed-'))
+  const before = `
+    const { registerHooks } = await import('node:module')
+    let seedImports = 0
+    const hooks = registerHooks({ resolve(specifier, context, next) {
+      if (specifier === '@deepseek-ai/dsh-session') {
+        seedImports++
+        return { url: 'data:text/javascript,export const unavailable = true', shortCircuit: true }
+      }
+      return next(specifier, context)
+    } })
+    const state = await import(${JSON.stringify(new URL('../lib/state.js', import.meta.url).href)})
+    const home = ${JSON.stringify(dir)}
+    const META_KEYS = ${JSON.stringify(META_KEYS)}
+    const assertHostCreateAccepts = ${assertHostCreateAccepts.toString()}
+    const host = ${host.toString()}
+    const ctx = host({ live: true, cwd: home })
+    state.ensureSession('missing-seed-fork', { cwd: home, agentPreset: 'coding' })
+    state.updateSettings({ consolidationRunner: 'fork', consolidationReasoningEffort: 'inherit' })
+    const fork = await api.requestPrivateConsolidation(ctx, 'missing-seed-fork', { force: true })
+    assert.equal(fork.reasonCode, 'no-fork-seed')
+    assert.equal(fork.settled, false)
+    assert.equal(ctx.rec.created.length, 0)
+    const afterFork = seedImports
+    state.ensureSession('missing-seed-worker', { cwd: home, agentPreset: 'coding' })
+    state.updateSettings({ consolidationRunner: 'worker' })
+    const worker = await api.requestPrivateConsolidation(ctx, 'missing-seed-worker', { force: true })
+    assert.equal(worker.ok, true, worker.error || '')
+    assert.equal(worker.settled, true)
+    assert.equal(ctx.rec.created.length, 1)
+    assert.equal(ctx.rec.created[0].seed, undefined)
+    assert.equal(state.getSessionBinding('missing-seed-worker').lastSleepSeq, 2)
+    assert.equal(seedImports, afterFork, 'worker never imports the missing seed API')
+    hooks.deregister()
+  `
+  const child = effortChild(t, dir, before)
+  await child.ready
+  child.release()
+  await child.done
 })

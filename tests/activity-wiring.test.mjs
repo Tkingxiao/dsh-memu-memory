@@ -57,6 +57,17 @@ test('a turn recall records the ids it injected and the route it took', async ()
   assert.ok(result.ids.includes(written.id), 'the seeded memory is what got recalled')
   assert.equal(rows[0].detail.route, undefined, 'the route is reported per layer')
   assert.ok(['local', 'managed-vector-rrf'].includes(rows[0].detail.privateRoute))
+  assert.equal(rows[0].detail.schemaVersion, 2)
+  assert.equal(rows[0].detail.stage, 'rendered')
+  assert.equal(rows[0].detail.outcome, 'packed')
+  assert.equal(rows[0].detail.counts.renderedRows, result.ids.length)
+  assert.equal(rows[0].detail.counts.injectedRows, null, 'packing is not proof the host accepted the message')
+  assert.equal(rows[0].detail.counts.injectedGroups, null)
+  assert.ok(rows[0].detail.tokens.estimated > 0)
+  assert.equal(rows[0].detail.tokens.measured, null)
+  assert.ok(rows[0].detail.timing.retrievalMs >= 0)
+  assert.ok(rows[0].detail.timing.selectionMs >= 0)
+  assert.ok(rows[0].detail.timing.renderMs >= 0)
 })
 
 test('a recall with a degraded semantic leg is logged as not-ok', async () => {
@@ -68,6 +79,47 @@ test('a recall with a degraded semantic leg is logged as not-ok', async () => {
   assert.equal(row.ok, false)
   assert.ok(row.detail.errors.length > 0)
   assert.ok(result.errors.length > 0, 'the caller still sees the error')
+})
+
+test('recall diagnostics distinguish no match, recently seen, and omitted by budget', async () => {
+  const { exec } = bind('wiring-outcomes')
+  state.setSessionBinding('wiring-outcomes', { useGlobal: false })
+  let binding = state.getSessionBinding('wiring-outcomes')
+  await inject.buildRecall(binding, 'independent-rare-token', 1, state.getSettings(), exec, 'wiring-outcomes')
+  let row = activity.listEvents({ kind: 'recall' })[0]
+  assert.equal(row.detail.outcome, 'no-match')
+  assert.equal(row.detail.counts.renderedRows, 0)
+  const written = await memory.privateRemember({ exec, title: 'independent-rare-token', content: 'independent-rare-token is a relevant fact' })
+  const firstRecall = await memory.privateRecall({ exec, query: 'independent-rare-token', purpose: 'automatic' })
+  state.markInjectedRefs('wiring-outcomes', firstRecall.refs, 1, { messageId: 'wiring-admitted-memory', hostTurn: 1 })
+  binding = state.getSessionBinding('wiring-outcomes')
+  await inject.buildRecall(binding, 'independent-rare-token', 2, state.getSettings(), exec, 'wiring-outcomes')
+  row = activity.listEvents({ kind: 'recall' })[0]
+  assert.equal(row.detail.outcome, 'deduped')
+  assert.equal(row.detail.counts.recentRows, 1)
+  assert.equal(row.detail.counts.renderedRows, 0)
+  state.releaseInjected('wiring-outcomes')
+  binding = state.getSessionBinding('wiring-outcomes')
+  await inject.buildRecall(binding, 'independent-rare-token', 3, { ...state.getSettings(), turnTokens: 0 }, exec, 'wiring-outcomes')
+  row = activity.listEvents({ kind: 'recall' })[0]
+  assert.equal(row.detail.outcome, 'budget')
+  assert.equal(row.detail.counts.budgetOmittedRows, 1)
+  assert.equal(row.detail.counts.renderedRows, 0)
+  assert.equal(row.detail.tokens.estimated, 0)
+})
+
+test('global semantic degradation reaches the combined recall diagnostics', async () => {
+  const { exec } = bind('wiring-global-error')
+  state.setSessionBinding('wiring-global-error', { useLibrary: false, useGlobal: true })
+  state.updateSettings({ memoryBackend: 'api', vectorSource: 'local' })
+  const binding = state.getSessionBinding('wiring-global-error')
+  const result = await inject.buildRecall(binding, 'anything', 1, state.getSettings(), exec, 'wiring-global-error')
+  const row = activity.listEvents({ kind: 'recall' })[0]
+  assert.ok(result.errors.length > 0)
+  assert.ok(row.detail.errors.some(error => error.includes('semantic recall failed')))
+  assert.equal(row.ok, false)
+  assert.equal(row.detail.privateRoute, null)
+  assert.equal(row.detail.globalRoute, 'local-fallback')
 })
 
 test('a consolidation that cannot start is logged with its reason', async () => {

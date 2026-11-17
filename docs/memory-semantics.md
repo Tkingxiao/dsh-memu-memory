@@ -40,14 +40,14 @@
 
 - 静态 guide 与动态记忆都走 plugin 消息；当前版本不再注册本插件的 system prompt 段。所有会话（含 `persona` `complete: true`）统一由 `lib/inject.js` 的 `ensureUnifiedGuide` 在**回合首步**投放一条 `<memory-guide rules="…">` 插件消息；`rulesKey` 由协议版本、domain 和实际渲染正文计算，domain/覆盖/默认稿变化或压缩丢失（`guideLost`）时在下一个合法首步替换，同一规则不逐回合重复。旧 binding 只有 `guideMessageAt`、没有 `guideRulesKey` 时视为旧版，补投一次；失败 fail-open，不写新版本。
 - 首轮锚点 + 每用户回合最多一次；长工具回合仅有新的真实人类消息批次时追加一次，普通工具步骤不触发。私有优先、全局补充；冲突时私有胜。
-- **锚点和本回合召回只放标题卡**（1.2.2）：`formatPrivateTitle` / `formatGlobalTitle` 输出 `[id]`、标题、`source`、owner、layer、日期/年龄、marginalized/open_loop、accuracy/uncertainty/disclosure 与附件计数，**不输出正文与附件 caption**。工具返回、记忆抽屉与浏览器仍是全文；要正文就按标题关键词或方括号里的 id 调 `memu_private_recall` / `memu_global_recall`。标题为空时回退正文前 40 字；`imagined` 等语义标签不能因为标题化而丢失。`never_say` 不进入自动注入面，`only_if_asked` 只在 boundary 查询里自动放行（§8.17）；显式召回仍可读两者。跨库召回开启时（§8.15），private 标题卡可能来自其它同领域库；id 仍全局唯一，按 id 取正文仍走 `memu_private_recall`，写入仍只落在当前库。
+- **锚点和本回合召回只放标题卡**（1.2.2）：`formatPrivateTitle` / `formatGlobalTitle` 输出 `[id]`、标题、`source`、owner、layer、日期/年龄、marginalized/open_loop、accuracy/uncertainty/disclosure 与附件计数，**不输出正文与附件 caption**。记忆抽屉与浏览器显示全文；`memu_private_recall` / `memu_global_recall` 按标题关键词搜索短片段，精确 id 默认读取正文页。正文先脱敏，再按 Unicode code point 分页（默认 2000，上限 8000）；`offset>0` 必须带首屏 `revision`，更新时返回 `MEMORY_CHANGED`，不拼接不同版本。标题为空时回退正文前 40 字；`imagined` 等语义标签不能因为标题化而丢失。`never_say` 不进入自动注入面，`only_if_asked` 只在 boundary 查询里自动放行（§8.17）；私有显式读取仍可读两者，全局维持原有自动/领域资格。跨库召回开启时（§8.15），private 标题卡可能来自其它同领域库；工具搜索结果的 ref 保留 `libraryId`，精确读取可指定允许的来源库以消除同 id 歧义，写入仍只落在当前库。
 - **条件式时效提示（工单 D）**：本回合召回块已经生成后，若其中至少一条真正进入文本的条目带时间敏感信号——`salientDate` 是已过去的 `YYYY-MM-DD`（年度 `MM-DD` 不算）、标题/正文命中固定词表 `最新|最近|现在|目前|今年|版本|价格|天气|新闻|比分|汇率`、或 `updatedAt||createdAt` 距现在 ≥ `freshnessDays`（`owner=about_project` 的工程事实不算年龄）——且 `freshnessHint !== false`、用户文本长度 ≥ `minUserChars`，就在最后一个 `</memory-context>` 之后追加**一个** `<memory-freshness>` 块，N 为去重后的 stale 条数。提示与召回共用 `turnTokens` 预算：放不下就丢弃提示，召回本身仍成功（fail-open，计算异常只 `warn`）。它只说「若你的会话里有可用的搜索工具就先核实」，**不声称** `web_search` 一定存在（工具面不确定性见 `docs/host-api.md` §6.8），也不改 `<memory-guide>`/`rulesKey`。`freshnessDays` 默认 30，范围 `[1,3650]`；`freshnessHint` 默认开。
 - **rule 是前言，不是页脚**：`buildAnchor` 先输出锚点头与 `[rule]`，再输出 private/global/short_term 各段；inbound 路径的锚点之后直接衔接 `<memory-context>`，中间不再隔一条规则。
 - **`injectedIds` 只能记真正进入文本的条目**，否则从未展示的记忆被白白压制 8 轮。
 - 锚点分段预算 pin 40% / core 30% / global 30%；pin 装不下时末尾明示「另有 N 条未展开」，**不静默丢弃**。1.2.2 移除了 core≤5 / global≤8 的预先切片：标题卡比正文短，条数应由预算打包器决定，而不是固定上限；`anchorTokens` / `turnTokens` / `injectionTotalTokens` 默认值不变，inbound 的 `floor(turnBudget/2)` 保留。
 - 预算单位是**模型 token**不是字符：中文 ≈1 字符/token、英文 ≈3.4，一律走 `lib/budget.js`，**不要再用 `tokens * 3`**（英文口径，中文超支约 3 倍）。
 - 压缩后下一条用户消息重注入锚点；子代理不注入。文件夹两开关都关 → 不注入（看 clamp 后生效值，不是 binding 原始值）。召回为空必须留信号（§1.10）。
-- **召回排序的准确口径**：`privateWeighted` 只服务**私有召回流水线**（`privateRecall` 调用它）；全局召回（`globalRecall`）走 `localRecall`，不经过它。cue 会经 `cueRecall` **间接**调用 `privateRecall`，所以**不能**概括成「cue 不走私有排序」。排序里的心境项默认关闭——`privateWeighted` 自己的缺省上下文就是 `moodEnabled: false`，真正打开它的是 `privateRecall`，条件是 `|valence| ≥ MOOD_MIN_STRENGTH` 或 `|arousal − BASE_AROUSAL| ≥ 0.1`（`BASE_AROUSAL` 来自 `lib/mood.js`）；平缓对话里两项乘数恒为 1。`privateRecall` 的 topK 兜底是「传入 topK → `settings.privateTopK`（默认 5）→ 4」：引用 3 或 4 时必须说清是**设置默认值**还是**代码兜底值**，两个数不是同一个。
+- **召回排序的准确口径**：`privateWeighted` 只服务**私有召回流水线**（`privateRecall` 调用它）；全局召回（`globalRecall`）走 `localRecall`，不经过它。cue 会经 `cueRecall` **间接**调用 `privateRecall`，所以**不能**概括成「cue 不走私有排序」。排序里的心境项默认关闭——`privateWeighted` 自己的缺省上下文就是 `moodEnabled: false`，真正打开它的是 `privateRecall`，条件是 `|valence| ≥ MOOD_MIN_STRENGTH` 或 `|arousal − BASE_AROUSAL| ≥ 0.1`（`BASE_AROUSAL` 来自 `lib/mood.js`）；平缓对话里两项乘数恒为 1。`privateRecall` 的 topK 兜底是「传入 topK → `settings.privateTopK`（默认 5）→ 5」，显式搜索限制为 1–20 行；日期/实体等意图只扩大候选池。自动调用以设置值作为事实组数上限，冲突版本占一组，意图只扩候选；相关度门槛保留，近期已接纳且内容未变的组在 MMR 前排除，未见强候选可补位。冲突卡必须保留全部版本标识和未定状态，预算不足整组省略，不退普通单版。候选数量、显式返回行数和自动事实组数不能混为一谈。
 - **情绪模型（v3）**：一条记忆的情绪由四项构成 `joy / anger / sorrow / fear`（归一后和为 1）、强度 `arousal` 与掌控感 `dominance` 组成，`moodValence` 只是四轴在旧路径上的兼容投影。门控是三条**独立**条件的 OR：主导项 share ≥ 0.35、`|arousal − 0.35| ≥ 0.1`、`|dominance| ≥ 0.25`——「没有情绪构成」只关掉第一条，高唤起或明确的掌控感仍会打开排序项。双方都有合法 emotion 时用 overlap（各轴取较小值再求和）算一致性，任一侧缺失就回落到旧的 valence 路径；旧条目不从 valence 反推四轴。情绪只影响排序权重，不写进注入文本，也不进记忆正文。
 
 ### 8.5 提示词管理
@@ -165,7 +165,7 @@
 
 **候选队列与迁移。** `anchor-candidates.json` 是派生物：CJK 2–4gram / Latin token 的 df/titleDf/边界/凝聚/PMI/LLR 只用于排序；Tier 1 是有表面证据（引号/名字引导/标识符/用户维护词典）的候选，Tier 2 仅统计特征。没有 status 的旧实体按 DESIGN §9.3 分级：只有 `origin ∈ {user,agent,worker}` 或被非 auto 边引用才保留 confirmed，其余落 provisional。`scripts/rebuild-auto-links.mjs`（默认 dry-run，`--apply` 先整库备份）删除全部 `source:'auto'` 旧边、落实体状态，并为已确认实体重建确定性边；确认与 dry-run 幂等后再把 `autoLinkMode` 切到 `deterministic`。
 
-**召回治理与失败隔离。** `recallRelations` 的 top-2 扩展显式排除 `evidence.rule === 'entity-mention'`——提及是事实索引不是关系，`confidence=1.0` 不能挤掉手动边与字段证据；字段证据边照常参与。判定层纯函数、无 IO/时钟/随机；写库失败只 warn，绝不让已经成功的整理失败；`links[]` 仍只是元数据，不改正文、不写向量、不删记忆。worker 写工具为 remember/remember_batch/update/link/link_suggest（2026-11-15 起 link 两件挂回：auto-link 的不确定候选留给整理回合逐条裁决），读工具为空（记忆目录与本地召回由插件在种子开头注入），但「有没有写能力」仍只由 remember/update 判定。
+**召回治理与失败隔离。** `recallRelations` 的 top-2 扩展显式排除 `evidence.rule === 'entity-mention'`——提及是事实索引不是关系，`confidence=1.0` 不能挤掉手动边与字段证据；字段证据边照常参与。判定层纯函数、无 IO/时钟/随机；写库失败只 warn，绝不让已经成功的整理失败；`links[]` 仍只是元数据，不改正文、不写向量、不删记忆。worker 写工具为 remember/remember_batch/update/link/link_suggest（2026-11-15 起 link 两件挂回：auto-link 的不确定候选留给整理回合逐条裁决），读工具为空（记忆目录与本地召回由插件在任务包开头注入），但「有没有写能力」仍只由 remember/update 判定。
 
 ### 8.14 日期联动、到点唤醒与实体合并（1.2.3）
 
@@ -181,7 +181,7 @@
 
 - **候选库资格**：该库至少有一个非整理 fork 的会话绑定，且绑定的 `domainOf()` 等于当前会话领域；文件夹策略 `useLibrary === false` 的库排除；归档库排除。当前绑定库**始终参与**，且它的条目不按 domain 过滤（保持旧行为）。
 - **条目过滤**：其它库的条目若带 `domain` 必须等于当前领域；旧条目没有 `domain` 字段时，按「该库的绑定会话领域已匹配」放行。新写入的私有条目会带 `domain`（`privateRememberImpl` 从当前 binding 取）。
-- **合并**：逐库候选用 RRF（k=60）合并，每个命中保留 `libraryId`；`retrievalScore` 由跨库 RRF 归一化，保证后续心境/衰减排序仍以跨库结果为先验。`touchAccessMany` 与 `stats` 按命中所在库分组，不再全部记到当前库。
+- **合并（R4）**：候选身份是复合 `[libraryId, id]`——两库同 id 是两条事实，不再按裸 id 折叠，也不做「主库同 ID 替换外库」；精确 id 召回保留每个库自己的文档，本库优先只决定顺序。**资格先于语料**：不可见/never_say/自动 secret/说话人对不上的条目在进入 BM25 语料前就被挡掉，不能通过 IDF/avgdl 影响可见条目的分数。词法腿把全部合格候选放进**统一授权语料**一次评分（复合文档 id，IDF/avgdl 跨库可比），评分规则与单库 BM25 分支一致（日期加成、主题证据分离、date-only 末位）；空查询走 recency 页。向量腿在原始相似度齐全且同一向量代际时按分数全局排序（`fusion.crossLibrarySemantic: 'score'`），任一命中缺分或代际不一致则整腿退回显式标记的 `'rank-only'`（各库自己的名次），不伪造跨库 raw score 可比性。RRF（k=60）只用于「词法与向量两种方法对同一候选集合」的融合，不再把各库榜单当同等投票（旧算法各库第一名同分，弱外库首名会挤掉强本库命中）。`retrievalScore` 以未折减融合份额为先验，对主题词法证据 ≥24 且领先第二名 ≥4倍的断层应用一次有底线的折减；纯回复样板不作为主题证据。`fusion.rawRetrievalScore` 保留原分值，后续资格过滤后重算而不重复处罚；`fusion.crossLibraryLexical`/`crossLibrarySemantic` 报告两腿实际模式。`touchAccessMany` 与 `stats` 按命中所在库分组，不再全部记到当前库。内容级去重（包含/Dice）仍照常工作：同 id 不再折叠，但正文互为复述的两条仍可能按既有去重规则折叠并留痕。
 - **边界不变**：`visibleToSession` 仍按当前会话的 `memoryContext` 过滤；`secret` 在自动召回里仍被排除，显式召回仍可读；`knownBy` 规则不变。
 - **只读**：`memu_private_update` / `memu_private_archive` / `memu_private_delete` 仍只解析当前绑定库。跨库命中在工具结果里标 `library=…（跨库只读；写入仍落在当前库）`，避免把「unknown memory」误读成「已被删除」。
 - **单库不换路**：只有一个候选库时走原路径，结果形状与旧版一致；只有真正存在第二个合格库时才返回 `recallRoute: 'cross-library'` 与 `libraries`。
@@ -242,8 +242,9 @@
 - **换新**：acquire 时按模型上下文分档检查预算——≤128k 上下文 → 120k 字符 / 8 窗，其余 → 200k 字符 / 16 窗；字符预算或窗口上限到顶、scope 变化、空闲超时、回合失败、连续两次超时都会退役换新。
 - **交接**：除 scope 变化外，新 epoch 用交接包接续——已结算尾部（≤20k 字符）+ 已写入摘要（最近 20 条 id + 标题）+ 记忆目录头；未结算的增量仍按窗口原文下发。尾部只是跨窗指代的参考，不是正确性防线；去重仍由目录、已写入摘要与库级去重兜底。
 - **批量写**：任务书要求把本窗新增条目合并成一次 `memu_private_remember_batch`，只有 1 条时才逐条 `remember`，更新也放在同一轮；批量参数畸形时下一轮退回逐条写（`consolidationSingleOnly`），不会把整窗判死。
-- **代价**：worker 的会话内上下文会随窗口累积，token 总量取决于换新节奏；fork 没有这段累积。
+- **计量**：schemaVersion/measurementVersion=2 记录真正派发与收尾包、助手正文、JSON 工具参数和工具结果，事件重放去重。估算 token 与实测 usage 分开；非缓存输入、缓存读写单列，推理不重复计入输出，任一请求缺值时汇总为 null。估算不改变既有字符/窗口/TTL 预算；旧计量 epoch 下次 acquire 保守换新，首包仍超限则 `packet-too-large` 保持 pending。
+- **代价**：worker 的会话内上下文会随窗口累积，token 总量取决于换新节奏与缓存；fork 没有这段累积。真实服务商成本节省尚未验证。
 
-**边界**：worker 仍运行在父预设的 system prompt 下（宿主没有公开 API 可替换），身份靠任务书缓解而不是消除；工具面只有 remember / remember_batch / update；失败窗口保持 pending，按原有退避重试。
+**边界**：worker 仍运行在父预设的 system prompt 下（宿主没有公开 API 可替换），身份靠任务书缓解而不是消除；工具面为 remember / remember_batch / update / link / link_suggest；失败窗口保持 pending，按原有退避重试。种子前置仅属于 fork，worker 不依赖它；cwd 必须是目录，恢复的死 cwd 保守退役，不放宽宿主权限。
 
 守卫：`tests/worker-lifecycle.test.mjs`（分档、预算、退役、交接、工具面）、`tests/settings-coverage.test.mjs`（`consolidationRunner` 可设置且默认值合法）、`tests/ui-defaults.test.mjs`。

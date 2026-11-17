@@ -428,10 +428,10 @@ function entryForSample(source, sample) {
   }
 }
 
-function seedSample(state, sample, entries, root, suffix = '') {
+function seedSample(state, sample, entries, suffix = '') {
   const library = state.createLibrary({
     name: `bench-${sample.id}${suffix}`,
-    scopeKey: path.join(root, 'scopes', `${sample.id}${suffix}`),
+    scopeKey: path.join(os.tmpdir(), 'dsh-memu-recall-bench-identities', `${sample.id}${suffix}`),
   })
   const index = { version: 1, entries: {} }
   for (const id of sample.library) {
@@ -570,7 +570,7 @@ export async function runBenchmark(options = {}) {
     for (const sample of samples) {
       const sampleNow = Date.parse(sample.time)
       clock.set(sampleNow)
-      const automatic = seedSample(state, sample, dataset.entries, root, '')
+      const automatic = seedSample(state, sample, dataset.entries, '')
       const autoExec = execFor(automatic.sessionId, root)
       const settings = {
         ...state.getSettings(),
@@ -602,7 +602,7 @@ export async function runBenchmark(options = {}) {
 
       let explicitIds = []
       if (Array.isArray(sample.explicitExpectedIds) && sample.explicitExpectedIds.length > 0) {
-        const explicit = seedSample(state, sample, dataset.entries, root, '-explicit')
+        const explicit = seedSample(state, sample, dataset.entries, '-explicit')
         const explicitExec = execFor(explicit.sessionId, root)
         const explicitResult = await memory.privateRecall({
           exec: explicitExec,

@@ -9,7 +9,9 @@ import path from 'node:path'
 // 不再投，整段对话只是"记忆像没接上"，一句错都不报。判据是本轮那几条注入消息到底进过转录没有：
 // 进过（请求已经发出去）就保住记账，没进过才撤回。这里把撤与不撤两面都钉住。
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-rollback-'))
+process.env.DSH_HOME = home
 process.env.DSH_MEMU_HOME = home
+process.env.DSH_MEMU_MEMORY_HOME = home
 
 const state = await import('../lib/state.js')
 const inject = await import('../lib/inject.js')
@@ -67,6 +69,15 @@ async function step(session, turn, messages) {
   return out?.messages || messages
 }
 
+async function accept(session, messages) {
+  const history = session.messages ||= []
+  for (const message of messages) {
+    if (history.some(item => item.id === message.id)) continue
+    history.push(message)
+    if (message.role === 'user') await sessionEvent({ header: { id: session.id } }, { type: 'user/message', data: message })
+  }
+}
+
 function failTurn(session, turn) {
   return sessionEvent(
     { header: { id: session.id } },
@@ -94,7 +105,10 @@ test('a failed turn gives back the one-shot accounting, and the next turn re-pla
   assert.equal(countWith(first, GUIDE_RE), 1, 'turn 1 places the guide')
   assert.equal(countWith(first, ANCHOR_RE), 1, 'turn 1 places the anchor')
   const placed = facts(session.id)
-  assert.ok(placed.guide && placed.anchor && placed.injected > 0, 'the accounting says everything was delivered')
+  assert.equal(placed.guide, null, 'the returned guide is only proposed')
+  assert.equal(placed.anchor, false, 'the returned anchor is only proposed')
+  assert.equal(placed.injected, 0, 'unadmitted refs do not enter history')
+  assert.deepEqual(session.messages || [], [], 'Native history is still empty')
 
   await failTurn(session, 1)
   const rolled = facts(session.id)
@@ -102,9 +116,9 @@ test('a failed turn gives back the one-shot accounting, and the next turn re-pla
   assert.equal(rolled.anchor, false, 'anchor sentinel rolled back')
   assert.equal(rolled.injected, 0, 'the recall ids of that turn are forgotten too')
   assert.equal(rolled.rollback, null, 'the rollback record is consumed, not left to age')
-  assert.ok(warns.some((line) => /rolled back injection accounting/.test(line)), 'the rollback leaves a log signal')
+  assert.ok(warns.some((line) => /discarded .* unadmitted injection proposals/.test(line)), 'discarding proposals leaves a log signal')
   const events = activity.listEvents({ limit: 50, kind: 'system' })
-  assert.ok(events.some((event) => event.sessionId === session.id && /已撤回本轮的注入记账/.test(event.message || '')),
+  assert.ok(events.some((event) => event.sessionId === session.id && /未接纳的记忆提案已丢弃/.test(event.message || '')),
     'and an activity-log row explains what happened')
 
   // 下一轮：宿主给的转录里没有任何一次性的东西，必须重新投出来。
@@ -117,6 +131,7 @@ test('a completed turn keeps its accounting, so nothing is re-placed', async () 
   const session = makeSession('rb-ok')
   const first = await step(session, 1, [user(1, '林眠的相机镜头修好了吗')])
   assert.equal(countWith(first, GUIDE_RE), 1)
+  await accept(session, first)
   await completeTurn(session, 1)
 
   const kept = facts(session.id)
@@ -133,7 +148,9 @@ test('a completed turn consumes its record, so a late error cannot un-place what
   const session = makeSession('rb-stale')
   const first = await step(session, 1, [user(1, '林眠的相机镜头修好了吗')])
   assert.equal(countWith(first, GUIDE_RE), 1)
-  assert.ok(facts(session.id).rollback, 'the turn that just delivered leaves a rollback record')
+  await accept(session, first)
+  assert.equal(state.getSessionBinding(session.id).acceptedMemoryMessages.length, 2, 'each accepted message has its own immutable record')
+  assert.equal(facts(session.id).rollback, null, 'proposals do not use legacy rollback accounting')
 
   await completeTurn(session, 1)
   const kept = facts(session.id)
@@ -164,7 +181,7 @@ test('a failure after the injection reached the transcript keeps the accounting'
 
   // 宿主在第一次尝试里就把 decision.messages 逐条追加进转录，之后才连模型。上游 500 / 超时
   // 属于这一类：内容已经在转录里，撤回记账只会让下一轮多出第二份规则消息与锚点。
-  await sessionEvent({ header: { id: session.id } }, { type: 'user/message', data: injected })
+  await accept(session, first)
   await failTurn(session, 1)
   const kept = facts(session.id)
   assert.ok(kept.guide, 'the rules message stays accounted')
@@ -219,10 +236,11 @@ test('rollback also clears the day marks so dated blocks can return', async () =
     }
   })
 
-  await step(session, 1, [user(1, '明天有什么我要办的事')])
+  const dated = await step(session, 1, [user(1, '明天有什么我要办的事')])
+  assert.ok(dated.some(message => /memory-due|open loop/.test(textOf(message))), 'dated blocks were proposed')
   const binding = state.getSessionBinding(session.id)
-  assert.ok(Object.keys(binding.anniversariesShown || {}).length > 0 || (binding.injectedIds || []).length > 1,
-    'the dated blocks recorded their own clocks on that turn')
+  assert.equal(Object.keys(binding.anniversariesShown || {}).length, 0, 'unaccepted dated blocks do not mark a day')
+  assert.equal(Object.keys(binding.openLoopRemindedAt || {}).length, 0, 'unaccepted nudges do not start cooldown')
   await failTurn(session, 1)
   const after = state.getSessionBinding(session.id)
   assert.equal(Object.keys(after.anniversariesShown || {}).length, 0, 'the day mark is withdrawn with the turn')
@@ -232,6 +250,7 @@ test('rollback also clears the day marks so dated blocks can return', async () =
 test('the same real user message gets one injection pass when the host emits two enter decisions', async () => {
   const session = makeSession('dup-step')
   const first = await step(session, 221, [user(1, '林眠的相机镜头维修到哪一步了？')])
+  await accept(session, first)
   const afterFirst = state.getSessionBinding(session.id)
   assert.equal(afterFirst.lastInjectedUserMessageId, 'u-1', 'the first pass marks the message it handled')
   const clockAfterFirst = afterFirst.inbound?.clock
@@ -253,7 +272,7 @@ test('a rolled-back turn clears the one-pass marker so a real retry injects agai
   const session = makeSession('dup-retry')
   const first = await step(session, 1, [user(1, '林眠的相机镜头修好了吗')])
   assert.equal(countWith(first, ANCHOR_RE), 1)
-  assert.equal(state.getSessionBinding(session.id).lastInjectedUserMessageId, 'u-1')
+  assert.equal(state.getSessionBinding(session.id).lastInjectedUserMessageId, undefined, 'one-pass marker waits for history')
 
   await failTurn(session, 1)
   assert.equal(state.getSessionBinding(session.id).lastInjectedUserMessageId, undefined,
@@ -261,4 +280,148 @@ test('a rolled-back turn clears the one-pass marker so a real retry injects agai
 
   const retry = await step(session, 1, [user(1, '林眠的相机镜头修好了吗')])
   assert.equal(countWith(retry, ANCHOR_RE), 1, 'the retry places the anchor again')
+})
+
+for (const kind of ['completed', 'error', 'aborted', 'stopped']) test(`${kind} ends unadmitted proposals; a late exact message cannot revive them`, async () => {
+  const session = makeSession('end-' + kind)
+  const first = await step(session, 1, [user(kind, '林眠的相机镜头修好了吗')])
+  assert.equal(facts(session.id).injected, 0)
+  await sessionEvent({ header: { id: session.id } }, { type: 'turn/end', data: { turn: 1, reason: { kind } } })
+  for (const message of first.filter(item => item.source?.kind === 'plugin:dsh-memu-memory')) {
+    await sessionEvent({ header: { id: session.id } }, { type: 'user/message', data: message })
+  }
+  assert.equal(facts(session.id).guide, null)
+  assert.equal(facts(session.id).anchor, false)
+  assert.equal(facts(session.id).injected, 0)
+  assert.equal(state.getSessionBinding(session.id).inbound.pending.length, 1, 'unaccepted input stays retryable')
+})
+
+for (const acceptedPart of ['guide', 'recall']) test(`partial ${acceptedPart} admission never represents the other message`, async () => {
+  const session = makeSession('partial-' + acceptedPart)
+  const first = await step(session, 1, [user(acceptedPart, '林眠的相机镜头修好了吗')])
+  const plugin = first.filter(message => message.source?.kind === 'plugin:dsh-memu-memory')
+  const selected = plugin.find(message => GUIDE_RE.test(textOf(message)) === (acceptedPart === 'guide'))
+  await accept(session, [selected])
+  const before = facts(session.id)
+  assert.equal(Boolean(before.guide), acceptedPart === 'guide')
+  assert.equal(before.anchor, acceptedPart === 'recall')
+  assert.equal(state.getSessionBinding(session.id).inbound.pending.length, 1, 'the real human has not entered history')
+  await failTurn(session, 1)
+  const after = facts(session.id)
+  assert.deepEqual(after, before, 'model failure does not roll back admitted history')
+  const late = plugin.find(message => message.id !== selected.id)
+  await sessionEvent({ header: { id: session.id } }, { type: 'user/message', data: late })
+  assert.deepEqual(facts(session.id), after, 'discarded partial sibling cannot commit late')
+})
+
+test('proposal reuse preserves pre-human ordering and missing human projection without duplicate IDs', async () => {
+  const session = makeSession('projection')
+  const human = user('projection', '林眠的相机镜头修好了吗')
+  const first = await step(session, 1, [human])
+  const memory = first.find(message => ANCHOR_RE.test(textOf(message)))
+  const second = await step(session, 1, [human])
+  assert.equal(second.find(message => ANCHOR_RE.test(textOf(message))).id, memory.id)
+  assert.ok(second.findIndex(message => message.id === memory.id) < second.findIndex(message => message.id === human.id))
+  const missing = await step(session, 1, [])
+  assert.equal(missing.filter(message => message.id === human.id).length, 1, 'retry carries the pending human too')
+  assert.equal(missing.filter(message => message.id === memory.id).length, 1)
+  assert.ok(missing.findIndex(message => message.id === memory.id) < missing.findIndex(message => message.id === human.id))
+  await accept(session, [human])
+  const nativeAlready = await step(session, 1, [])
+  assert.equal(nativeAlready.some(message => message.id === human.id), false, 'a Native-admitted human is not appended twice')
+  assert.equal(nativeAlready.filter(message => message.id === memory.id).length, 1)
+})
+
+test('a reused proposal belongs to its latest turn without extending its original memory clock', async () => {
+  const session = makeSession('reused-turn-owner')
+  const human = user('turn-owner', '林眠的相机镜头修好了吗')
+  const first = await step(session, 1, [human])
+  const second = await step(session, 2, [human])
+  assert.equal(second.find(message => ANCHOR_RE.test(textOf(message))).id, first.find(message => ANCHOR_RE.test(textOf(message))).id)
+  await failTurn(session, 1)
+  await accept(session, second)
+  const binding = state.getSessionBinding(session.id)
+  assert.equal(binding.anchorPushed, true, 'a late old-turn end cannot discard the current owner')
+  assert.ok(binding.guideRulesKey)
+  assert.ok(binding.acceptedMemoryMessages.every(record => record.hostTurn === 2))
+  assert.ok(binding.acceptedMemoryMessages.every(record => record.memoryClock === 1), 'reusing does not extend cooldown')
+})
+
+test('digest/source mismatch and mutable returned bodies cannot commit a different proposal', async () => {
+  const session = makeSession('digest')
+  const first = await step(session, 1, [user('digest', '林眠的相机镜头修好了吗')])
+  const memory = first.find(message => ANCHOR_RE.test(textOf(message)))
+  await sessionEvent({ header: { id: session.id } }, { type: 'user/message', data: { ...memory, source: { kind: 'plugin:other' } } })
+  const altered = { ...memory, content: [{ type: 'text', text: 'not the proposed body' }] }
+  await sessionEvent({ header: { id: session.id } }, { type: 'user/message', data: altered })
+  assert.equal(facts(session.id).anchor, false)
+  const originalText = textOf(memory)
+  memory.content[0].text = 'caller-mutated returned proposal body'
+  const replay = await step(session, 1, [user('digest', '林眠的相机镜头修好了吗')])
+  assert.equal(textOf(replay.find(message => message.id === memory.id)), originalText, 'stored body remains an independent snapshot')
+  await accept(session, replay)
+  assert.equal(facts(session.id).anchor, true)
+})
+
+test('a turn ending while recall awaits cannot publish a late proposal', async () => {
+  const session = makeSession('inflight-end')
+  const pending = step(session, 1, [user('inflight', '林眠的相机镜头修好了吗')])
+  await completeTurn(session, 1)
+  const out = await pending
+  assert.equal(out.some(message => message.source?.kind === 'plugin:dsh-memu-memory'), false)
+  assert.equal(facts(session.id).injected, 0)
+})
+
+test('typed effects and refs are independent; late rollback never erases new owner counters', async () => {
+  const session = makeSession('owner-counters')
+  const ref = { scope: 'private', libraryId: state.getSessionBinding(session.id).libraryId, id: 'same', revision: 'r1', entry: { content: 'do not store body' } }
+  const actions = { patch: { replayIds: ['old'], textureKey: 'old', lastInjectedUserMessageId: 'old' }, anniversaries: { same: 'old-day' }, nudgeIds: ['same'] }
+  const one = state.markInjectedRefs(session.id, [ref], 1, { messageId: 'owner-old', hostTurn: 1, actions })
+  ref.revision = 'mutated'
+  actions.patch.replayIds.push('mutated')
+  one.effects.replayIds.value = ['mutated-return']
+  one.refs[0].revision = 'mutated-return'
+  const two = state.markInjectedRefs(session.id, [{ ...ref, revision: 'r2' }], 2, { messageId: 'owner-new', hostTurn: 2,
+    actions: { patch: { replayIds: ['new'], textureKey: 'new', lastInjectedUserMessageId: 'new' }, anniversaries: { same: 'new-day' }, nudgeIds: ['same'] } })
+  const before = state.getSessionBinding(session.id)
+  assert.equal(before.acceptedMemoryMessages[0].refs[0].revision, 'r1')
+  assert.equal(before.acceptedMemoryMessages[0].refs[0].entry, undefined)
+  assert.deepEqual(two.effects.replayIds.value, ['old'])
+  state.rollbackInjectionForTurn(session.id, 1, { messageIds: ['owner-old'] })
+  const after = state.getSessionBinding(session.id)
+  assert.deepEqual(after.replayIds, ['new'])
+  assert.equal(after.textureKey, 'new')
+  assert.equal(after.lastInjectedUserMessageId, 'new')
+  assert.equal(after.anniversariesShown.same, 'new-day')
+  assert.equal(after.openLoopRemindedAt.same, before.openLoopRemindedAt.same)
+  assert.equal(after.injectedAt.same, 2)
+  // A late older admission records history but cannot take ownership back.
+  state.markInjectedRefs(session.id, [ref], 1, { messageId: 'owner-late', hostTurn: 1, actions })
+  assert.equal(state.getSessionBinding(session.id).textureKey, 'new')
+  assert.equal(state.getSessionBinding(session.id).anniversariesShown.same, 'new-day')
+})
+
+test('same-value legacy rewrites and a new epoch protect markers from old rollback', () => {
+  const session = makeSession('legacy-owners')
+  state.markInjected(session.id, ['same', '__anchor__'], 1)
+  state.markAnniversaryShown(session.id, 'same', 'day')
+  state.markOpenLoopReminded(session.id, 'same')
+  state.setSessionBinding(session.id, { lastInjectedUserMessageId: 'human', guideRulesKey: 'rules', guideMessageAt: 'at' })
+  state.recordInjectionRollback(session.id, { hostTurn: 1, ids: ['same', '__anchor__'], guideKey: 'rules', nudgeIds: ['same'], anniversaryIds: ['same'] })
+  state.markInjected(session.id, ['same', '__anchor__'], 1)
+  state.markAnniversaryShown(session.id, 'same', 'day')
+  state.markOpenLoopReminded(session.id, 'same')
+  state.setSessionBinding(session.id, { lastInjectedUserMessageId: 'human', guideRulesKey: 'rules', guideMessageAt: 'at' })
+  state.rollbackInjectionForTurn(session.id, 1)
+  const kept = state.getSessionBinding(session.id)
+  assert.equal(kept.anchorPushed, true)
+  assert.equal(kept.lastInjectedUserMessageId, 'human')
+  assert.equal(kept.guideRulesKey, 'rules')
+  assert.equal(kept.injectedAt.same, 1)
+  assert.equal(kept.anniversariesShown.same, 'day')
+  assert.ok(kept.openLoopRemindedAt.same)
+  state.recordInjectionRollback(session.id, { hostTurn: 2, ids: ['same', '__anchor__'], guideKey: 'rules' })
+  state.markReinjectPending(session.id)
+  state.rollbackInjectionForTurn(session.id, 2)
+  assert.equal(state.getSessionBinding(session.id).anchorPushed, true)
 })

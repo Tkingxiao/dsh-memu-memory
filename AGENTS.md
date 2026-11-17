@@ -25,7 +25,7 @@
 11. **跑批与复测的输出一律重定向文件**（`> logs/x.log 2>&1`），禁用 `| tail` 管道——管道只留尾巴，故障段不可回查。清理宿主数据必须先确认宿主进程完全退出（活宿主的内存态会回写覆盖清理结果）。
 12. **整理快照必须做持久日志交叉核对**：`captureSessionSnapshot` 的活视图（observeSession/readSession）落后于持久日志时，用 `sessionPersistence` + `readColdSessionLog` 冷读并取更长的日志（source `persisted-ahead`）；只信活视图 = 外部追加不可见 → 快照冻结/整理洪水。`host`/`custom` 模型模式也不得探测父会话 route（resume 会把父会话钉成活视图）。成因链与排错路线 → `docs/troubleshooting.md` §3.29。
 13. **整理 worker 工具面与租约口径（2026-11-15）**：link 两件挂回 worker 面，候选逐条裁决写进任务书（共享提示词正文不写工具名）；整理窗 500 事件、预算恒 600s；整理租约跟随预算+90s 而非固定 15 分钟；召回 no-database 静默降级不进 errors；childEnvironment 泛化剥离 *_API_KEY。向量代际缺库自动探测：索引非空但不在代际 → memu_status 显式提示 + 每代际自动 force 重建 ≤2 次（`maybeAutoRebuildVectorGeneration`，召回降级分支触发）。成因与守卫 → `docs/troubleshooting.md` §3.32。思考强度被模型拒学进拒绝表并自动降档（防 snapshot-failed 冻结数天）。成因与守卫 → `docs/troubleshooting.md` §3.33。
-
+fork cwd 残留死路径兜底 dataDir；保持宿主原权限，不自动覆盖为全权限。成因与守卫 → `docs/troubleshooting.md` §3.34。
 ---
 
 ## 2. 三条路

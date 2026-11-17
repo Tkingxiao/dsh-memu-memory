@@ -18,8 +18,24 @@ const dict = (name) => {
   const body = src.slice(start, end)
   return new Set([...body.matchAll(/^\s+([a-zA-Z][a-zA-Z0-9]*):/gm)].map((m) => m[1]))
 }
+// 同一语言表里重复定义同一个键：对象字面量后者静默覆盖前者，先定义的文案成了
+// 死键——「整理提醒」行曾经因此渲染出整理按钮的通知长模板，把侧边栏撑出卡片
+// 右缘（consolidateDone/deleteForever 双定义）。这里按硬门禁拦住整类事故。
+const duplicateKeys = (name) => {
+  const start = src.indexOf(`const ${name} = {`)
+  const end = src.indexOf('\n    }', start)
+  const body = src.slice(start, end)
+  const seen = new Map()
+  for (const m of body.matchAll(/^\s+([a-zA-Z][a-zA-Z0-9]*):/gm)) {
+    if (!seen.has(m[1])) seen.set(m[1], 0)
+    seen.set(m[1], seen.get(m[1]) + 1)
+  }
+  return [...seen.entries()].filter(([, n]) => n > 1).map(([k, n]) => `${k} ×${n}`)
+}
 const zh = dict('zh')
 const en = dict('en')
+const zhDupes = duplicateKeys('zh')
+const enDupes = duplicateKeys('en')
 
 const missing = (d, label) => [...used].filter((k) => !d.has(k)).map((k) => `${label}: ${k}`)
 const unused = (d, label) => [...d].filter((k) => !used.has(k)).map((k) => `${label} unused: ${k}`)
@@ -61,4 +77,7 @@ if (standaloneOk) console.log('standalone zh/en + page keys complete')
 
 const i18nOk = !missing(zh, 'zh').length && !missing(en, 'en').length
   && ![...zh].some((key) => !en.has(key)) && ![...en].some((key) => !zh.has(key))
+  && !zhDupes.length && !enDupes.length
+if (zhDupes.length) console.log('DUPLICATE-ZH:', zhDupes.join(', '))
+if (enDupes.length) console.log('DUPLICATE-EN:', enDupes.join(', '))
 if (!i18nOk || !standaloneOk) process.exitCode = 1

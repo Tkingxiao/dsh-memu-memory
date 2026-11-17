@@ -12,6 +12,7 @@ process.env.DSH_MEMU_HOME = home
 process.env.DSH_MEMU_MEMORY_HOME = home
 const calls = []
 const warnings = []
+const rebuildProbes = []
 const backendRows = new Map()
 const backendKey = (db, name) => JSON.stringify([db, name])
 let commitHook = null
@@ -47,12 +48,23 @@ globalThis.__managedMemoryTest = {
     return { deleted: 1, segments: 1 }
   },
   async listFiles() { throw new Error('unexpected list engine call') },
+  async maybeAutoRebuildVectorGeneration(...args) {
+    rebuildProbes.push(args)
+    return { stubbed: true }
+  },
 }
+const vectorServiceUrl = 'data:text/javascript,' + encodeURIComponent('export const maybeAutoRebuildVectorGeneration = globalThis.__managedMemoryTest.maybeAutoRebuildVectorGeneration;')
 const engineSource = 'const bridge = globalThis.__managedMemoryTest; export const commit = bridge.commit, retrieve = bridge.retrieve, forget = bridge.forget, listFiles = bridge.listFiles, closeMemuResident = () => 0, prewarmMemuResident = async () => false;'
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === './memu.js') {
       return { url: 'data:text/javascript,' + encodeURIComponent(engineSource), shortCircuit: true }
+    }
+    // managedRecall 的缺库分支会动态 import 向量服务做自动追平探测。这里只拦截
+    // memory.js 发起的那一次（父 URL 限定），别的模块照常拿真实现——否则空转的
+    // force 重建会把嵌入 worker 拉进单元测试。
+    if (specifier === './local-vector-service.js' && context.parentURL === new URL('../lib/memory.js', import.meta.url).href) {
+      return { url: vectorServiceUrl, shortCircuit: true }
     }
     return nextResolve(specifier, context)
   },
@@ -63,6 +75,7 @@ const paths = await import('../lib/paths.js')
 const memory = await import('../lib/memory.js')
 const curator = await import('../lib/curator.js')
 const activity = await import('../lib/activity-log.js')
+const { buildCorpus, bm25, tokenize } = await import('../lib/text-retrieval.js')
 const profile = vp.profileFromCatalog('bge-small-zh-v1.5-int8')
 const activeFile = vp.vectorActiveFile()
 let serial = 0
@@ -96,10 +109,11 @@ function curated(extra = {}) {
 
 test.beforeEach(() => {
   fs.rmSync(activeFile, { force: true })
-  state.updateSettings({ memoryBackend: 'api', vectorSource: 'local', relevanceThreshold: 0 })
+  state.updateSettings({ memoryBackend: 'api', vectorSource: 'local', relevanceThreshold: 0, crossLibraryRecall: false })
   state.saveGlobalIndex({ entries: {} })
   calls.length = 0
   warnings.length = 0
+  rebuildProbes.length = 0
   commitHook = null
   retrieveHook = null
   failCommit = false
@@ -146,6 +160,212 @@ test('corrupt managed intent cannot call LLM or legacy API and preserves lexical
   assert.ok(warnings.length)
   assert.equal(calls.length, 0)
 })
+
+// 2026-11-18：跨库召回扫到没有向量库的库时，缺库降级的诊断只该属于「有内容」的库。
+// 空库（旧工作区遗留，索引 0 条）local-only 与语义召回的结果都是空——每轮给它刷
+// "向量库未生成" warn 是常驻噪音（group_893418498 空库实测刷满活动日志）。
+function vectorDegradeRows(libraryId) {
+  return activity.listEvents({ kind: 'vector', limit: 100 })
+    .filter(row => row.message === '向量库未生成，召回降级 local-only' && row.detail?.libraryId === libraryId)
+}
+
+async function settleRebuildProbes() {
+  // Join the same data-module import and drain its fire-and-forget .then callback.
+  // Importing the bridge itself does not call the probe or start a real worker.
+  await import(vectorServiceUrl)
+  await new Promise(resolve => setImmediate(resolve))
+}
+
+function trackIndexAccess(t, files) {
+  const access = { clones: 0, stats: new Map(files.map(file => [file, 0])) }
+  const clone = globalThis.structuredClone
+  t.mock.method(globalThis, 'structuredClone', (value, ...args) => {
+    if (value?.entries && !Array.isArray(value.entries)) access.clones += 1
+    return clone(value, ...args)
+  })
+  const stat = fs.statSync
+  t.mock.method(fs, 'statSync', (file, ...args) => {
+    if (access.stats.has(file)) access.stats.set(file, access.stats.get(file) + 1)
+    return stat(file, ...args)
+  })
+  return access
+}
+
+test('an empty library without a vector db recalls silently — no degrade noise, no rebuild probe', async () => {
+  state.updateSettings({ memoryBackend: 'api', vectorSource: 'local' })
+  const empty = fixture({})
+  activate([]) // 活跃代际只含全局库：该库的向量库必然缺席
+  const result = await memory.privateRecall({ exec: empty.exec, query: 'anything', topK: 5 })
+  await settleRebuildProbes()
+  assert.equal(result.recallRoute, 'local-fallback')
+  assert.deepEqual(result.files, [], 'an empty library has nothing to recall')
+  assert.deepEqual(result.errors || [], [])
+  assert.deepEqual(warnings, [], 'an empty library must not warn')
+  assert.equal(vectorDegradeRows(empty.libraryId).length, 0, 'an empty library must not log the degrade warning')
+  assert.equal(rebuildProbes.length, 0, 'an empty library must not probe a rebuild')
+  assert.equal(calls.length, 0)
+})
+
+test('a library with content but no vector db keeps the degrade diagnostic and probes the rebuild', async () => {
+  state.updateSettings({ memoryBackend: 'api', vectorSource: 'local' })
+  const rich = fixture({ 'mem-rich': entry('needle real content that semantic recall would serve') })
+  activate([]) // 同上：库不在代际里，但索引里有内容——这是真正值得诊断的缺库
+  const result = await memory.privateRecall({ exec: rich.exec, query: 'needle', topK: 5 })
+  await settleRebuildProbes()
+  assert.equal(result.recallRoute, 'local-fallback')
+  assert.deepEqual(result.files.map(file => file.name), ['mem-rich'])
+  assert.deepEqual(result.errors || [], [], 'missing registration is diagnostic, not a recall error')
+  assert.equal(warnings.length, 1)
+  assert.ok(warnings[0].includes('has no database for library ' + rich.libraryId))
+  assert.equal(vectorDegradeRows(rich.libraryId).length, 1, 'content-bearing libraries keep the diagnostic')
+  assert.equal(rebuildProbes.length, 1, 'content-bearing libraries probe the rebuild')
+  assert.equal(calls.length, 0)
+})
+
+test('an empty library resumes missing-db diagnostics after its first index entry is saved', async () => {
+  const f = fixture()
+  activate([])
+  const empty = await memory.privateRecall({ exec: f.exec, query: 'needle', purpose: 'automatic' })
+  await settleRebuildProbes()
+  assert.deepEqual(empty.files, [])
+  assert.deepEqual(warnings, [])
+  assert.equal(vectorDegradeRows(f.libraryId).length, 0)
+  assert.equal(rebuildProbes.length, 0)
+
+  // A backfill must invalidate emptiness immediately; no new cache or enrollment.
+  state.savePrivateIndex(f.libraryId, { entries: { 'mem-first': entry('needle first backfilled fact') } })
+  const filled = await memory.privateRecall({ exec: f.exec, query: 'needle', purpose: 'automatic' })
+  await settleRebuildProbes()
+  assert.deepEqual(filled.files.map(file => file.name), ['mem-first'])
+  assert.equal(filled.recallRoute, 'local-fallback')
+  assert.equal(warnings.length, 1)
+  assert.ok(warnings[0].includes('has no database for library ' + f.libraryId))
+  assert.equal(vectorDegradeRows(f.libraryId).length, 1)
+  assert.equal(rebuildProbes.length, 1)
+  assert.equal(calls.length, 0)
+})
+
+test('missing-db recall reuses loaded indexes on repeated warm-cache calls', async t => {
+  const f = fixture({ 'mem-budget': entry('needle snapshot budget') })
+  activate([])
+  state.loadPrivateIndex(f.libraryId) // Warm the state index cache before spying.
+  const indexFile = path.join(paths.indexDir(), f.libraryId + '.json')
+  const access = trackIndexAccess(t, [indexFile])
+  for (let round = 1; round <= 2; round += 1) {
+    const result = await memory.privateRecall({ exec: f.exec, query: 'needle', purpose: 'automatic' })
+    await settleRebuildProbes()
+    assert.deepEqual(result.files.map(file => file.name), ['mem-budget'])
+    // Two source snapshots clone twice each; the one hit also checks the existing
+    // relation-inverted-index signature (stat only, no snapshot).
+    assert.equal(access.stats.get(indexFile), 3 * round, 'two index reads plus one relation signature stat')
+    assert.equal(access.clones, 4 * round, 'no extra full-index clones, regardless of corpus size')
+    assert.equal(rebuildProbes.length, round, 'the fallback remains uncached and diagnostic')
+  }
+})
+
+test('cross-library missing-db diagnostics use the full source before domain filtering without extra snapshots', async t => {
+  const current = fixture({ 'mem-current': entry('needle current fact') })
+  const foreign = fixture({ 'mem-other-domain': entry('needle other world', { domain: 'rp' }) })
+  const empty = fixture()
+  const domain = 'project:' + current.sessionId
+  for (const f of [current, foreign, empty]) state.setSessionBinding(f.sessionId, { domainOverride: domain })
+  state.updateSettings({ crossLibraryRecall: true })
+  activate([])
+  const indexFiles = [current, foreign, empty].map(f => path.join(paths.indexDir(), f.libraryId + '.json'))
+  const access = trackIndexAccess(t, indexFiles)
+  const result = await memory.privateRecall({ exec: current.exec, query: 'needle', purpose: 'automatic' })
+  await settleRebuildProbes()
+  assert.equal(result.recallRoute, 'cross-library')
+  assert.deepEqual(new Set(result.libraries), new Set([current.libraryId, foreign.libraryId, empty.libraryId]))
+  assert.deepEqual(result.files.map(file => file.name), ['mem-current'], 'the foreign domain contributes no hits')
+  assert.deepEqual(result.errors, [])
+  assert.equal(warnings.length, 2, 'only the two content-bearing libraries warn')
+  for (const f of [current, foreign]) {
+    assert.ok(warnings.some(message => message.includes('has no database for library ' + f.libraryId)))
+    assert.equal(vectorDegradeRows(f.libraryId).length, 1)
+  }
+  assert.equal(vectorDegradeRows(empty.libraryId).length, 0)
+  assert.equal(rebuildProbes.length, 2, 'a domain-filtered empty view still needs a rebuild probe')
+  assert.equal(calls.length, 0)
+  assert.deepEqual(indexFiles.map(file => access.stats.get(file)), [3, 1, 1], 'only the primary hit adds a relation signature stat')
+  assert.equal(access.clones, 8, 'three source loads plus the existing primary refresh only')
+})
+
+test('by-id private recall still short-circuits vector IO and missing-db diagnostics', async t => {
+  const f = fixture({ 'mem-byid': entry('needle direct lookup') })
+  const databases = activate([])
+  const globalDb = vp.resolveVectorPath(databases.global.path)
+  fs.rmSync(globalDb)
+  const indexFile = path.join(paths.indexDir(), f.libraryId + '.json')
+  const access = trackIndexAccess(t, [indexFile, globalDb])
+  const read = t.mock.method(fs, 'readFileSync')
+  const result = await memory.privateRecall({ exec: f.exec, query: 'mem-byid', purpose: 'automatic' })
+  await settleRebuildProbes()
+  assert.deepEqual(result.files.map(file => file.name), ['mem-byid'])
+  assert.equal(result.recallRoute, 'local')
+  assert.deepEqual(warnings, [])
+  assert.equal(vectorDegradeRows(f.libraryId).length, 0)
+  assert.equal(rebuildProbes.length, 0)
+  assert.equal(calls.length, 0)
+  assert.equal(read.mock.calls.some(call => call.arguments[0] === activeFile), false, 'by-id does not read vector state')
+  assert.equal(access.stats.get(globalDb), 0, 'by-id does not validate vector databases')
+  assert.equal(access.stats.get(indexFile), 3, 'two index reads plus the existing relation signature stat')
+  assert.equal(access.clones, 4)
+})
+
+test('global recall uses the null library route even for an empty index and adds no index snapshots', async t => {
+  const f = fixture({ 'mem-private': entry('needle private-only fact') })
+  activate([f.libraryId])
+  const globalDb = vp.dbPathFor(null)
+  const empty = await memory.globalRecall({ exec: f.exec, query: 'needle' })
+  assert.deepEqual(empty.files, [])
+  assert.equal(empty.recallRoute, 'managed-vector-rrf')
+  assert.equal(calls.length, 1, 'an empty index must not suppress an existing vector route')
+  assert.equal(calls[0].db, globalDb)
+
+  state.saveGlobalIndex({ entries: {
+    'gmem-needle': entry('needle global fact', { domain: 'coding' }),
+    'gmem-other': entry('needle other world', { domain: 'rp' }),
+  } })
+  const indexFile = path.join(paths.indexDir(), 'global.json')
+  const access = trackIndexAccess(t, [indexFile])
+  const result = await memory.globalRecall({ exec: f.exec, query: 'needle' })
+  await settleRebuildProbes()
+  assert.deepEqual(result.files.map(file => file.name), ['gmem-needle'])
+  assert.equal(result.recallRoute, 'managed-vector-rrf')
+  assert.equal(calls.length, 2)
+  assert.equal(calls[1].db, globalDb, 'libraryId=null must select global, not private')
+  assert.equal(calls[1].route, 'managed-local')
+  assert.deepEqual(warnings, [])
+  assert.equal(vectorDegradeRows(null).length, 0)
+  assert.equal(rebuildProbes.length, 0)
+  assert.equal(access.stats.get(indexFile), 2)
+  assert.equal(access.clones, 4)
+})
+
+for (const content of ['empty', 'other-domain', 'matching']) {
+  test(`a physically missing global database remains an error with ${content} content`, async () => {
+    const f = fixture()
+    const databases = activate([])
+    if (content !== 'empty') state.saveGlobalIndex({ entries: {
+      'gmem-needle': entry('needle global fact', { domain: content === 'matching' ? 'coding' : 'rp' }),
+    } })
+    const globalDb = vp.resolveVectorPath(databases.global.path)
+    fs.rmSync(globalDb)
+    const result = await memory.globalRecall({ exec: f.exec, query: 'needle' })
+    await settleRebuildProbes()
+    assert.deepEqual(result.files.map(file => file.name), content === 'matching' ? ['gmem-needle'] : [])
+    assert.equal(result.recallRoute, 'local-fallback')
+    assert.equal(result.errors.length, 1)
+    assert.match(result.errors[0], /a database in the active generation is missing/)
+    assert.match(state.getSessionBinding(f.sessionId).lastRecallError, /a database in the active generation is missing/)
+    assert.equal(warnings.length, 1)
+    assert.ok(warnings[0].includes(path.basename(globalDb)))
+    assert.equal(vectorDegradeRows(null).length, 0, 'torn state is not ordinary missing registration')
+    assert.equal(rebuildProbes.length, 0)
+    assert.equal(calls.length, 0)
+  })
+}
 
 test('agent backend stays lexical even when a local profile is active', async () => {
   const f = fixture({ 'mem-needle': entry('needle local match') })
@@ -607,4 +827,408 @@ test('deleting an active archived library removes its route without tearing late
   const remembered = await memory.privateRemember({ exec: next.exec, content: 'write after deleting another library', title: 'route remains healthy' })
   assert.equal(state.loadPrivateIndex(next.libraryId).entries[remembered.id].content, 'write after deleting another library')
   assert.equal(vp.activeVectorState().active.databases.libraries[f.libraryId], undefined)
+})
+
+// 2026-11-18 排序修正端到端：RRF 名次归一把词法满分命中压成近平手后，primacy/peakEnd
+// 偏置会把弱相关元记忆顶到第一（运行时实测：lexical 219.5 的完美命中被挤到 #8）。
+// 修复后巨无霸命中保住 #1，弱竞争者落到相对阈值之外。
+test('a dominant lexical hit cannot be buried by primacy/peak-end biases', async () => {
+  state.updateSettings({ memoryBackend: 'api', vectorSource: 'local' })
+  // 大语料抬高 BM25 的库规模（IDF 随 N 增长，小语料造不出 ≥24 的巨无霸分）。
+  const entries = {}
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz'
+  const token = (n) => alphabet[n % 26] + alphabet[Math.floor(n / 26) % 26]
+  const old = '2026-10-01T00:00:00.000Z'
+  for (let i = 0; i < 60; i += 1) {
+    entries['mem-pad-' + String(i).padStart(2, '0')] = entry('常规条目 ' + token(3 * i) + token(3 * i + 1) + '，归档说明与轮值安排。', {
+      createdAt: old, updatedAt: old, strength: 1, arousal: 0.9,
+    })
+  }
+  // meta：最早创建（primacy ×1.2）+ 高唤醒（peakEnd ×1.25）+ strength 1——偏置加成最大；
+  // 正文含查询里的常见词元（有/没有），让它也进词法腿，制造名次归一的近平手。
+  entries['mem-meta'] = entry('运营值守安排，没有什么特别的说明。', { createdAt: old, updatedAt: old, strength: 1, arousal: 0.9 })
+  entries['mem-food'] = entry('主人是云南人，爱吃松茸菌子，在广州吃不到几家做菌子和过桥米线的馆子。', { strength: 0.8, arousal: 0.35 })
+  const f = fixture(entries)
+  activate([f.libraryId])
+  // 语义腿把 meta 排在 food 前面（模拟引擎 embedding 被查询样板带偏的形态）：
+  // 词法腿 food 满分，RRF 名次归一后两者 retrieval 近平手。
+  retrieveHook = () => ({ files: [{ name: 'mem-meta' }, { name: 'mem-food' }], segments: [], resources: [] })
+  const result = await memory.privateRecall({ exec: f.exec, query: '松茸的，我云南娃子喜欢吃菌子，还有过桥米线', topK: 5, relevanceThreshold: 0.4 })
+  assert.equal(result.files[0]?.name, 'mem-food', 'the dominant lexical hit must rank first, got ' + result.files[0]?.name)
+  assert.ok((result.files[0]?.fusion?.lexicalDominant ?? 0) >= 24, 'the dominance must be recorded in fusion metadata')
+  assert.ok(!result.files.some((file) => file.name === 'mem-meta'), 'weak competitors fall below the relative threshold')
+  retrieveHook = null
+})
+
+// Real BM25 regressions: only the semantic boundary is stubbed. Dates deliberately
+// age with now; a future sceneTime must not erase strength/primacy in these cases.
+function rankingEntry(content, extra = {}) {
+  const ago = days => new Date(Date.now() - days * 86_400_000).toISOString()
+  return entry(content, { createdAt: ago(2), updatedAt: ago(1), ...extra })
+}
+
+function rankingWorld(primaryEntries, foreignEntries) {
+  const primary = fixture(primaryEntries)
+  const foreign = fixture(foreignEntries)
+  const domain = 'ranking:' + primary.sessionId
+  for (const f of [primary, foreign]) state.setSessionBinding(f.sessionId, { domainOverride: domain })
+  state.updateSettings({ crossLibraryRecall: true })
+  return { primary, foreign }
+}
+
+function realLexical(entries, query) {
+  const corpus = buildCorpus(Object.entries(entries).map(([id, row]) => ({
+    id, title: row.title,
+    content: [row.content, (row.tags || []).join(' '), (row.attachments || []).map(item => `${item.caption || ''} 图片 ${item.kind || 'image'}`).join(' ')].filter(Boolean).join(' '),
+  })))
+  return new Map([...corpus.docs].map(([id, doc]) => [id, bm25(tokenize(query), doc, corpus)]))
+}
+
+async function assertRankingBoundary(expectedRetrieves) {
+  await settleRebuildProbes()
+  assert.equal(calls.length, expectedRetrieves, 'only the stub semantic retrieve boundary is called')
+  assert.ok(calls.every(call => call.op === 'retrieve' && call.route === 'managed-local'))
+  assert.deepEqual(rebuildProbes, [], 'ranking regressions must not start a real rebuild/worker')
+  assert.deepEqual(warnings, [])
+}
+
+const tlsAnswer = 'TLS 服务证书过期，续签后重启代理恢复连接。'
+const tlsTemplate = '请用自然简洁的语气回答。这是通用回复风格，不涉及饮食或服务故障。'
+const pianoNotes = [
+  '钢琴练习先慢速弹奏音阶，再练左右手协调。',
+  '巴赫赋格练习需要分声部辨认旋律。',
+  '踏板练习要注意换踏时机与音色。',
+  '周末排练莫扎特奏鸣曲，保持轻巧触键。',
+  '视奏练习每天十五分钟，先看拍号与调号。',
+  '和弦转位练习强调指法与手腕放松。',
+  '节拍器从慢速逐渐加快，避免抢拍。',
+  '演出前检查琴凳高度，认真完成热身。',
+]
+function tlsEntries(template, size = 2) {
+  const answerDate = new Date(Date.now() - 4 * 86_400_000).toISOString()
+  return {
+    'mem-answer': rankingEntry(tlsAnswer, { createdAt: answerDate, strength: 1, peak: true }),
+    'mem-template': rankingEntry(template, { strength: 0.8 }),
+    ...Object.fromEntries(pianoNotes.slice(0, size - 2).map((text, i) => ['mem-piano-' + i, rankingEntry(text)])),
+  }
+}
+
+for (const crossLibrary of [false, true]) {
+  test(`real BM25 short reply style leaves TLS answer first (${crossLibrary ? 'with three foreign piano notes' : 'two-entry library'})`, async () => {
+    const entries = tlsEntries(tlsTemplate)
+    const world = crossLibrary
+      ? rankingWorld(entries, Object.fromEntries(pianoNotes.slice(0, 3).map((text, i) => ['mem-note-' + i, rankingEntry(text)])))
+      : null
+    const f = world?.primary || fixture(entries)
+    activate(world ? [f.libraryId, world.foreign.libraryId] : [f.libraryId])
+    retrieveHook = args => ({ files: args.db === vp.dbPathFor(f.libraryId) ? [{ name: 'mem-answer' }, { name: 'mem-template' }] : [], segments: [], resources: [] })
+    const result = await memory.privateRecall({ exec: f.exec, query: '请用自然简洁的语气回答。TLS 故障原因？', topK: 5, relevanceThreshold: 0 })
+    assert.equal(result.files[0]?.name, 'mem-answer', 'corpus changes must not crown the reply-style template')
+    const template = result.files.find(file => file.name === 'mem-template')
+    assert.ok(template?.lexical > 0, 'the original lexical score stays observable')
+    assert.ok(template.lexicalEvidence < template.lexical, 'style-only overlap is not topical evidence')
+    assert.notEqual(result.fusion?.lexicalDominance?.id, 'mem-template')
+    assert.equal(result.files[0].entry.content, tlsAnswer)
+    if (crossLibrary) assert.equal(result.files[0].libraryId, f.libraryId)
+    await assertRankingBoundary(crossLibrary ? 2 : 1)
+  })
+}
+
+for (const [language, template, query] of [
+  ['short Chinese', tlsTemplate, '请用自然简洁的语气回答。TLS 故障原因？'],
+  ['Chinese', '请结合上下文准确理解我的问题，不要机械重复，给出自然简洁且有条理的回复。', '请结合上下文准确理解我的问题，不要机械重复，给出自然简洁且有条理的回复。TLS 故障原因？'],
+  ['English', 'Please answer clearly and concisely with accurate context and natural language. Avoid repetition and unnecessary details.', 'Please answer clearly and concisely with accurate context and natural language. Avoid repetition and unnecessary details. What caused TLS failure?'],
+]) {
+  for (const size of [2, 3, 10]) {
+    test(`real BM25 ${language} long reply style keeps TLS answer first with ${size} documents`, async () => {
+      const f = fixture(tlsEntries(template, size))
+      activate([f.libraryId])
+      retrieveHook = () => ({ files: [{ name: 'mem-answer' }, { name: 'mem-template' }], segments: [], resources: [] })
+      const result = await memory.privateRecall({ exec: f.exec, query, topK: 5, relevanceThreshold: 0.4 })
+      assert.ok(result.files.length, 'style removal must not turn a topical query into empty recall')
+      assert.equal(result.files[0]?.name, 'mem-answer')
+      assert.notEqual(result.fusion?.lexicalDominance?.id, 'mem-template')
+      assert.ok(result.files[0].lexical > 0, 'TLS remains an actual lexical hit, not only a semantic rescue')
+      await assertRankingBoundary(1)
+    })
+  }
+}
+
+const rankingWords = 'certificate expired renewal proxy restart connection handshake trust chain hostname issuer validity protocol cipher client server clock intermediate root authority verification transport security gateway service outage investigation diagnosis mitigation deployment recovery monitoring incident encryption authentication socket timeout negotiation alert endpoint configuration rotation revocation openssl pem browser response failure latency availability maintenance rollback'.split(' ')
+const foodQuery = '松茸的，我云南娃子喜欢吃菌子，还有过桥米线'
+const foodAnswer = '主人是云南人，爱吃松茸菌子，在广州吃不到几家做菌子和过桥米线的馆子。'
+
+test('real BM25 a weak 的 hit is no worse than zero evidence and preserves topical answer order', async () => {
+  const topicQuery = '松茸 云南 菌子 过桥米线 广州 馆子'
+  const entries = {
+    'mem-food': rankingEntry(foodAnswer, { peak: true, createdAt: new Date(Date.now() - 4 * 86_400_000).toISOString() }),
+    'mem-semantic': rankingEntry('钢琴练习巴赫赋格。', { strength: 0.8 }),
+    'mem-weak': rankingEntry('归档标记：的', { strength: 0.8 }),
+  }
+  const f = fixture(entries)
+  activate([f.libraryId])
+  retrieveHook = () => ({ files: [{ name: 'mem-food' }, { name: 'mem-semantic' }], segments: [], resources: [] })
+  const result = await memory.privateRecall({ exec: f.exec, query: topicQuery + ' 的', topK: 5, relevanceThreshold: 0 })
+  assert.equal(result.files[0]?.name, 'mem-food')
+  assert.ok(result.fusion.lexicalDominance?.topLex >= 24, 'the test must exercise dominance, not an inactive branch')
+  const weak = result.files.find(file => file.name === 'mem-weak')
+  const zero = result.files.find(file => file.name === 'mem-semantic')
+  assert.ok(weak?.lexical > 0 && weak.lexical < result.files[0].lexical / 20, '的 is a real but tiny BM25 hit')
+  assert.ok(zero, 'the zero-evidence semantic candidate remains observable')
+  assert.equal(zero.lexical ?? 0, 0)
+  const sigma = 1 / (1 + result.fusion.lexicalDominance.topLex / 50)
+  assert.ok(Math.abs(weak.fusion.lexicalDiscount - sigma) < 1e-12, 'tiny evidence is protected by the continuous sigma floor')
+  assert.ok(weak.fusion.lexicalDiscount >= zero.fusion.lexicalDiscount, 'a tiny lexical hit cannot be penalized more than no hit')
+  const baseline = await memory.privateRecall({ exec: f.exec, query: topicQuery, topK: 5, relevanceThreshold: 0 })
+  assert.deepEqual(result.files.filter(file => file.name !== 'mem-weak').map(file => file.name), baseline.files.filter(file => file.name !== 'mem-weak').map(file => file.name))
+  await assertRankingBoundary(2)
+})
+
+test('real BM25 cross-library same-id facts stay separate and a strong foreign hit is real evidence', async () => {
+  state.updateSettings({ memoryBackend: 'agent' })
+  const query = rankingWords.slice(0, 38).join(' ')
+  const primaryEntries = {
+    // 逆序打破逐字包含/核心覆盖探针：两条同 id 事实必须靠身份而不是内容去重存活。
+    'mem-shared': rankingEntry(rankingWords.slice(0, 3).reverse().join(' ')),
+    'mem-secondary': rankingEntry(rankingWords.slice(3, 9).join(' ')),
+  }
+  const foreignEntries = { 'mem-shared': rankingEntry(query), 'mem-piano': rankingEntry(pianoNotes[0]) }
+  const { primary, foreign } = rankingWorld(primaryEntries, foreignEntries)
+  const all = await memory.privateRecall({ exec: primary.exec, query, topK: 5, relevanceThreshold: 0 })
+  assert.deepEqual(new Set(all.libraries), new Set([primary.libraryId, foreign.libraryId]))
+  const twins = all.files.filter(file => file.name === 'mem-shared')
+  assert.equal(twins.length, 2, 'same id in two libraries is two facts, not one folded row')
+  const sharedPrimary = twins.find(file => file.libraryId === primary.libraryId)
+  const sharedForeign = twins.find(file => file.libraryId === foreign.libraryId)
+  assert.equal(sharedPrimary.entry.content, primaryEntries['mem-shared'].content)
+  assert.equal(sharedForeign.entry.content, query)
+  assert.ok(sharedForeign.lexical > sharedPrimary.lexical, 'each twin keeps its own unified-corpus evidence, nothing is inherited')
+  assert.ok(all.files.some(file => file.name === 'mem-secondary' && file.libraryId === primary.libraryId))
+  assert.ok(!all.files.some(file => file.name === 'mem-piano'), 'zero-evidence foreign filler stays out')
+  assert.equal(all.files[0].libraryId, foreign.libraryId, 'the genuinely strong foreign fact outranks weak local rows')
+  assert.equal(all.fusion.crossLibraryLexical, 'unified-bm25')
+  const cut = await memory.privateRecall({ exec: primary.exec, query, topK: 5, relevanceThreshold: 0.8 })
+  assert.deepEqual(cut.files.map(file => [file.libraryId, file.name]), [[foreign.libraryId, 'mem-shared']], 'the 0.8 cut is real competition now, not ghost removal')
+  const evidence = file => file.lexicalEvidence ?? file.lexical ?? 0
+  const ranked = all.files.slice().sort((a, b) => evidence(b) - evidence(a))
+  const dominant = evidence(ranked[0]) >= 24 && evidence(ranked[0]) >= evidence(ranked[1]) * 4
+  assert.equal(Boolean(all.fusion.lexicalDominance), dominant, 'dominance is computed from the surviving unified evidence')
+  if (dominant) assert.equal(all.fusion.lexicalDominance.id, ranked[0].name)
+  for (const file of all.files) {
+    assert.ok(Math.abs(file.retrievalScore - Math.min(1, file.fusion.rawRetrievalScore * (file.fusion.lexicalDiscount ?? 1))) < 1e-12)
+  }
+  await assertRankingBoundary(0)
+})
+
+for (const gate of ['disclosure', 'speaker']) {
+  test(`real BM25 ${gate} filtering recomputes dominance from eligible candidates`, async () => {
+    const query = (gate === 'speaker' ? '我说过 ' : '') + rankingWords.join(' ')
+    const entries = {
+      'mem-hidden': rankingEntry(rankingWords.join(' '), gate === 'disclosure' ? { disclosure: 'only_if_asked' } : { speaker_id: 'assistant' }),
+      'mem-small': rankingEntry(rankingWords.slice(0, 3).join(' '), { speaker_id: 'user', strength: 0.8 }),
+      'mem-normal': rankingEntry('钢琴练习已经完成，下一次排练在周末。', { speaker_id: 'user', strength: 0.8 }),
+    }
+    const scores = realLexical(entries, query)
+    assert.ok(scores.get('mem-hidden') >= 24 && scores.get('mem-hidden') >= scores.get('mem-small') * 4)
+    const f = fixture(entries)
+    activate([f.libraryId])
+    retrieveHook = () => ({ files: [{ name: 'mem-normal' }], segments: [], resources: [] })
+    const result = await memory.privateRecall({ exec: f.exec, query, topK: 5, relevanceThreshold: 0.8, purpose: 'automatic' })
+    assert.deepEqual(new Set(result.files.map(file => file.name)), new Set(['mem-normal', 'mem-small']))
+    assert.equal(result.fusion.lexicalDominance, null, 'the final summary must not retain the excluded top')
+    for (const file of result.files) {
+      assert.equal(file.fusion.lexicalDominant, undefined)
+      assert.equal(file.fusion.lexicalDiscount, undefined)
+      assert.equal(file.retrievalScore, file.fusion.rawRetrievalScore, 'filtered survivors recover their raw RRF share')
+    }
+    await assertRankingBoundary(1)
+  })
+}
+
+test('real BM25 nested vector and cross-library RRF applies exactly one sigma to semantic-only recall', async () => {
+  const query = rankingWords.join(' ')
+  const entries = {
+    'mem-strong': rankingEntry(query),
+    'mem-mild': rankingEntry('端口8443证书根链验证失败，需要检查中间CA是否被撤销。', { tags: rankingWords.slice(0, 22) }),
+    'mem-semantic': rankingEntry(pianoNotes.join(' ')),
+  }
+  const scores = realLexical(entries, query)
+  const inner = memory.fuseRecallCandidates({
+    index: { entries },
+    local: ['mem-strong', 'mem-mild'].map(name => ({ name, entry: entries[name], content: entries[name].content, lexical: scores.get(name) })),
+    semantic: [{ name: 'mem-semantic' }, { name: 'mem-strong' }],
+  })
+  assert.deepEqual(inner.files.map(file => file.name), ['mem-strong', 'mem-mild', 'mem-semantic'], 'real lexical evidence changes the discounted inner ordering')
+  assert.ok(inner.files[2].fusion.rawRetrievalScore > inner.files[1].fusion.rawRetrievalScore, 'raw order is semantic before mild, the opposite of discounted order')
+  assert.equal(inner.debug.lexicalDominance.id, 'mem-strong')
+  const { primary, foreign } = rankingWorld(entries, {})
+  activate([primary.libraryId, foreign.libraryId])
+  retrieveHook = args => ({ files: args.db === vp.dbPathFor(primary.libraryId) ? [{ name: 'mem-semantic' }, { name: 'mem-strong' }] : [], segments: [], resources: [] })
+  const result = await memory.privateRecall({ exec: primary.exec, query, topK: 5, relevanceThreshold: 0 })
+  assert.equal(result.recallRoute, 'cross-library')
+  assert.deepEqual(new Set(result.files.map(file => file.name)), new Set(['mem-strong', 'mem-mild', 'mem-semantic']))
+  assert.equal(result.fusion.crossLibraryLexical, 'unified-bm25')
+  assert.equal(result.fusion.crossLibrarySemantic, 'rank-only', 'hook files carry no scores, so the vector leg stays rank-only')
+  const strong = result.files.find(file => file.name === 'mem-strong')
+  const semantic = result.files.find(file => file.name === 'mem-semantic')
+  const mild = result.files.find(file => file.name === 'mem-mild')
+  // 统一语料此刻恰好等于主库三文档（外库为空），BM25 值与 realLexical 一致。
+  const topLex = scores.get('mem-strong')
+  assert.ok(topLex >= 24)
+  assert.equal(strong.lexical, topLex)
+  assert.equal(mild.lexical, scores.get('mem-mild'))
+  // 方法间 RRF：词法腿 strong=1 mild=2，向量腿（rank-only）semantic=1 strong=2。
+  const rrfStrong = 1 / 61 + 1 / 62
+  assert.ok(Math.abs(strong.fusion.rawRetrievalScore - 1) < 1e-12)
+  assert.ok(Math.abs(mild.fusion.rawRetrievalScore - (1 / 62) / rrfStrong) < 1e-12)
+  assert.ok(Math.abs(semantic.fusion.rawRetrievalScore - (1 / 61) / rrfStrong) < 1e-12, 'outer RRF is rebuilt from unified leg ranks, not the discounted inner order')
+  assert.equal(strong.fusion.bestRank, 1)
+  assert.equal(mild.fusion.bestRank, 2, 'outer rank comes from the unified lexical leg, not the discounted inner rank of two')
+  assert.equal(semantic.fusion.bestRank, 1)
+  const sigma = 1 / (1 + topLex / 50)
+  const mildDiscount = Math.sqrt(scores.get('mem-mild') / topLex)
+  assert.ok(mildDiscount > sigma, 'the mild fact genuinely exercises the square-root branch')
+  assert.ok(Math.abs(strong.retrievalScore - 1) < 1e-12)
+  assert.ok(Math.abs(mild.retrievalScore - (1 / 62) / rrfStrong * mildDiscount) < 1e-12)
+  assert.ok(Math.abs(semantic.retrievalScore - (1 / 61) / rrfStrong * sigma) < 1e-12, 'exactly one sigma, not multiplied by the inner share')
+  assert.ok(Math.abs(semantic.retrievalScore - (1 / 61) / rrfStrong * sigma * sigma) > 0.01)
+  assert.equal(result.fusion.lexicalDominance.id, 'mem-strong')
+  assert.equal(result.fusion.lexicalDominance.stage, 'eligible')
+  assert.equal(result.fusion.lexicalDominance.topLex, strong.lexical)
+  assert.equal(semantic.fusion.lexicalDominantId, 'mem-strong')
+  assert.equal(semantic.fusion.dominanceStage, 'eligible')
+  assert.equal(calls.filter(call => call.db === vp.dbPathFor(primary.libraryId)).length, 1)
+  assert.equal(calls.filter(call => call.db === vp.dbPathFor(foreign.libraryId)).length, 1)
+  await assertRankingBoundary(2)
+})
+
+test('real BM25 two tied genuinely strong topical hits both survive without corpus padding', async () => {
+  const query = rankingWords.join(' ')
+  const entries = {
+    'mem-tls-a': rankingEntry(rankingWords.slice(0, 26).join(' ')),
+    'mem-tls-b': rankingEntry(rankingWords.slice(26).join(' ')),
+  }
+  const f = fixture(entries)
+  activate([f.libraryId])
+  retrieveHook = () => ({ files: [{ name: 'mem-tls-a' }, { name: 'mem-tls-b' }], segments: [], resources: [] })
+  const result = await memory.privateRecall({ exec: f.exec, query, topK: 5, relevanceThreshold: 0.8 })
+  assert.deepEqual(new Set(result.files.map(file => file.name)), new Set(['mem-tls-a', 'mem-tls-b']))
+  for (const file of result.files) assert.ok(file.lexical >= 24, 'both hits are genuinely strong in this two-row corpus')
+  assert.equal(result.fusion.lexicalDominance, null, 'two near-equal lexical tops do not single out a dominant row')
+  await assertRankingBoundary(1)
+})
+
+test('real BM25 QQ private-chat envelope and preference trailer preserve food as the top answer', async () => {
+  const query = '[私聊:1299772830]22:11 Kingxiao(1299772830)[主人] #-100705771 [@咱]：松茸的，我云南娃子喜欢吃菌子，还有过桥米线\n[管理员的长期偏好·优先遵守]请结合上下文准确理解我的问题，不要机械重复，给出自然简洁且有条理的回复。\n【本会话是QQ私聊：1299772830。请用自然简洁的语气回答。】'
+  const now = Date.now()
+  const recentCreatedAt = new Date(now - 2 * 86_400_000).toISOString()
+  const f = fixture({
+    'mem-food': rankingEntry(foodAnswer, { strength: 0.8, createdAt: recentCreatedAt }),
+    'mem-template': rankingEntry('[管理员的长期偏好·优先遵守]请结合上下文准确理解我的问题，不要机械重复，给出自然简洁且有条理的回复。【本会话是QQ私聊：1299772830。请用自然简洁的语气回答。】', { peak: true, createdAt: new Date(now - 4 * 86_400_000).toISOString() }),
+    'mem-piano': rankingEntry(pianoNotes[0], { createdAt: recentCreatedAt }),
+  })
+  activate([f.libraryId])
+  retrieveHook = () => ({ files: [{ name: 'mem-template' }, { name: 'mem-food' }], segments: [], resources: [] })
+  const result = await memory.privateRecall({ exec: f.exec, query, topK: 5, relevanceThreshold: 0.4 })
+  assert.equal(result.files[0]?.name, 'mem-food', 'QQ transport text is not evidence of the user topic: ' + JSON.stringify({ fusion: result.fusion, files: result.files.map(({ name, lexical, lexicalEvidence, retrievalScore, score, fusion }) => ({ name, lexical, lexicalEvidence, retrievalScore, score, fusion })) }))
+  assert.ok(result.files[0].lexical > 0 && result.files[0].lexicalEvidence > 0)
+  assert.notEqual(result.fusion.lexicalDominance?.id, 'mem-template')
+  assert.equal(calls[0].query, query, 'the semantic/index-facing query remains the original QQ message')
+  await assertRankingBoundary(1)
+})
+
+test('real BM25 same-leg and cross-leg folding retain the absorbed topical lexical evidence', async () => {
+  const topic = rankingWords.join(' ')
+  const query = '请用自然简洁的语气回答。' + topic
+  const body = 'TLS故障已记录，请用自然简洁的语气回答。故障排查统一记录在运维台账。'
+  const entries = {
+    'mem-a-host': rankingEntry(body, { tags: rankingWords.slice(0, 3) }),
+    'mem-z-strong': rankingEntry(body, { tags: rankingWords }),
+    'mem-piano': rankingEntry(pianoNotes[0]),
+  }
+  const originalScores = realLexical(entries, query)
+  const evidenceScores = realLexical(entries, topic)
+  assert.ok(evidenceScores.get('mem-z-strong') >= 24)
+  assert.ok(originalScores.get('mem-z-strong') > originalScores.get('mem-a-host'))
+  assert.ok(originalScores.get('mem-z-strong') > evidenceScores.get('mem-z-strong'), 'raw lexical includes the style overlap but evidence does not')
+  const f = fixture(entries)
+  activate([f.libraryId])
+  retrieveHook = () => ({ files: [{ name: 'mem-a-host' }, { name: 'mem-z-strong' }], segments: [], resources: [] })
+  const result = await memory.privateRecall({ exec: f.exec, query, topK: 5, relevanceThreshold: 0.8 })
+  assert.deepEqual(result.files.map(file => file.name), ['mem-a-host'], 'one real fact occupies one recall slot after both folding stages')
+  const host = result.files[0]
+  assert.equal(host.lexical, originalScores.get('mem-z-strong'), 'the absorbed source retains its stronger original BM25 score')
+  assert.equal(host.lexicalEvidence, evidenceScores.get('mem-z-strong'), 'topical BM25 evidence is inherited independently of raw lexical')
+  assert.deepEqual(host.mergedTogether, ['mem-z-strong'])
+  assert.ok(result.fusion.collapsed.some(group => group.kept === 'mem-z-strong' && group.dropped.includes('mem-a-host')), 'within-leg duplicate folding occurred')
+  assert.ok(result.fusion.collapsed.some(group => group.kept === 'mem-a-host' && group.dropped.includes('mem-z-strong')), 'semantic/cross-leg host absorbed the lexical source')
+  assert.equal(result.fusion.lexicalDominance.id, 'mem-a-host', 'the surviving host owns the final dominance trace')
+  assert.equal(result.fusion.lexicalDominance.topLex, host.lexicalEvidence)
+  assert.equal(host.fusion.rawRetrievalScore, 1)
+  await assertRankingBoundary(1)
+})
+
+test('real BM25 Python in a request is topical evidence rather than a disposable reply template', async () => {
+  const query = '请用Python回答TLS故障原因'
+  const entries = {
+    'mem-python': rankingEntry('请用Python回答TLS故障原因：Python ssl 模块报告证书过期。'),
+    'mem-other': rankingEntry(pianoNotes[0]),
+  }
+  const f = fixture(entries)
+  activate([f.libraryId])
+  retrieveHook = () => ({ files: [], segments: [], resources: [] })
+  const result = await memory.privateRecall({ exec: f.exec, query, topK: 5, relevanceThreshold: 0.4 })
+  assert.equal(result.files[0]?.name, 'mem-python', 'a topic-bearing imperative must not be cleared')
+  const hit = result.files[0]
+  assert.equal(hit.lexical, realLexical(entries, query).get('mem-python'))
+  assert.equal(hit.lexicalEvidence ?? hit.lexical, hit.lexical, 'Python/TLS are retained in dominance evidence')
+  assert.equal(calls[0].query, query)
+  await assertRankingBoundary(1)
+})
+
+test('automatic recall backfills a sixth qualified hit and reintroduces a changed admitted revision', async () => {
+  state.updateSettings({ hybridRecall: true })
+  const names = Array.from({ length: 6 }, (_, i) => 'mem-replay-' + i)
+  const stamp = new Date(Date.now() - 86400000).toISOString()
+  const entries = Object.fromEntries(names.map((name, i) => [name, rankingEntry(`AtlasReplay 部署备份节点${i}保留14天，每天执行核验。`, { createdAt: stamp, updatedAt: stamp })]))
+  const f = fixture(entries)
+  activate([f.libraryId])
+  retrieveHook = () => ({ files: names.map(name => ({ name })), segments: [], resources: [] })
+  const query = 'AtlasReplay 部署备份保留14天'
+  const initial = await memory.privateRecall({ exec: f.exec, query, topK: 6, relevanceThreshold: 0.8, purpose: 'automatic' })
+  assert.equal(initial.groups.length, 6)
+  const shown = initial.refs.slice(0, 5)
+  state.markInjectedRefs(f.sessionId, shown, 1, { messageId: 'admitted-replay-five', hostTurn: 1 })
+  const excludedRefs = state.recentMemoryRefs(state.getSessionBinding(f.sessionId), 2, 16)
+  const next = await memory.privateRecall({ exec: f.exec, query, topK: 1, relevanceThreshold: 0.8, purpose: 'automatic', excludedRefs })
+  assert.equal(next.groups.length, 1)
+  assert.equal(next.files[0].name, initial.refs[5].id)
+  assert.equal(next.trace.counts.recentRows, 5)
+  const changedId = shown[0].id
+  await state.updatePrivateIndex(f.libraryId, index => { index.entries[changedId].content += ' 已补充副本验证。' })
+  const changed = await memory.privateRecall({ exec: f.exec, query, topK: 1, relevanceThreshold: 0.8, purpose: 'automatic', excludedRefs })
+  assert.equal(changed.files[0].name, changedId)
+  assert.notEqual(changed.refs[0].revision, shown[0].revision)
+  assert.equal(changed.groups[0].reintroducedForRevision, true)
+  await assertRankingBoundary(2)
+})
+
+test('automatic recent exclusion cannot promote an unqualified lexical-only noise hit', async () => {
+  state.updateSettings({ hybridRecall: true })
+  const names = Array.from({ length: 5 }, (_, i) => 'mem-qualified-' + i)
+  const stamp = new Date(Date.now() - 86400000).toISOString()
+  const entries = Object.fromEntries(names.map((name, i) => [name, rankingEntry(`AtlasQuiet 部署备份节点${i}保留14天，每天执行核验。`, { createdAt: stamp, updatedAt: stamp })]))
+  entries['mem-quiet-noise'] = rankingEntry('AtlasQuiet 的闲聊杂谈，没有备份安排。', { createdAt: stamp, updatedAt: stamp })
+  const f = fixture(entries)
+  activate([f.libraryId])
+  retrieveHook = () => ({ files: names.map(name => ({ name })), segments: [], resources: [] })
+  const query = 'AtlasQuiet 部署备份保留14天'
+  const initial = await memory.privateRecall({ exec: f.exec, query, topK: 5, relevanceThreshold: 0.8, purpose: 'automatic' })
+  assert.equal(initial.refs.length, 5)
+  state.markInjectedRefs(f.sessionId, initial.refs, 1, { messageId: 'admitted-qualified-five', hostTurn: 1 })
+  const next = await memory.privateRecall({ exec: f.exec, query, topK: 1, relevanceThreshold: 0.8, purpose: 'automatic', excludedRefs: state.recentMemoryRefs(state.getSessionBinding(f.sessionId), 2, 16) })
+  assert.deepEqual(next.files, [])
+  assert.ok(next.trace.counts.weakRows > 0)
+  assert.equal(next.trace.counts.recentRows, 5)
+  await assertRankingBoundary(2)
 })

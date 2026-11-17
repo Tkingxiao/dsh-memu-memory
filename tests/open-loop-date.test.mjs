@@ -5,12 +5,19 @@ import os from 'node:os'
 import path from 'node:path'
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-memory-loop-date-'))
+process.env.DSH_HOME = home
 process.env.DSH_MEMU_HOME = home
+process.env.DSH_MEMU_MEMORY_HOME = home
 
 const state = await import('../lib/state.js')
 const memory = await import('../lib/memory.js')
 const inject = await import('../lib/inject.js')
 const { estTokens } = await import('../lib/budget.js')
+const handlers = new Map()
+inject.registerInjection({ on: (name, handler) => { handlers.set(name, handler); return () => {} }, logger: { warn() {} } })
+async function admit(sessionId, out) {
+  for (const message of out.messages || []) if (message.role === 'user') await handlers.get('session/event')({ header: { id: sessionId } }, { type: 'user/message', data: message })
+}
 
 test.after(() => {
   try { state.flushState() } catch {}
@@ -349,6 +356,7 @@ test('a budget-dropped anniversary does not silence the nudge (injectForStep)', 
     assert.ok(text.includes('mem-said'))
     assert.equal(state.getSessionBinding(sessionId).openLoopRemindedAt?.['mem-said'], undefined,
       'the regular leg does not write the recurring clock')
+    await admit(sessionId, out)
   } finally {
     state.updateSettings({ injectionTotalTokens: 2000 })
   }
@@ -394,8 +402,10 @@ test('injectForStep records the overdue reminder only after the block is really 
     .join('\n\n')
   assert.match(text, /\[open loop\]/)
   assert.ok(text.includes('mem-recurring'))
+  assert.equal(state.wasOpenLoopRemindedToday(sessionId, 'mem-recurring', new Date()), false, 'a proposal does not consume the reminder clock')
+  await admit(sessionId, out)
   assert.equal(state.wasOpenLoopRemindedToday(sessionId, 'mem-recurring', new Date()), true,
-    'the clock starts once the reminder reached the prompt')
+    'the clock starts once the reminder entered host history')
 
   const again = await inject.injectForStep({ ...step, turn: 2, step: 1, signal: { aborted: false } })
   const againText = (again.messages || [])

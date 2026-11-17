@@ -5,6 +5,8 @@ import os from 'node:os'
 import path from 'node:path'
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-memory-lexicon-inject-'))
+process.env.DSH_HOME = home
+process.env.DSH_MEMU_MEMORY_HOME = home
 process.env.DSH_MEMU_HOME = home
 
 const paths = await import('../lib/paths.js')
@@ -36,6 +38,22 @@ function setupSession(name, { terms = [], memories = [] } = {}) {
 
 function agentFor(binding) {
   return { session: { header: { id: binding.sessionId, cwd: path.join(home, 'cwd-' + binding.sessionId), agentPreset: 'rp', origin: 'user' } } }
+}
+
+function admissionHost(agent) {
+  agent.session.messages = []
+  const handlers = new Map()
+  const ctx = { logger: { warn() {} }, on(event, fn) { handlers.set(event, fn); return () => {} } }
+  inject.registerInjection(ctx)
+  const sessionEvent = handlers.get('session/event')
+  assert.equal(typeof sessionEvent, 'function')
+  return { ctx, async admit(out) {
+    for (const message of out.messages) {
+      assert.ok(message.id && message.role === 'user', 'Native DSL requires an identified UserMessage')
+      if (!agent.session.messages.some(item => item.id === message.id)) agent.session.messages.push(message)
+      await sessionEvent(agent.session, { type: 'user/message', data: message })
+    }
+  } }
 }
 
 function userMessage(id, text) {
@@ -311,8 +329,9 @@ test('injectForStep appends the anchor lexicon summary and the B-channel hit blo
     batch: { type: inbound.INBOUND_TYPE, version: 1, producer: 'host.user', batchId: 'user:u1',
       messages: [{ id: 'u1', role: 'user', context: {}, content: [{ type: 'text', text: '这段太糖刀了' }] }] },
   })
+  const host = admissionHost(agent)
   const decision = { kind: 'enter', messages: [userMessage('u1', '这段太糖刀了')] }
-  const out = await inject.injectForStep({ agent, decision, turn: 1, step: 1, signal: { aborted: false }, log: () => {}, ctx: null })
+  const out = await inject.injectForStep({ agent, decision, turn: 1, step: 1, signal: { aborted: false }, log: () => {}, ctx: host.ctx })
   const texts = pluginTexts(out)
   assert.equal(texts.length, 1, 'one plugin message carries anchor + lexicon')
   assert.match(texts[0], /===== memory anchor/)
@@ -322,9 +341,13 @@ test('injectForStep appends the anchor lexicon summary and the B-channel hit blo
   assert.match(texts[0], /<memory-lexicon>/, 'the B-channel hit block is in the same message')
   assert.match(texts[0], /糖刀」：表面发糖、实际虐心/)
 
-  // 注入记账：candidate + injection 各一次，冷却已记。
   const lib = binding.libraryId
-  const [entryId, entry] = Object.entries(lexicon.loadLexicon(lib).terms).find(([, t]) => t.normalizedTerm === '糖刀')
+  const [entryId, proposedEntry] = Object.entries(lexicon.loadLexicon(lib).terms).find(([, t]) => t.normalizedTerm === '糖刀')
+  assert.equal(proposedEntry.hitCounts.injection, 0, 'unadmitted output must not count as injection')
+  assert.equal(lexicon.lexiconOnCooldown(binding.sessionId, entryId), false, 'unadmitted output must not start cooldown')
+  await host.admit(out)
+  // 真实接纳后：candidate + injection 各一次，冷却已记。
+  const entry = lexicon.loadLexicon(lib).terms[entryId]
   assert.deepEqual(entry.hitCounts, { candidate: 1, injection: 1, query: 0 })
   assert.ok(lexicon.lexiconOnCooldown(binding.sessionId, entryId))
 })
@@ -332,13 +355,16 @@ test('injectForStep appends the anchor lexicon summary and the B-channel hit blo
 test('the second turn inside the cooldown window injects no lexicon block but still counts candidates', async () => {
   const binding = setupSession('e2e-cooldown', { terms: [{ term: '冷却验证词', kind: 'term', meaning: '含义' }] })
   const agent = agentFor(binding)
+  const host = admissionHost(agent)
   const send = async (id, text, turn) => {
     inbound.ingestInboundBatch({
       sessionId: binding.sessionId, session: agent.session, ctx: null,
       batch: { type: inbound.INBOUND_TYPE, version: 1, producer: 'host.user', batchId: `user:${id}`,
         messages: [{ id, role: 'user', context: {}, content: [{ type: 'text', text }] }] },
     })
-    return inject.injectForStep({ agent, decision: { kind: 'enter', messages: [userMessage(id, text)] }, turn, step: 1, signal: { aborted: false }, log: () => {}, ctx: null })
+    const out = await inject.injectForStep({ agent, decision: { kind: 'enter', messages: [userMessage(id, text)] }, turn, step: 1, signal: { aborted: false }, log: () => {}, ctx: host.ctx })
+    await host.admit(out)
+    return out
   }
   await send('c1', '关于冷却验证词', 1)
   const second = await send('c2', '再说一次冷却验证词', 2)
@@ -353,12 +379,14 @@ test('the second turn inside the cooldown window injects no lexicon block but st
 test('the B channel also rides the real inbound batch path', async () => {
   const binding = setupSession('e2e-bridge', { terms: [{ term: '糖刀', kind: 'meme', meaning: '表面发糖、实际虐心' }] })
   const agent = agentFor(binding)
+  const host = admissionHost(agent)
   inbound.ingestInboundBatch({
     sessionId: binding.sessionId, session: agent.session, ctx: null,
     batch: { type: inbound.INBOUND_TYPE, version: 1, producer: 'friend-app', batchId: 'bridge:1',
       messages: [{ id: 'bridge-1', role: 'user', context: {}, content: [{ type: 'text', text: '这段太糖刀了' }] }] },
   })
-  const out = await inject.injectForStep({ agent, decision: { kind: 'enter', messages: [] }, turn: 1, step: 1, signal: { aborted: false }, log: () => {}, ctx: null })
+  const out = await inject.injectForStep({ agent, decision: { kind: 'enter', messages: [] }, turn: 1, step: 1, signal: { aborted: false }, log: () => {}, ctx: host.ctx })
+  await host.admit(out)
   const texts = pluginTexts(out)
   assert.equal(texts.length, 1)
   assert.match(texts[0], /<memory-lexicon>/)

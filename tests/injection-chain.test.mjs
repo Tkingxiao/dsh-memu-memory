@@ -6,7 +6,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-memory-chain-'))
+process.env.DSH_HOME = home
 process.env.DSH_MEMU_HOME = home
+process.env.DSH_MEMU_MEMORY_HOME = home
 
 const state = await import('../lib/state.js')
 const memory = await import('../lib/memory.js')
@@ -269,6 +271,7 @@ test('the hint ships in the same plugin message as the recall block', async () =
   const cwd = path.join(home, 'project-freshness-message')
   const binding = state.ensureSession('chain-freshness-message', { cwd, agentPreset: 'coding' })
   seedRecallEntry(binding, 'mem-fresh-message', { updatedAt: new Date(Date.now() - 45 * DAY_MS).toISOString() })
+  state.markInjected('chain-freshness-message', ['__anchor__'], 0)
 
   const user = {
     id: 'u-freshness', role: 'user', source: { kind: 'user' },
@@ -364,4 +367,38 @@ test('no recall means no freshness hint', async () => {
   assert.equal(recall.text, '')
   assert.deepEqual(recall.ids, [])
   assert.equal(recall.text.includes('<memory-freshness>'), false)
+})
+
+test('typed cooldown follows content revisions, library identity and a new injection epoch', async () => {
+  const id = 'chain-ref-revision'
+  const binding = state.ensureSession(id, { cwd: path.join(home, id), agentPreset: 'coding' })
+  state.setSessionBinding(id, { useGlobal: false })
+  seedRecallEntry(binding, 'mem-shared-id')
+  const exec = { agent: { session: { header: { id, agentPreset: 'coding' } } } }
+  const settings = { ...state.getSettings(), relevanceThreshold: 0, dedupeTurns: 16 }
+  const first = await inject.buildRecall(state.getSessionBinding(id), '部署脚本的位置', 1, settings, exec, id)
+  assert.ok(first.refs?.some(ref => ref.id === 'mem-shared-id' && ref.libraryId === binding.libraryId), 'buildRecall returns typed refs')
+  state.markInjectedRefs(id, first.refs, 1, { messageId: 'revision-first', hostTurn: 1 })
+  const unchanged = await inject.buildRecall(state.getSessionBinding(id), '部署脚本的位置', 2, settings, exec, id)
+  assert.ok(!unchanged.ids.includes('mem-shared-id'), 'unchanged content is suppressed only after admission')
+  state.updatePrivateIndex(binding.libraryId, index => {
+    index.entries['mem-shared-id'].content = '改稿后的部署脚本放在 tools/deploy-v2.ps1。'
+    index.entries['mem-shared-id'].title = '部署脚本的位置新版'
+  })
+  const revised = await inject.buildRecall(state.getSessionBinding(id), '部署脚本的位置', 2, settings, exec, id)
+  assert.ok(revised.ids.includes('mem-shared-id'), 'same id with edited content is eligible immediately')
+  assert.notEqual(revised.refs.find(ref => ref.id === 'mem-shared-id').revision, first.refs.find(ref => ref.id === 'mem-shared-id').revision)
+  state.markInjectedRefs(id, revised.refs, 2, { messageId: 'revision-second', hostTurn: 2 })
+  const other = state.createLibrary({ name: 'same-id-other', scopeKey: path.join(home, 'other-ref-library') })
+  const { memoryRef, memoryRefKey } = await import('../lib/paths.js')
+  const otherRef = memoryRef({ scope: 'private', libraryId: other.id, id: 'mem-shared-id', entry: { title: 'same id in another library', content: 'independent body' } })
+  state.markInjectedRefs(id, [otherRef], 3, { messageId: 'revision-other', hostTurn: 3 })
+  const recent = state.recentMemoryRefs(state.getSessionBinding(id), 3, 16)
+  assert.equal(recent.length, 2)
+  assert.notEqual(memoryRefKey(recent[0]), memoryRefKey(recent[1]), 'two library owners cannot collapse into a bare id')
+  assert.equal(recent.find(ref => ref.libraryId === binding.libraryId).revision, revised.refs[0].revision)
+  state.markReinjectPending(id)
+  assert.deepEqual(state.recentMemoryRefs(state.getSessionBinding(id), 4, 16), [], 'old-epoch refs are not proof for a reinjection')
+  const reinjected = await inject.buildRecall(state.getSessionBinding(id), '部署脚本的位置', 4, settings, exec, id)
+  assert.ok(reinjected.ids.includes('mem-shared-id'))
 })

@@ -238,6 +238,9 @@ for (let turn = 1; turn <= parsed.turns; turn += 1) {
     titleCardBodyLineMax = Math.max(titleCardBodyLineMax, Number(analysis.context?.bodyLines || 0))
   }
   history = messages
+  for (const message of messages.filter(item => !known.has(item) && item.role === 'user')) {
+    await handlers.get('session/event')?.(agent.session, { type: 'user/message', data: message })
+  }
   const payload = [
     { role: 'system', content: SYSTEM_PROMPT },
     ...messages.map((message) => ({ role: message.role === 'assistant' ? 'assistant' : 'user', content: textOf(message) })),

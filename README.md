@@ -67,7 +67,7 @@ All screenshots are the real WebUI on isolated example data, not anyone's memori
 - **Secrets stay excluded.** `secret` visibility, group-chat channels, characters, worlds, branches and `knownBy` all constrain reads and edits. Automatic recall never injects a `secret` memory, and a `secret` is still readable by an explicit recall from the same folder — it hides a memory from the prompt, it is not a lock. What actually separates two conversations in one folder is the `context` scope (`channelId` / `characterId` / `worldId` / `branchId`); a blank scope on both sides means one shared scope, which is the point of a folder. The old `visibility: 'session'` level is gone — reading turns it into `shared` with its `context` untouched, and `node scripts/migrate-visibility.mjs` rewrites libraries that still store it (`--apply`, backs up first).
 - **People and stories are structured.** Group chat uses stable `speakerId` / `channelId`, not display names. RP uses `characterId` / `worldId` / `branchId`. Relationships are edges with a note and confidence, entities can be renamed without rewriting memory bodies, and the current relationship state (familiarity, trust, warmth, boundaries, promises) is a snapshot that keeps its history and evidence.
 - **Images are pointers and captions, not pretend vision.** Attachments are deduplicated by SHA-256, quota-limited and tiered; an image without a description is remembered as "received an image", never as a scene the model did not see.
-- **Housekeeping happens in the background.** Consolidation runs in a seeded fork sub-session, never as an editable turn in your chat. Failed runs back off instead of reporting success.
+- **Housekeeping happens in the background.** Consolidation runs in a seeded fork sub-session, never as an editable turn in your chat. Failed runs back off instead of reporting success. Unsupported reasoning-effort combinations are remembered across restarts and omitted on the next fork/new worker, including inherited settings; a new provider/model/effort combination may still fail once before it is learned.
 
 ### Active memory, measured
 
@@ -107,10 +107,10 @@ The graph runs on a **self-written continuous force engine** — no third-party 
 | Libraries | Create, rename, archive, restore, explicitly delete libraries |
 | Memory browser | Full-text editing, attachments, review queue, graph and bounded canvas, JSON/ZIP import/export |
 | Global memory | Domain-scoped global memories, evidence, review queue and the separate curator; every row can jump to the wall |
-| Prompts | General / RP / Coding / Mixed variants, overrides and per-key reset; new conversations start on RP and can pick a domain in the first-run prompt |
+| Prompts | General / RP / Coding / Mixed variants, overrides and per-key reset; unanswered conversations use preset/folder detection; the first-run prompt lets you choose the domain |
 | Stats | Daily activity, hit distribution, health, never-recalled shortlist, 7-day write/read ratio |
 
-Settings save as you change them (250 ms debounce), with about 2.5 s cross-window sync and a heartbeat for writes made by tools or another window. The WebUI opens in a new tab; when a popup is blocked it falls back to an in-app overlay without unloading the host SPA. Light, dark, reduced-motion and narrow layouts are supported.
+Settings save as you change them (250 ms debounce), with about 2.5 s cross-window sync and a heartbeat for writes made by tools or another window. The WebUI opens in a new tab; when a popup is blocked it falls back to an in-app overlay without unloading the host SPA. Light, dark, reduced-motion and narrow layouts are supported. Consolidation alerts stack in narrow sidebars; conversation titles remain visible, with timestamps and jump buttons on a separate line.
 
 ### Injection token budgets
 
@@ -124,7 +124,7 @@ Settings save as you change them (250 ms debounce), with about 2.5 s cross-windo
 
 ### Domain Prompts
 
-Resident guidance, writing policies and consolidation prompts follow the current session domain. Local tools and remote JSON consolidation share the domain body, with separate supported output contracts. New conversations default to RP; Coding, Mixed and custom pages stay enabled and can be selected per conversation. The new-conversation memory prompt also offers the four memory domains, so a coding session can be started in an RP workspace without remembering to change the sidebar afterwards.
+Resident guidance, writing policies and consolidation prompts follow the current session domain. Local tools and remote JSON consolidation share the domain body, with separate supported output contracts. Before a domain is chosen, new conversations use preset/folder detection: RP-marked names select RP, other folders select Coding, and no folder selects General. The prompt initially selects RP, but only confirmation makes that an explicit choice. Coding, Mixed and custom pages remain available. “Later” postpones the question until you leave and return; transient checks retry with backoff rather than counting as an answer. A session first observed as blank remains eligible even if its first message arrives before the folder information; historical conversations are not prompted retroactively.
 
 | Domain | Memory focus |
 |---|---|
@@ -228,7 +228,7 @@ Folder policy is a **ceiling, not an initial value**: turning a folder switch of
 | Tool | Purpose |
 |---|---|
 | `memu_private_remember` | Write a private memory, with source, layer, disclosure, visibility, tags, open loop and attachment references |
-| `memu_private_recall` | Natural-language or exact-id recall; results may carry up to two relationship pointers |
+| `memu_private_recall` | Keyword snippets or exact-id body pages (`view`, `offset`, `limitChars`, `revision`, optional allowed `libraryId`); search `topK` is a hard 1–20 row limit, conflicts use pointers |
 | `memu_private_list` | List the memories usable in the current scope |
 | `memu_private_update` | Edit, without bypassing pin admission, review or visibility rules |
 | `memu_private_archive` | Archive; never delete |
@@ -237,7 +237,7 @@ Folder policy is a **ceiling, not an initial value**: turning a folder switch of
 | `memu_private_link_suggest` | Refresh deterministic edges (confirmed-entity mentions and field evidence) for ids written this consolidation and return only uncertain candidate pairs |
 | `memu_lexicon_search` | Search active lexicon terms this conversation can see: bound library + global lexicon (+ same-domain libraries when cross-library recall is on); archived and tombstoned terms stay hidden |
 | `memu_lexicon_propose` | Add or update a lexicon term in the bound library (never the global lexicon); ordinary entries become active immediately, sensitive triggers remain user-only |
-| `memu_global_recall` / `memu_global_list` | Read the global layer by domain |
+| `memu_global_recall` / `memu_global_list` | Read the global layer by domain; recall supports snippets or versioned exact-id body pages without broadening eligibility |
 | `memu_status` | Storage health, sync heartbeat, recall state and image-turn status |
 
 The main agent has **no global write tool**. Global memories are produced only by the separate curator.
@@ -322,7 +322,7 @@ the idle window starts from real message activity or the agent's return to idle.
 ## Compatibility & limits
 
 - **Host:** DSH `>=0.2.0-rc.1`, using public extension points only (tools, injection, session query, subagents, slots, a prefixed HTTP route). No host source modifications. The core surfaces (13 `memu_*` tools, guide injection, settings page, right-sidebar tab, prefixed RPC) were verified on `0.2.2-rc.1` on 2026-11-05; the check table lives in [`docs/host-adaptation.md`](docs/host-adaptation.md). The optional dated-wake feature uses the host-wide `ctx.schedule` task API introduced in `0.2.2`; on `0.2.0`–`0.2.1` (session-scoped reminders) it detects the older shape and skips with one warning instead of retrying every sweep.
-- **Recall quality:** the default backend is lexical. Semantic recall depends on the optional engine and the embedding model you choose; the plugin cannot improve a model it does not own. LongMemEval, long-running group-chat A/B and "human-likeness" scores have **not** been run — test counts are not a quality score.
+- **Recall quality:** the default backend is lexical. Semantic recall depends on the optional engine and the embedding model you choose; the plugin cannot improve a model it does not own. LongMemEval, long-running group-chat A/B and "human-likeness" scores have **not** been run — test counts are not a quality score. A clear lexical topic match can outweigh rank-flattened competitors; recognised QQ/response-style scaffolding is excluded from that dominance evidence, but arbitrary templates and languages are not semantically understood.
 - **No cloud sync, no accounts, no cross-device sync.** This is a local plugin with no server-side identity.
 - **Images without vision:** without an optional caption/vision endpoint, an image memory is a pointer plus what a person wrote about it. The plugin does not claim to see pixels.
 - **Poisoned v4 sessions:** historical `format v4 message requires a producer-owned source kind` rows can be diagnosed but not rewritten; the plugin never edits private session files.

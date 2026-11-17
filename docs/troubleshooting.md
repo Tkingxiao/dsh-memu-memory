@@ -30,6 +30,12 @@
 注入整段没了 → §3.13               日期语义错 / 看不见日期 → §3.14
 保存成功但没变 / 字段改不回来 → §3.15
 同文件夹里某条记忆凭空消失 / 新会话侧边栏空 → §3.17
+新会话点稍后后不再询问 / 首条消息抢先绑定 → §3.35
+整理提醒标题消失 / 跳转按钮被裁掉 → §3.36
+强词法命中被偏置埋没 / 样板误触发断层 → §3.37
+精确读取分页 / 显式 topK 被扩大 → §3.38
+worker 前置依赖 / 完整包超限 / usage 未知 → §3.39
+整理输出截断 / 改预算后同快照仍冻结 → §3.40
 聊很久一条记忆都没写 → §3.18
 人格预设会话里完全没有记忆 → §3.19
 鉴权 / 401/403 行为说不清 → §3.20
@@ -400,7 +406,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 ### 2.1 模块地图
 
-<!-- rpc-method-count: 101 -->
+<!-- rpc-method-count: 102 -->
 
 | 文件 | 职责 / 什么时候碰它 |
 |---|---|
@@ -414,7 +420,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 | `lib/private.js` | 私有整理：当前对话、历史 fork、notice 消息 |
 | `lib/curator.js` / `lib/cycle.js` | 全局 curator 与 `pending_review`；空闲整理 pass（过期/降级/晋升/自动整理） |
 | `lib/mood.js` / `lib/budget.js` / `lib/snippet.js` | 情绪价与峰值；token 换算（中文≈1 字符/token、英文≈3.4，任何 token 都走它）；注入片段裁剪 |
-| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 101 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
+| `lib/rpc.js` / `lib/client.js` / `lib/webui.js` + `lib/webui/standalone.js` | `/dsh-memu-memory` 的 102 个方法（旧路由别名同一鉴权）；九页设置 + 侧边栏 `MemoryTab` + `useMemoryBeat`；独立壳挂载同一 SettingsPage，不复制实现 |
 | `lib/graph.js` / `lib/context.js` / `lib/media.js` | 关系边与实体；说话人/频道/角色/世界线/知情边界；附件采集、缩略图、受保护路由、ZIP |
 | `lib/prompts.js` + `lib/prompts/` | 提示词加载/覆盖/恢复/domain 变体解析 |
 | `lib/engine.js` / `lib/memu.js` / `lib/memu-config.js` | Python 引擎安装探测切换回滚；MemU CLI 适配（**所有 CLI 字符串只在这里**）；`~/.memu/config.env` 的 embedding |
@@ -623,6 +629,8 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 不在当前向量代际的 databases 里（profile 切换后未重建）——持久状态，每轮召回在同一位置失败，
 把 "1 个错误" 常驻挂进召回结果教模型无谓重试。修：`managedRecall` 对 no-database 静默降级
 local-only + vector 域诊断记录，不再进 errors；该库向量生成入册后语义腿自动恢复。
+空库无需向量诊断或追平探测；判空取上游已加载的完整索引（筛域前），不重复加载索引快照。后续首次写入或补入索引会恢复正常检测，损坏索引的存储警告和写保护、物理全局向量库缺失的错误仍保留。
+守卫：`tests/managed-memory.test.mjs` 断言 warn/活动记录/追平调用次数、实际召回 id、跨域与全局边界，以及缓存命中时的 stat/clone 次数。
 
 **S4 追平（2026-11-15 深夜）**：静默降级只是止血——该库新写的条目依然只有索引没有向量。
 追平机制：`local-vector-service` 的 `getMissingVectorLibraries()`（索引非空但不在代际 = 缺库；空库不算，写入 enroll 自愈）
@@ -648,9 +656,68 @@ grep tests 里的硬编码清单。守卫：全量 `npm test` 1676/1674 pass / 0
 `provider "wb" model "glm-5.3-flash" does not support reasoning effort "medium"`，回合起点即失败（fork-turn-failed）。
 同一快照失败 2 次后冻结闸门生效，自动路径永远不再 fork；且冻结日志不带原因。
 
-**守卫**：`effortRefusalOf(failure)` 从失败信息学习「provider|model|effort」拒绝组合（进程内 Set；
-失败发生在回合起点，重启后再学一次代价极小）；学习过的组合起 fork 不再带档（按 inherit）；
-学习的同时清该快照的失败连击（否则闸门挡住自动重试，学习永远没机会生效）；
-冻结跳过日志带上 `lastError`。fork-turn-failed 的该类失败标记 retryable。
-**守卫测试**：`tests/consolidation-fork.test.mjs` 的 `an unsupported reasoning effort is learned, ...`。
+**守卫**：`effortRefusalOf(failure)` 从失败信息学习「provider|model|effort」，持久化到当前数据目录的 `effort-refusals.json`。最终路由（含 custom 回退）确定后，先应用显式档位，再删除已被拒绝的实际档位；`inherit` 带入的值也检查，不修改父会话 options。fork 与新 worker 共用此路径，失败 worker 退役后重新创建。
+拒绝表按文件惰性缓存，写入在锁内重读合并并原子替换；读错或坏格式不当作空表覆盖，写错保留内存待补写状态并告警，同键再次学习或下次查询时重试。干净缓存不重复读取或写入。新 provider/model/effort 组合仍可能首次失败后才学习。
+学习同时清该快照的失败连击；冻结跳过日志带上 `lastError`，避免把配置不匹配误判为转录损坏。
+**守卫测试**：`tests/consolidation-fork.test.mjs` 覆盖 fork/worker 在 inherit/custom 回退下真正第二次完成、父 options 不变、跨进程重启读取、I/O 故障恢复、坏格式保护、home 隔离与双进程合并。
 **用户侧**：重启后下一次空闲扫描即自动解冻；或手动整理一次，或在 WebUI 把整理思考强度改成该模型支持的档位。
+
+### 3.34 整理 fork 的工作目录失效与权限边界
+
+**症状**：`working-directory: directory does not exist` 表示父会话保存的 cwd 已失效。`turn ended blocked` 则必须结合宿主拒绝原因诊断，不能仅凭该状态认定为无人审批。
+
+**处理**：默认 fork 执行器保留仍存在的 cwd，不存在时回退 `dataDir()`；持久 worker 执行器不在这一兜底的覆盖范围内。工具仍在派发前尝试完整白名单及核心写工具白名单，宿主缺能力时保留原有降级语义。
+
+**权限边界**：不自动设置 `danger-full-access`，始终保持宿主原权限。工具限制缺失或失败不能成为全权限运行的理由；记忆整理用途本身也不代表已授权 shell、文件等继承工具。
+
+**守卫**：`tests/consolidation-fork.test.mjs` 覆盖有效 cwd 保留、失效 cwd 回退，以及工具限制成功、缺失、两次抛错时均不调用权限预设覆盖；`RUNTIME_STATE` 的行号契约由诊断测试核对。
+
+### 3.35 新会话点稍后后不再询问 / 首条消息抢先创建隐式绑定
+
+**症状**：「稍后 → 切走 → 新建」复用同一空白会话却不再询问；或 cwd 尚未到位时首条消息先发出，注入创建隐式绑定后失去领域选择机会。
+
+**处理**：`NewSessionGate` 记录本次挂载中已观察到的空白会话，首条消息导致 `blank=false` 不会丢弃未作答资格；历史会话和子代理不追问。`domainSource:'chosen'` 表示显式领域答案，「稍后」只抑制本次停留。RPC 失败按 1、2、4 秒递增、最长 30 秒自动重试，重新进入立即重试，离开或卸载取消定时器与过期响应；错误经 `logClientEvent` 写入活动日志，日志通道自身失败不阻断重试。
+
+**守卫**：`tests/new-session-gate.test.mjs` 按依赖变化执行 effect 清理，覆盖首条消息/cwd 竞态、重试退避与恢复、历史会话排除、迟到响应和选择保留；`tests/issue2-chain.test.mjs` 覆盖服务端绑定、注入领域与活动日志，不代替客户端交互验收。
+
+### 3.36 整理提醒展开后标题消失 / 跳转按钮被裁掉
+
+**根因**：语言表重复键曾把短状态标签覆盖成长通知模板；固定双列加不可收缩时间和按钮，在 320px 英文侧栏中仍超出行宽，行级裁剪只是把按钮藏掉。
+
+**处理**：短状态与长通知使用独立键，同表重复键由 `check-i18n` 拒绝。提醒列按最小 240px 自适应堆叠，会话身份与时间/操作分行；标题省略号并提供全文 tooltip，错误正文两行截断，操作行不裁剪。
+
+**守卫**：`tests/client-render.test.mjs` 校验展开/跳转/清除及响应式结构；浏览器需验证中英文 240–900px、折叠/展开、长标题/无空格错误文本，并实际点击跳转和清除，不能仅断言外框无横向滚动。
+
+### 3.37 强词法命中被偏置埋没 / 样板误触发断层折减
+
+**根因**：RRF 名次归一弱化词法原始分差；仅以完整消息词法分判断层又可能把回复样板当主题。折叠代表若丢失词法证据、或跨库去重后仍使用已删除条目的 topLex，会错误处罚最终候选。
+
+**处理**：`lexical` 保留原始查询分值，`lexicalEvidence` 对可识别的 QQ 包装和纯回复风格指令单独计主题证据，不改变语义请求；清理保留标识符、URL、小数与换行，日期加权不计入主题证据。断层门槛仍为 ≥24 且 ≥第二名4倍；系数取 `max(零证据底线, sqrt(证据/topLex))`，少量词法证据不会更差。只有最终保留的候选参与判定；同事实代表继承词法证据和每路最佳 rank。跨库按复合 `[libraryId,id]` 身份合并（§8.15），两库同 id 是两条事实、各自持有统一语料里的证据，不互相借用；外库强命中是真实候选而不是被替换掉的幽灵。
+
+**单次折减**：库内、跨库和有效候选阶段都保留 `fusion.rawRetrievalScore`。外层从未折减排名重新融合，有效候选过滤后重算一次，不把前一阶段系数连乘。`fusion.lexicalDominant`、`lexicalDominantId`、`lexicalDiscount`、`dominanceStage` 以及结果的 `fusion.lexicalDominance` 显示触发来源和实际系数；被过滤条目不能继续施加折减。
+
+**守卫**：`tests/hybrid-recall.test.mjs` 覆盖精确公式、连续底线和折叠证据；`tests/managed-memory.test.mjs` 覆盖真实 BM25 样板/语料变化、QQ 包装、披露过滤、同 ID 和双层排序；真实数据只在临时副本上回放。启发式仍不能保证所有语言与任意样板的语义理解；稀疏语料中接近触发下限的词法领先者，仍可能被强度/首因/峰终偏置反超。测试里的同龄条目使用一致时间戳，避免机器负载改变末尾加成；这不是取消现行偏置，也不是该排序限制已被修复。相关度与偏置边界需后续独立评测。
+
+### 3.38 recall 精确 id 正文分页与显式数量
+
+关键词搜索返回短片段并标出截断状态；精确 id 或唯一前缀默认读取脱敏正文页，`view=snippet` 可保留片段。`limitChars` 为 1–8000 码点、默认 2000；续页 `offset>0` 必须带正文 SHA256 `revision`，修改后报 `MEMORY_CHANGED`，越界与合法空页分开。私有 `libraryId` 只能来自允许库集合，不能用于任意定向搜索；归档/被替代状态不开放，全局维持原有自动/领域资格。
+
+显式搜索 `topK` 限 1–20 行，日期/实体/冲突意图只扩候选；冲突另一版以来源关系指针表示，不能静默多返回正文。自动调用按设置限制事实组数，近期 scope/library/id 与内容版本在相关度筛选后、MMR前排除；冲突整体打包，预算不足不输出单边确定事实，原 token 预算不变。`tests/tools.test.mjs`、`tests/snippet.test.mjs`、`tests/recall-intent.test.mjs`、`tests/inject-conflict.test.mjs` 校验读取、码点、版本、来源和行数。
+
+### 3.39 worker 准备、完整包计量与未知 usage
+
+种子 API 与 compactSeed 仅属于 fork 分支；worker 用无种子创建，不因缺 buildForkSeed 被提前拒绝。两路 cwd 必须为目录，失效时选择插件数据目录，恢复句柄的死 cwd 则退役换新，仍不改宿主权限。
+
+`measurementVersion=2` 计入真正 followup 文本及分隔符、收尾包、助手正文、JSON 工具参数与 PTC 顶层结果；按 session/event/call 身份避免重放计量。完整包不符合既有字符预算时最多重建一次，首包仍超限明确 `packet-too-large` 保持 pending；旧计量 epoch 下次 acquire 保守退役。
+
+`assistant/message.data.usage.inputTokens` 是非缓存输入，缓存读写单列；总输入仅在三项都已知时相加，推理不重复加入输出。任一请求缺字段时汇总保留 null；参数无法序列化时计量告警且估算值保留未知。估算 token 使用 budget.estTokens，只报告估算，不改默认字符/窗口/TTL 上限或宣称费用节省。`getConsolidationFeed` 只返回精简数值，不返回参数或包正文。
+
+守卫：`tests/consolidation-fork.test.mjs`、`tests/worker-lifecycle.test.mjs`、`tests/consolidation-feed.test.mjs` 覆盖依赖分支、目录、恢复/退役、完整包、超限、JSON/PTC、usage 与迟到事件；真实服务商和成本对照仍需单独验证。
+
+### 3.40 整理达到输出 token 上限
+
+生产整理不会使用性能脚本的 1200/4096 测试上限。继承模式使用父会话当前显式的 `maxTokens`（路由一致时不被旧请求 header 的预算压住），否则保留最近已生效请求的预算；未提供时由宿主 `resolveModelInfo.defaultMaxTokens` 或 SDK 默认决定。这不是模型最大输出能力，宿主配置尚未生效到父会话时也不能把新默认当成已生效额度。不能因为某次测试不足就静默提高用户额度。插件的 `medium` 设置也不等于直接 API 未指定档位时的模型默认思考；模型不支持该档时仍走拒绝学习与降档。
+
+宿主将输出截断映射为 `turn/end.reason.kind=max-tokens`，该响应里的工具不会执行。插件返回 `model-output-limit`，保留 pending，不推进已检查游标；失败 worker 保守退役。错误提示需调整宿主输出预算或选择模型支持的思考档，也可能涉及剩余上下文。已落库的部分写入不撤回，但不能据此结算整窗。持久 worker 的公开 AgentOptions 与新窗口要求不一致时，在等到 idle、补齐迟到计量后换新并交接，不能继续沿用旧实例的输出额度。
+
+同配置连续失败仍按上限暂停，防止无休止付费。输出失败保存不含凭据的执行指纹；输出上限、路由或思考配置改变后，下次允许检查时恢复同快照的受控重试；暂时读不到模型元数据不能伪装成配置改变，不把暂停标成已结算。缺指纹的旧输出失败只获得一次建立新指纹的机会；无法公开观测的上游变化仍可显式手动重试。守卫位于 `tests/consolidation-fork.test.mjs` 与 `tests/consolidation-ledger.test.mjs`，覆盖 fork/worker pending、无变更暂停、父输出限制及宿主默认限制变化后的恢复。

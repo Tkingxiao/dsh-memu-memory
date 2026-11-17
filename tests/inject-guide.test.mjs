@@ -9,7 +9,9 @@ import path from 'node:path'
 // plugin section; rulesKey decides when the message must be replaced or restored.
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-memory-guide-'))
+process.env.DSH_HOME = home
 process.env.DSH_MEMU_HOME = home
+process.env.DSH_MEMU_MEMORY_HOME = home
 
 const state = await import('../lib/state.js')
 const inject = await import('../lib/inject.js')
@@ -44,7 +46,17 @@ function mountGuide() {
     ctx,
     logger,
     entries,
-    run(payload, decision) { return pre.fn(payload, async () => decision) },
+    async run(payload, decision) {
+      const out = await pre.fn(payload, async () => decision)
+      const handler = entries.find(entry => entry.event === 'session/event')
+      const history = payload.agent.session.messages ||= []
+      for (const message of out?.messages || []) {
+        if (history.some(item => item.id === message.id)) continue
+        history.push(message)
+        if (message.role === 'user') await handler.fn(payload.agent.session, { type: 'user/message', data: message })
+      }
+      return out
+    },
     async compact(sessionId) {
       const handler = entries.find((entry) => entry.event === 'session/event')
       assert.ok(handler, 'registerInjection must listen for compaction events')

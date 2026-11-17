@@ -72,6 +72,32 @@ test('getActivityLog decorates consolidation rows with session title and library
   assert.equal(row.libraryName, '第二个工作区')
 })
 
+test('the feed exposes bounded metering without pretending missing cached usage is zero', async () => {
+  resetActivityLogCache()
+  clearEvents()
+  record({ kind: 'consolidate', ok: true, message: 'metered worker', detail: { runner: 'worker', measurement: {
+    schemaVersion: 2, measurementVersion: 2,
+    packet: { kind: 'increment', inputChars: 120, estimatedTokens: 40, text: 'private packet must not escape' },
+    dispatched: { inputChars: 120, estimatedTokens: 40, followups: 1 },
+    observed: { outputTextChars: 20, toolArgumentsChars: 10, toolResultsChars: 0, reasoningChars: null },
+    usage: { inputTokens: 10, cacheReadTokens: 20, cacheWriteTokens: 0, outputTokens: 5, reasoningTokens: null, requests: 1, source: 'assistant/message.data.usage' },
+  } } })
+  let feed = await dispatch(ctx, 'getConsolidationFeed')
+  const result = feed.successes[0]
+  assert.equal(result.runner, 'worker')
+  assert.equal(result.measurement.packet.text, undefined)
+  assert.equal(result.measurement.packet.inputChars, 120)
+  assert.equal(result.measurement.usage.totalInputTokens, 30)
+  assert.equal(result.measurement.usage.reasoningTokens, null)
+  assert.equal(result.measurement.dispatched.wrapupChars, null)
+  clearEvents()
+  record({ kind: 'consolidate', ok: true, message: 'partial usage', detail: { runner: 'fork', measurement: { schemaVersion: 2, usage: { inputTokens: 10 }, packet: null } } })
+  feed = await dispatch(ctx, 'getConsolidationFeed')
+  assert.equal(feed.successes[0].measurement.usage.cacheReadTokens, null)
+  assert.equal(feed.successes[0].measurement.usage.totalInputTokens, null)
+  assert.equal(feed.successes[0].measurement.usage.source, 'unavailable')
+})
+
 test('clearConsolidationFailures deletes only failed consolidate rows, everything else stays', async () => {
   const library = state.createLibrary({ cwd: path.join(home, 'feed-clear'), name: '清除测试区' })
   resetActivityLogCache()

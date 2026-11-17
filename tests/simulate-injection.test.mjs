@@ -24,14 +24,14 @@ test.after(() => {
 })
 
 test('the simulator measures what the injection pipeline put in each request', () => {
-  const out = path.join(home, 'run-6')
-  const summary = JSON.parse(run(['--turns', '6', '--json', '--out', out, '--home', path.join(home, 'home-6')]))
+  const out = path.join(home, 'run-18')
+  const summary = JSON.parse(run(['--turns', '18', '--json', '--out', out, '--home', path.join(home, 'home-18')]))
 
-  assert.equal(summary.turns, 6)
+  assert.equal(summary.turns, 18)
   assert.equal(summary.warnCount, 0, 'a warn means the pipeline itself complained: that is a failure, not noise')
   assert.equal(summary.sendFailures, 0)
   // 规则 guide 只在首回合投放一次，靠的就是"转录里带着之前发过的插件消息"。
-  // 若驱动把历史丢掉，这里会变成 6 而不是 1。
+  // 若驱动把历史丢掉，这里会变成 18 而不是 1。
   assert.equal(summary.deltaTotals.guide, 1, 'the rules guide is placed once, not per turn')
   assert.equal(summary.deltaTotals.anchor, 1, 'the anchor lands on the first turn only')
   assert.ok(summary.deltaTotals.context >= 1, 'per-turn recall title cards are counted')

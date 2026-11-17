@@ -7,7 +7,9 @@ import crypto from 'node:crypto'
 import sharp from 'sharp'
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-memory-inbound-'))
+process.env.DSH_HOME = home
 process.env.DSH_MEMU_HOME = home
+process.env.DSH_MEMU_MEMORY_HOME = home
 const state = await import('../lib/state.js')
 const inbound = await import('../lib/inbound.js')
 const inject = await import('../lib/inject.js')
@@ -32,8 +34,20 @@ function result(callId, value, meta) {
   return { type: 'tool/result', data: { turn: 1, step: 2, message: { role: 'tool', source: { kind: 'tool', callId }, toolCallId: callId,
     content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] }, ...(meta ? { meta } : {}) } }
 }
+const admissionHandlers = new Map()
+inject.registerInjection({ on: (name, handler) => { admissionHandlers.set(name, handler); return () => {} }, logger: { warn() {} } })
+async function accept(f, out) {
+  const history = f.session.messages ||= []
+  for (const message of out.messages || []) {
+    if (history.some(item => item.id === message.id)) continue
+    history.push(message)
+    if (message.role === 'user') await admissionHandlers.get('session/event')(f.session, { type: 'user/message', data: message })
+  }
+  return out
+}
 async function continueStep(f, step = 2, options = {}) {
-  return inject.injectForStep({ agent: f.agent, decision: { kind: 'enter', messages: [] }, turn: 1, step, ...options })
+  const out = await inject.injectForStep({ agent: f.agent, decision: { kind: 'enter', messages: [] }, turn: 1, step, ...options })
+  return accept(f, out)
 }
 function textOf(decision) { return decision.messages.flatMap(message => message.content || []).map(block => block.text || '').join('\n') }
 async function saved(f, title = '部署脚本') {
@@ -155,7 +169,7 @@ test('real user inbox messages admitted on a later step work without a tool adap
   const entry = await saved(f)
   const user = { id: 'late-user', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '部署脚本在哪里' }] }
   const decision = { kind: 'enter', messages: [user] }
-  const out = await inject.injectForStep({ agent: f.agent, turn: 1, step: 7, decision })
+  const out = await accept(f, await inject.injectForStep({ agent: f.agent, turn: 1, step: 7, decision }))
   assert.equal(out.messages[0], user, 'do not rewrite or disguise the producer message')
   assert.ok(textOf(out).includes(entry.id))
   const again = await inject.injectForStep({ agent: f.agent, turn: 1, step: 8, decision })
@@ -225,7 +239,8 @@ test('disabled memory does not capture image bytes or inject on continuation ste
   } }] }) })
   assert.deepEqual((await continueStep(f, 2, { ctx })).messages, [])
   assert.equal(reads, 0)
-  assert.equal(state.getSessionBinding(f.id).inbound.pending.length, 0)
+  assert.equal(state.getSessionBinding(f.id).inbound.pending.length, 1, 'disabled memory is not Native input acceptance')
+  assert.deepEqual(f.session.messages, [], 'nothing entered history')
 })
 
 test('retrieval errors stay fail-open, preserve the batch and use a retry delay', async () => {
@@ -300,7 +315,8 @@ test('messages received during media draining stay queued for the next admission
   await first
   assert.deepEqual(state.getSessionBinding(f.id).inbound.pending.map(item => item.id), ['later-text'])
   await continueStep(f, 3, { ctx })
-  assert.equal(state.getSessionBinding(f.id).inbound.pending.length, 0)
+  assert.equal(state.getSessionBinding(f.id).inbound.pending.length, 1, 'no-match is not evidence of input acceptance')
+  assert.ok(!f.session.messages.some(message => message.source?.kind === 'user' && message.id === 'later-text'))
 })
 
 test('restored pending batches drain on a first step even with no native user message', async () => {
@@ -393,4 +409,33 @@ test('switching libraries while image collection waits cannot publish old-batch 
   assert.ok(!(state.getSessionBinding(f.id).pendingMedia || []).some(item => item.sourceAttachmentId === ref.attachmentId))
   assert.deepEqual((await continueStep(f, 3, { ctx })).messages, [])
   assert.equal(state.getSessionBinding(f.id).lastInboundOutcome.reason, 'scope')
+})
+
+test('no-match handling waits for exact Native human admission rather than clearing a proposed inbox', async () => {
+  const f = fixture('no-match-native')
+  state.setSessionBinding(f.id, { useGlobal: false })
+  const human = { id: 'empty-match', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'nothing matches this empty library' }] }
+  const decision = { kind: 'enter', messages: [human] }
+  const out = await inject.injectForStep({ agent: f.agent, turn: 1, step: 2, decision })
+  assert.equal(out, decision)
+  assert.equal(state.getSessionBinding(f.id).inbound.pending.length, 1)
+  assert.deepEqual(f.session.messages || [], [], 'a returned enter decision is not history')
+  inbound.noteNativeUserMessages(f.id, [human])
+  assert.equal(state.getSessionBinding(f.id).inbound.pending.length, 1, 'no admission flag is not proof')
+  await accept(f, out)
+  assert.equal(state.getSessionBinding(f.id).inbound.pending.length, 0, 'the actual append notification acknowledges no-match input')
+})
+
+test('unaccepted external no-match batches stay queued and retries do not move their logical clock', async () => {
+  const f = fixture('no-match-external')
+  state.setSessionBinding(f.id, { useGlobal: false })
+  inbound.ingestInboundBatch({ sessionId: f.id, batch: batch('unmatched-external', 'nothing matches this empty library') })
+  const out = await continueStep(f, 2)
+  assert.deepEqual(out.messages, [])
+  assert.deepEqual(f.session.messages, [])
+  const before = state.getSessionBinding(f.id)
+  assert.equal(before.inbound.pending.length, 1)
+  await continueStep(f, 3)
+  assert.equal(state.getSessionBinding(f.id).inbound.pending.length, 1)
+  assert.equal(state.getSessionBinding(f.id).inbound.clock, before.inbound.clock)
 })

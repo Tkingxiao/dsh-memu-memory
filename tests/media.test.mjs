@@ -39,7 +39,7 @@ test('three image events store one verified blob and hint at a habit, not an aut
 
 test('image-only turns retrieve a saved image and expose the image count in status', async () => {
   const saved = await memory.privateRemember({ exec, title: '生日照片', content: '上次生日的一张照片。', attachments: [{ sha256: sha }], layer: 'long_term' })
-  const message = { role: 'user', ...event(4).data }
+  const message = { id: 'image-only-native-user', role: 'user', ...event(4).data }
   const decision = await inject.injectForStep({ agent: exec.agent, decision: { kind: 'enter', messages: [message] }, turn: 2, step: 1 })
   assert.ok(decision.messages.length > 1)
   assert.ok(decision.messages[0].content[0].text.includes(saved.id))

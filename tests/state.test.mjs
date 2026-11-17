@@ -27,14 +27,19 @@ test('different cwd gets a different library', () => {
   assert.notEqual(a.libraryId, b.libraryId)
 })
 
-test('a new memory binding defaults its domain selection to RP, and an explicit choice sticks', () => {
+test('an unasked binding follows detectDomain for its domain, and an explicit choice sticks', () => {
   const cwd = path.join(home, 'project-domain-default')
   const binding = state.ensureSession('state-domain-default', { cwd, agentPreset: 'coding' })
   assert.equal(binding.domain, 'coding', 'the detected domain stays as metadata')
-  assert.equal(binding.domainOverride, 'rp', 'the selector starts on RP')
-  state.setSessionBinding('state-domain-default', { domainOverride: 'general' })
+  // issue #2: the old hard `rp` fallback silently put every unasked conversation
+  // on the RP track; the fallback now follows the same detectDomain rule as the
+  // `domain` metadata, and `domainSource` marks that nobody chose it yet.
+  assert.equal(binding.domainOverride, 'coding', 'the unasked fallback follows detectDomain, not a hard rp')
+  assert.equal(binding.domainSource, 'auto', 'the fallback is implicit until someone answers')
+  state.setSessionBinding('state-domain-default', { domainOverride: 'general', domainSource: 'chosen' })
   const rebound = state.ensureSession('state-domain-default', { cwd, agentPreset: 'coding' })
   assert.equal(rebound.domainOverride, 'general', 'general is a real explicit choice')
+  assert.equal(rebound.domainSource, 'chosen', 'an explicit answer is remembered as chosen')
 })
 
 test('deleting a session binding keeps the library', () => {

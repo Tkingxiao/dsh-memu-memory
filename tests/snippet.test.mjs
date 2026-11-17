@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-const { queryTerms, firstHit, centeredSnippet } = await import('../lib/snippet.js')
+const { queryTerms, firstHit, centeredSnippet, centeredSnippetWindow } = await import('../lib/snippet.js')
 
 test('query terms drop noise and keep the long phrase as a fallback', () => {
   const terms = queryTerms('where a is the deploy key?')
@@ -44,4 +44,36 @@ test('firstHit is case-insensitive and picks the earliest term', () => {
   const terms = queryTerms('Vault Ops')
   assert.equal(firstHit('the vault was rotated', terms), 4)
   assert.equal(firstHit('nothing here', terms), -1)
+})
+
+test('160 is whole but 161 has explicit truncation and a strict 160-codepoint payload', () => {
+  const whole = centeredSnippetWindow('甲'.repeat(160), 'missing')
+  assert.equal(whole.body, '甲'.repeat(160))
+  assert.deepEqual([whole.start, whole.end, whole.returnedChars, whole.totalChars, whole.truncated], [0, 160, 160, 160, false])
+  const clipped = centeredSnippetWindow('甲'.repeat(161), 'missing')
+  assert.equal(clipped.body, '甲'.repeat(160) + '…')
+  assert.deepEqual([clipped.start, clipped.end, clipped.returnedChars, clipped.totalChars, clipped.truncated], [0, 160, 160, 161, true])
+})
+
+test('snippet windows count emoji as codepoints and never cut surrogate pairs', () => {
+  const body = '😀'.repeat(200) + '部署条件' + '🚀'.repeat(200)
+  const snippet = centeredSnippetWindow(body, '部署条件')
+  assert.equal(snippet.start, 160)
+  assert.equal(snippet.end, 320)
+  assert.equal(snippet.returnedChars, 160)
+  assert.equal(snippet.totalChars, 404)
+  assert.equal(snippet.truncated, true)
+  assert.equal(snippet.body, '…' + Array.from(body).slice(160, 320).join('') + '…')
+  assert.equal(snippet.body.isWellFormed(), true)
+  const head = centeredSnippet('😀'.repeat(169), 'missing')
+  assert.equal(head, '😀'.repeat(160) + '…')
+  assert.equal(Array.from(head).length, 161)
+})
+
+test('short Unicode text and empty windows report exact payload counts without ellipses', () => {
+  const body = '😀尾部🚀'
+  assert.equal(centeredSnippet(body, ''), body)
+  const snippet = centeredSnippetWindow(body, '')
+  assert.deepEqual([snippet.returnedChars, snippet.totalChars, snippet.truncated], [4, 4, false])
+  assert.deepEqual(centeredSnippetWindow('', ''), { body: '', start: 0, end: 0, returnedChars: 0, totalChars: 0, truncated: false })
 })

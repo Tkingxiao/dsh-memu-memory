@@ -19,8 +19,8 @@ function handler(rejection) {
   assert.deepEqual(routes.map(route => route.path), ['/dsh-memu-memory', '/dsh-memu'])
   return routes[0].handler
 }
-async function request(url, method = 'GET', body, rejection) {
-  const req = { method, url, async *[Symbol.asyncIterator]() { if (body) yield Buffer.from(JSON.stringify(body)) } }
+async function request(url, method = 'GET', body, rejection, headers = {}) {
+  const req = { method, url, headers, async *[Symbol.asyncIterator]() { if (body) yield Buffer.from(JSON.stringify(body)) } }
   const res = { status: 0, headers: {}, body: '', writeHead(code, headers) { this.status = code; this.headers = headers || {} }, end(data) { this.body = data ? String(data) : '' } }
   await handler(rejection)(req, res)
   return res
@@ -46,6 +46,20 @@ test('standalone settings load the exact client component with local React asset
     assert.equal((await request('/dsh-memu-memory/ui-assets/' + name, 'GET', null, 401)).status, 401)
   }
   assert.equal((await request('/dsh-memu-memory/ui-assets/../../../state.json')).status, 405)
+})
+test('ui assets revalidate with ETag instead of reshipping the bundle', async () => {
+  // 首屏四个脚本约 800KB；no-cache 无校验器会每次全量重传。命中 If-None-Match
+  // 必须回 304 空体，过期校验器仍回完整内容。
+  const first = await request('/dsh-memu-memory/ui-assets/client.js')
+  assert.equal(first.status, 200)
+  assert.ok(first.headers.ETag, 'assets carry a validator')
+  assert.equal(first.headers['Cache-Control'], 'no-cache')
+  const again = await request('/dsh-memu-memory/ui-assets/client.js', 'GET', null, undefined, { 'if-none-match': first.headers.ETag })
+  assert.equal(again.status, 304)
+  assert.equal(again.body, '')
+  const stale = await request('/dsh-memu-memory/ui-assets/client.js', 'GET', null, undefined, { 'if-none-match': '"stale"' })
+  assert.equal(stale.status, 200)
+  assert.equal(stale.body, first.body)
 })
 test('all standalone scripts parse and neither shell defines a second settings editor', () => {
   const wall = webUiHtml()

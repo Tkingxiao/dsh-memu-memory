@@ -361,6 +361,61 @@ test('the sidebar context-scope card cannot be flex-shrunk and keeps a two-colum
   assert.match(src, /\.dshm-scope-form\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/, 'four scope fields must wrap into two readable columns')
 })
 
+test('consolidation alerts keep identity separate from actions when expanded', async () => {
+  const ctx = fakeCtx()
+  globalThis.__dshMemuExports.apply(ctx)
+  const tab = registrations.filter((r) => r.slot === 'sidebar.right.pane.tab').pop()
+  const wrapped = tab.component({ ctx, t: (key) => key, sessionId: 'probe-session' })
+  const first = await renderPage(wrapped.type, wrapped.props, undefined, { remount: true })
+  for (const effect of first.effects) effect.fn()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const sidebar = (await renderPage(wrapped.type, wrapped.props)).tree
+  let alerts
+  walkNodes(sidebar, (node) => {
+    if (node.type?.name === 'ConsolidationAlerts') { alerts = node.type; return false }
+  })
+  assert.ok(alerts)
+  const failure = { id: 'failure', sessionId: 's1', sessionTitle: 'A long conversation title', message: 'An unbroken failure message'.repeat(12), at: '2026-11-17T16:59:33Z' }
+  const success = { ...failure, id: 'success', message: 'done' }
+  const jumps = []
+  let cleared = 0
+  const props = { feed: { failures: [failure], successes: [success] }, t: (key) => key, onJump: row => jumps.push(row.id), onClear: () => cleared++ }
+  const nodes = (tree, className) => {
+    const found = []
+    walkNodes(tree, node => { if (node.props?.className === className) found.push(node) })
+    return found
+  }
+  let tree = (await renderPage(alerts, props, undefined, { remount: true })).tree
+  assert.equal(nodes(tree, 'dshm-consolidation-row').length, 1)
+  nodes(tree, 'dshm-consolidation-head')[0].props.onClick()
+  tree = (await renderPage(alerts, props)).tree
+  assert.equal(nodes(tree, 'dshm-consolidation-column').length, 2)
+  const rows = nodes(tree, 'dshm-consolidation-row')
+  assert.equal(rows.length, 2)
+  for (const row of rows) {
+    assert.equal(row.props.children[0].props.className, 'dshm-consolidation-identity')
+    assert.equal(row.props.children[1].props.className, 'dshm-consolidation-meta')
+    assert.equal(nodes(row, 'dshm-consolidation-label')[0].props.title, failure.sessionTitle)
+    assert.equal(nodes(row, 'dshm-consolidation-time').length, 1)
+  }
+  const buttons = []
+  walkNodes(tree, node => { if (node.type === 'button') buttons.push(node) })
+  buttons.find(node => node.props.title === 'consolidateJumpHint').props.onClick()
+  buttons.find(node => node.props.title === 'consolidateClearHint').props.onClick()
+  assert.deepEqual(jumps, ['failure'])
+  assert.equal(cleared, 1)
+  assert.ok(!treeText(tree).includes('consolidateStarted'))
+})
+
+test('consolidation alert columns wrap before their controls must be clipped', () => {
+  const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(src, /\.dshm-consolidation-columns\{[^}]*grid-template-columns:repeat\(auto-fit,minmax\(min\(100%,240px\),1fr\)\)/)
+  assert.match(src, /\.dshm-consolidation-meta\{[^}]*flex-wrap:wrap/)
+  assert.match(src, /\.dshm-consolidation-column-head\{[^}]*flex-wrap:wrap/)
+  assert.match(src, /\.dshm-consolidation-label\{[^}]*text-overflow:ellipsis/)
+  assert.doesNotMatch(src, /\.dshm-consolidation-row\{[^}]*overflow:hidden/)
+})
+
 test('the memory UI renders the read-only arousal/dominance/emotionSource line', () => {
   const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   for (const key of ['arousalLabel', 'dominanceLabel', 'emotionSourceLabel', 'emotionSourceModel', 'emotionSourceSession', 'emotionSourceContent', 'emotionSourceUnknown']) {
@@ -487,6 +542,158 @@ test('the memory browser badges what a memory is allowed to say', async () => {
     RPC_ANSWERS.getSettingsState = originalSettingsState
     RPC_ANSWERS.listLibraries = originalLibraries
     delete RPC_ANSWERS.browseLibrary
+  }
+})
+
+test('the memory browser decides pending reviews in place', async () => {
+  // 待复核条目在浏览页的复核池里就有接受/丢弃按钮，不必绕去全局页队列；
+  // 点击走的是同一个 resolveReview RPC，带本库 libraryId。
+  const rpcCalls = []
+  const ctx = fakeCtx({ rpcCalls })
+  const originalGetState = RPC_ANSWERS.getState
+  const originalSettingsState = RPC_ANSWERS.getSettingsState
+  const loaded = {
+    ...EMPTY_STATE,
+    libraries: [{ id: 'lib-1', name: 'demo', scopeKey: '/proj/demo', privateCount: 1 }],
+  }
+  RPC_ANSWERS.getState = loaded
+  RPC_ANSWERS.getSettingsState = loaded
+  RPC_ANSWERS.browseLibrary = {
+    source: 'engine',
+    files: [
+      { id: 'mem-pending', title: 'pending fact', content: 'awaiting a human', layer: 'long_term', status: 'pending_review', decay: 0.5, disclosure: 'can_tell', visibility: 'shared' },
+      { id: 'mem-active', title: 'settled fact', content: 'already true', layer: 'long_term', status: 'active', decay: 0.9, disclosure: 'can_tell', visibility: 'shared' },
+    ],
+  }
+  RPC_ANSWERS.resolveReview = { id: 'mem-pending', status: 'active', resolution: 'replace' }
+  RPC_ANSWERS.listReviews = { items: [] }
+  try {
+    globalThis.__dshMemuExports.apply(ctx)
+    const settings = registrations.filter((r) => r.slot === 'settings.section').pop()
+    const first = await renderPage(settings.component, { ctx, t: (key) => key }, undefined, { remount: true })
+    collectPageHook()
+    for (const effect of first.effects) effect.fn()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    let tree = (await renderPage(settings.component, { ctx, t: (key) => key }, 5)).tree
+    const picker = []
+    walkNodes(tree, (node) => {
+      const options = Array.isArray(node.props?.children) ? node.props.children : []
+      if (node.type === 'select' && options.some((option) => option?.props?.value === 'lib-1')) picker.push(node)
+    })
+    picker[0].props.onChange({ target: { value: 'lib-1' } })
+    tree = (await renderPage(settings.component, { ctx, t: (key) => key }, 5)).tree
+    const reload = []
+    walkNodes(tree, (node) => {
+      if (typeof node.type === 'function' && node.props?.children === 'reload') reload.push(node)
+    })
+    reload[0].props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // 切到复核池：页签文案是 poolReview + 计数。
+    tree = (await renderPage(settings.component, { ctx, t: (key) => key }, 5)).tree
+    const reviewTab = []
+    walkNodes(tree, (node) => {
+      if (node.type === 'button' && String(node.props?.children || '').startsWith('poolReview')) reviewTab.push(node)
+    })
+    assert.equal(reviewTab.length, 1, 'the review pool tab did not render')
+    reviewTab[0].props.onClick()
+    tree = (await renderPage(settings.component, { ctx, t: (key) => key }, 5)).tree
+    const buttons = []
+    walkNodes(tree, (node) => {
+      if (typeof node.type === 'function' && (node.props?.children === 'accept' || node.props?.children === 'reject')) buttons.push(node)
+    })
+    assert.equal(buttons.length, 2, 'the pending row offers exactly accept and reject')
+    const accept = buttons.find((node) => node.props.children === 'accept')
+    accept.props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const resolved = rpcCalls.filter((call) => call.endpoint === 'resolveReview')
+    assert.equal(resolved.length, 1, 'accept fires exactly one resolveReview')
+    assert.equal(resolved[0].payload.id, 'mem-pending')
+    assert.equal(resolved[0].payload.libraryId, 'lib-1')
+    assert.equal(resolved[0].payload.action, 'accept')
+  } finally {
+    RPC_ANSWERS.getState = originalGetState
+    RPC_ANSWERS.getSettingsState = originalSettingsState
+    delete RPC_ANSWERS.browseLibrary
+    delete RPC_ANSWERS.resolveReview
+    delete RPC_ANSWERS.listReviews
+  }
+})
+
+test('the memory wall drawer decides pending reviews without leaving the wall', async () => {
+  const rpcCalls = []
+  const ctx = fakeCtx({ rpcCalls })
+  const originalGetState = RPC_ANSWERS.getState
+  const originalSettingsState = RPC_ANSWERS.getSettingsState
+  const loaded = {
+    ...EMPTY_STATE,
+    libraries: [{ id: 'lib-1', name: 'demo', scopeKey: '/proj/demo', privateCount: 1 }],
+  }
+  RPC_ANSWERS.getState = loaded
+  RPC_ANSWERS.getSettingsState = loaded
+  RPC_ANSWERS.browseWall = {
+    total: 1,
+    items: [{ id: 'mem-pending', libraryId: 'lib-1', libraryName: 'demo', title: 'pending fact', preview: 'awaiting a human', layer: 'long_term', status: 'pending_review', source: 'inferred', decay: 0.5, tags: [] }],
+  }
+  RPC_ANSWERS.getMemory = { id: 'mem-pending', libraryId: 'lib-1', entry: { title: 'pending fact', content: 'awaiting a human', status: 'pending_review', layer: 'long_term', disclosure: 'can_tell' }, attachments: [] }
+  RPC_ANSWERS.resolveReview = { id: 'mem-pending', status: 'active', resolution: 'replace' }
+  try {
+    globalThis.__dshMemuExports.apply(ctx)
+    const settings = registrations.filter((r) => r.slot === 'settings.section').pop()
+    const first = await renderPage(settings.component, { ctx, t: (key) => key }, undefined, { remount: true })
+    collectPageHook()
+    for (const effect of first.effects) effect.fn()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    let tree = (await renderPage(settings.component, { ctx, t: (key) => key }, 9)).tree
+    // 墙的数据加载在 MemoryWallPanel 自己的 effect 里：展开子组件登记 effect 再执行。
+    treeText(tree)
+    for (const effect of effects) effect.fn()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    tree = (await renderPage(settings.component, { ctx, t: (key) => key }, 9)).tree
+    // 墙默认看活跃池；待复核条目在复核池，先切池再找卡片。
+    const poolTab = []
+    walkNodes(tree, (node) => {
+      if (node.type === 'button' && String(node.props?.children || '').startsWith('poolReview')) poolTab.push(node)
+    })
+    assert.equal(poolTab.length, 1, 'the wall review pool tab did not render')
+    poolTab[0].props.onClick()
+    tree = (await renderPage(settings.component, { ctx, t: (key) => key }, 9)).tree
+    const cards = []
+    walkNodes(tree, (node) => {
+      if (node.type === 'button' && String(node.props?.className || '').includes('dshm-wall-item')) cards.push(node)
+    })
+    assert.equal(cards.length, 1, 'the pending card did not render on the wall')
+    cards[0].props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    tree = (await renderPage(settings.component, { ctx, t: (key) => key }, 9)).tree
+    const buttons = []
+    walkNodes(tree, (node) => {
+      if (typeof node.type === 'function' && (node.props?.children === 'accept' || node.props?.children === 'reject')) buttons.push(node)
+    })
+    assert.equal(buttons.length, 2, 'the drawer offers accept and reject for a pending review')
+    buttons.find((node) => node.props.children === 'reject').props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const resolved = rpcCalls.filter((call) => call.endpoint === 'resolveReview')
+    assert.equal(resolved.length, 1, 'reject fires exactly one resolveReview')
+    assert.equal(resolved[0].payload.id, 'mem-pending')
+    assert.equal(resolved[0].payload.libraryId, 'lib-1')
+    assert.equal(resolved[0].payload.action, 'reject')
+  } finally {
+    RPC_ANSWERS.getState = originalGetState
+    RPC_ANSWERS.getSettingsState = originalSettingsState
+    delete RPC_ANSWERS.browseWall
+    delete RPC_ANSWERS.getMemory
+    delete RPC_ANSWERS.resolveReview
   }
 })
 

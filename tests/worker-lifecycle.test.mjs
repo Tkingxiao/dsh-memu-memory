@@ -5,6 +5,8 @@ import os from 'node:os'
 import path from 'node:path'
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-worker-lifecycle-'))
+process.env.DSH_HOME = home
+fs.mkdirSync(path.join(home, 'proj'))
 process.env.DSH_MEMU_HOME = home
 process.env.DSH_MEMU_MEMORY_HOME = home
 
@@ -100,40 +102,52 @@ function host({
   delayTurn = false,
   headerTools = null,
   parentOptions = true,
+  cwd = path.join(home, 'proj'),
+  childCtxFactory = null,
+  childEvents = [],
+  usage = null,
+  wrapupThrows = false,
 } = {}) {
   const rec = {
     liveFollowups: [], created: [], forkFollowups: [], disposed: [], resumed: [],
-    sessionHandlers: [],
+    sessionHandlers: [], childEvents: [],
   }
+  const headers = new Map()
   const registry = new Map() // 进程内 agent 注册表：agents.get 只查这里
   // delayTurnMode=true 时 followup 不立即发回合事件，而是把回合挂起（whenIdle 等待），
   // 直到 ctx.completeTurn() 才落地——真实模拟"超时后上一回合还在跑"的时序（A1）。
   let delayTurnMode = delayTurn
-  let childSeq = 0
+  let childSeq = 900
+  let childTurn = 0
+  const emit = (session, event) => {
+    event = { ...event, seq: event.seq ?? ++childSeq }
+    rec.childEvents.push({ session, event })
+    for (const handler of [...rec.sessionHandlers]) handler(session, event)
+  }
   const transcript = [...wrappedTurn(0)]
 
-  const makeRecord = (id) => {
-    const childSession = { id } // 宿主语义：handle.agent.session 与 session/event 的 session 是同一个对象
+  const makeRecord = (id, agentOptions = null) => {
+    const childSession = { id, header: headers.get(id) || { cwd } } // stable host session identity
     let pending = null // 在跑回合：{ promise, finish }
     const emitTurn = () => {
-      childSeq += 1
+      childTurn += 1
       const child = state.getSessionBinding(id)
       const fromSeq = Number.isSafeInteger(child?.snapshotFromSeq) ? child.snapshotFromSeq : 0
       const throughSeq = Number.isSafeInteger(child?.snapshotThroughSeq) ? child.snapshotThroughSeq : 6
       const text = turnReason?.kind === 'completed' ? receiptFence({ fromSeq, throughSeq }, child || {}) : ''
-      for (const handler of rec.sessionHandlers) {
-        if (text) handler(childSession, { type: 'assistant/message', seq: 900 + childSeq, data: { message: { content: [{ type: 'text', text }] } } })
-      }
-      for (const handler of rec.sessionHandlers) {
-        handler(childSession, { type: 'turn/end', seq: 901 + childSeq, data: { turn: childSeq, reason: turnReason } })
-      }
+      for (const event of typeof childEvents === 'function' ? childEvents({ child, childSession }) : childEvents) emit(childSession, event)
+      if (text) emit(childSession, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text }] }, ...(usage ? { usage } : {}) } })
+      emit(childSession, { type: 'turn/end', data: { turn: childTurn, reason: turnReason } })
     }
     return {
       agent: {
+        ...(agentOptions ? { options: structuredClone(agentOptions) } : {}),
         session: childSession,
+        ctx: childCtxFactory?.(),
         followup: (message) => {
+          if (wrapupThrows && message?.source?.summary === '整理收尾提示') throw new Error('wrapup queue rejected')
           rec.forkFollowups.push({ child: id, message })
-          if (!emitTurnEnd) return
+          if (message?.source?.summary === '整理收尾提示' || !emitTurnEnd) return
           if (delayTurnMode) {
             let resolve
             const promise = new Promise((r) => { resolve = r })
@@ -161,7 +175,7 @@ function host({
     : null
 
   const ctx = {
-    rec,
+    rec, emit,
     restart: () => registry.clear(),
     on: (name, handler) => {
       if (name !== 'session/event') return () => {}
@@ -189,7 +203,8 @@ function host({
               throw new Error('session "' + spec.sessionId + '" already exists')
             }
             rec.created.push(spec)
-            const record = makeRecord(spec.sessionId)
+            headers.set(spec.sessionId, { cwd: spec.meta?.cwd || cwd })
+            const record = makeRecord(spec.sessionId, spec.agentOptions)
             registry.set(spec.sessionId, record)
             return record
           },
@@ -211,7 +226,9 @@ function host({
       }
       if (name === 'sessionQuery') {
         return {
-          readSession: async () => ({ events: [...transcript], session: { cwd: path.join(home, 'proj'), agentPreset: 'coding' } }),
+          readSession: async (id) => headers.has(id)
+            ? { events: rec.childEvents.filter(row => row.session.id === id).map(row => row.event), session: headers.get(id) }
+            : { events: [...transcript], session: { cwd, agentPreset: 'coding' } },
         }
       }
       return undefined
@@ -393,6 +410,16 @@ test('worker mode births an unseeded persistent worker with an epoch and keeps i
   assert.match(pack, /memory-catalog/, 'the catalog header ships with the birth pack')
   assert.match(pack, /"seq":\[0,6\]/, 'the pending increment carries the turn record')
   assert.match(pack, /memu-consolidation-receipt/, 'the receipt contract ships with the birth pack')
+  const { estTokens } = await import('../lib/budget.js')
+  assert.equal(result.measurement.packet.inputChars, pack.length)
+  assert.equal(result.measurement.packet.estimatedTokens, estTokens(pack))
+  assert.equal(result.measurement.schemaVersion, 2)
+  assert.equal(result.measurement.runner, 'worker')
+  assert.equal(parent.workerEpoch.measurementVersion, 2)
+  assert.equal(parent.workerEpoch.chars, pack.length + result.measurement.observed.outputTextChars)
+  assert.equal(parent.workerEpoch.estimatedTokens, estTokens(pack) + result.measurement.observed.estimatedTokens)
+  assert.equal(result.measurement.usage.inputTokens, null)
+  assert.equal(result.measurement.observed.reasoningChars, null)
 })
 
 // —— 续窗复用 + 增量包（§4.2/§15.2 改动点 4） ————————————————————————
@@ -470,33 +497,23 @@ test('without resume capability a dead worker cold-starts a new epoch', async ()
   assert.equal(state.getSessionBinding(sessionId).workerEpoch?.windows, 1, 'the new epoch starts its own accounting')
 })
 
-test('bench bug regression: a birth collision with a live orphan worker adopts it', async () => {
-  // bench 实录（arm B）：窗口 2 派发崩溃 → retireWorker('failure') 清 epoch，但 dispose
-  // 只关句柄不删会话 → 下一窗初生用同一 forkId → 宿主拒绝 already exists（连挂 10 次）
-  // → 增量永远整理不进库。修复：撞车时探测旧会话——**存活就收编**（重建 epoch 记账指向它，
-  // 保留其累积上下文），已死才顺延换新 id。
+test('a birth collision retires an unmeasured live orphan instead of resetting its context to zero', async () => {
   state.updateSettings({ consolidationRunner: 'worker' })
   const ctx = host({ resume: 'none' })
   const sessionId = ctx.bindSession('wl-collision')
   const first = await runWorkerWindow(ctx, sessionId)
   assert.equal(first.ok, true, first.error || '')
-  const firstForkId = ctx.rec.created[0].sessionId
-  // 复刻实录：epoch 清零（retireWorker 的副作用），但宿主注册表里的旧 worker 还活着。
   state.setSessionBinding(sessionId, { workerEpoch: null })
   ctx.pushTurn(wrappedTurn(10, { user: '碰撞后的新回合' }))
   const second = await runWorkerWindow(ctx, sessionId)
   assert.equal(second.ok, true, second.error || '')
-  assert.equal(second.childId, firstForkId, 'the live orphan is adopted, not re-created')
-  assert.equal(ctx.rec.created.length, 1, 'no second create for a live orphan')
-  assert.equal(ctx.rec.forkFollowups.filter((f) => f.child === second.childId).length, 2, 'both windows dispatch to the adopted worker; actual followups=' + JSON.stringify(ctx.rec.forkFollowups.map((f) => ({ child: f.child.slice(-14), msg: textOf(f).slice(0, 60) }))))
-  const adoptedSecondPack = textOf(ctx.rec.forkFollowups.filter((f) => f.child === second.childId)[1])
-  assert.match(adoptedSecondPack, /"seq":\[10,16\]/, 'the second window pack carries the pending increment')
-  // 收编后 epoch 记账重建：同一 forkId、窗口计数续计、父绑定指回它
-  const epoch = state.getSessionBinding(sessionId).workerEpoch
-  assert.equal(epoch?.forkSessionId, firstForkId, 'the epoch points at the adopted worker')
-  assert.equal(epoch?.windows, 1, 'the adopted epoch starts its own accounting (conservative: budget restarts, context itself is the safety net)')
-  assert.equal(state.getSessionBinding(firstForkId)?.workerEpoch?.forkSessionId, firstForkId, 'the child binding is rebuilt too')
-  assert.equal(ctx.rec.disposed.filter((id) => id === firstForkId).length, 0, 'the adopted worker was never disposed')
+  assert.notEqual(second.childId, first.childId)
+  assert.equal(ctx.rec.created.length, 2)
+  assert.deepEqual(ctx.rec.disposed, [first.childId])
+  assert.equal(state.getSessionBinding(first.childId), null)
+  assert.equal(ctx.rec.forkFollowups.filter(row => row.child === first.childId).length, 1)
+  assert.match(textOf(ctx.rec.forkFollowups[1]), /"seq":\[10,16\]/)
+  assert.equal(state.getSessionBinding(sessionId).workerEpoch.measurementVersion, 2)
 })
 
 // —— 退役条件 1（scope 变化，§4.5） ———————————————————————————————————
@@ -508,8 +525,9 @@ test('a scope change retires the worker immediately and births without a handoff
   const first = await runWorkerWindow(ctx, sessionId)
   assert.equal(first.ok, true, first.error || '')
   const forkId = ctx.rec.created[0].sessionId
-  // 库/域指纹变化（scopeGenerationOf 的口径之一）
-  state.setSessionBinding(sessionId, { domainOverride: 'coding' })
+  // 库/域指纹变化（scopeGenerationOf 的口径之一）。该工作区名不含 RP 标记，
+  // issue #2 后未询问会话的兜底领域就是 coding——写 rp 才是真正的领域变化。
+  state.setSessionBinding(sessionId, { domainOverride: 'rp' })
   ctx.pushTurn(wrappedTurn(10, { user: '换了领域之后的第一回合' }))
   const second = await runWorkerWindow(ctx, sessionId)
   assert.equal(second.ok, true, second.error || '')
@@ -533,7 +551,7 @@ test('char limit, window limit and idle TTL retire the epoch at acquire time', a
 
   const birthed = []
   const runAcquire = async (workerEpoch) => {
-    state.setSessionBinding(sessionId, { workerEpoch })
+    state.setSessionBinding(sessionId, { workerEpoch: { measurementVersion: 2, ...workerEpoch } })
     const result = await workerPool.acquireWorker(ctx, { ...state.getSessionBinding(sessionId), sessionId }, {
       incrementChars: 100, settings: state.getSettings(), probe: { ok: true, source: 'unknown', hasWrite: null }, agentOptions: { provider: 'p', model: 'm' },
     })
@@ -764,6 +782,10 @@ test('a failed worker turn retires the epoch without a handoff', async () => {
   assert.equal(state.getSessionBinding(ctx.rec.created[0].sessionId), null)
   assert.equal(state.getSessionBinding(sessionId).workerEpoch ?? null, null)
   assert.equal(state.getSessionBinding(sessionId).lastSleepSeq, undefined, 'the failed range stays pending')
+  const { sessionState } = await import('../lib/consolidation-ledger.js')
+  assert.equal(sessionState(sessionId).checked, null)
+  assert.equal(sessionState(sessionId).pending.throughSeq, 6)
+  assert.ok(result.measurement.packet.inputChars > 0)
 })
 
 // —— 增量读取与缺口重建（§3.3） ————————————————————————————————————————
@@ -1043,4 +1065,365 @@ test('A8: the ledger-backed written summary includes created, updated and held i
   assert.match(pack, /\[m-created\]/)
   assert.match(pack, /\[m-updated\]/, 'updated ids are not dropped from the summary')
   assert.match(pack, /\[m-held\]/, 'held ids are not dropped from the summary')
+})
+
+// W1/W2: isolated fixtures only, no real host/worker services.
+test('cwd resolution checks directories and catches stat failures', (t) => {
+  assert.equal(workerPool.resolveConsolidationCwd(path.join(home, 'proj'), home), path.join(home, 'proj'))
+  assert.equal(workerPool.resolveConsolidationCwd(import.meta.filename, home), home)
+  t.mock.method(fs, 'statSync', () => { throw new Error('unreadable') })
+  assert.equal(workerPool.resolveConsolidationCwd('inaccessible', home), home)
+})
+
+for (const runner of ['fork', 'worker']) {
+  for (const kind of ['missing', 'file']) {
+    test(`${runner} falls back for a ${kind} cwd without changing permissions or the path`, async (t) => {
+      state.updateSettings({ consolidationRunner: runner, consolidationReasoningEffort: 'inherit' })
+      const cwd = kind === 'file' ? import.meta.filename : path.join(home, 'does-not-exist')
+      const ctx = host({ cwd })
+      ctx.permissionPresets = { set: t.mock.fn() }
+      const id = ctx.bindSession(`wl-cwd-${runner}-${kind}`)
+      const result = await runWorkerWindow(ctx, id, { force: true })
+      assert.equal(result.ok, true, result.error || '')
+      assert.equal(result.settled, true)
+      assert.equal(ctx.rec.created[0].meta.cwd, home)
+      assert.equal(ctx.permissionPresets.set.mock.callCount(), 0)
+      assert.equal(kind === 'missing' ? fs.existsSync(cwd) : fs.statSync(cwd).isDirectory(), false)
+      if (runner === 'worker') await workerPool.retireWorker(ctx, result.childId, 'test-finished')
+    })
+  }
+}
+
+test('resume with an immutable dead cwd retires and creates with the fallback', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  const cwd = fs.mkdtempSync(path.join(home, 'resume-cwd-'))
+  const ctx = host({ resume: 'works', cwd })
+  const id = ctx.bindSession('wl-resume-dead-cwd')
+  const first = await runWorkerWindow(ctx, id)
+  assert.equal(first.ok, true, first.error || '')
+  ctx.restart()
+  fs.rmdirSync(cwd)
+  ctx.pushTurn(wrappedTurn(10))
+  const second = await runWorkerWindow(ctx, id)
+  assert.equal(second.ok, true, second.error || '')
+  assert.deepEqual(ctx.rec.resumed, [first.childId])
+  assert.deepEqual(ctx.rec.disposed, [first.childId])
+  assert.notEqual(second.childId, first.childId)
+  assert.equal(ctx.rec.created[1].meta.cwd, home)
+  assert.equal(fs.existsSync(cwd), false)
+})
+
+test('resume restores the PTC mount and restriction before dispatch', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  const registered = []
+  const restricted = []
+  const ctx = host({ resume: 'works', headerTools: ['run_code'], childCtxFactory: () => ({ tools: {
+    register: tool => { registered.push(tool.name); return () => {} },
+    restrict: spec => { restricted.push({ spec, followups: ctx.rec.forkFollowups.length }); return () => {} },
+  } }) })
+  const id = ctx.bindSession('wl-resume-tool-mount')
+  const first = await runWorkerWindow(ctx, id)
+  assert.equal(first.ok, true, first.error || '')
+  const firstCount = registered.length
+  assert.ok(firstCount > 0)
+  ctx.restart()
+  ctx.pushTurn(wrappedTurn(10))
+  const second = await runWorkerWindow(ctx, id)
+  assert.equal(second.ok, true, second.error || '')
+  assert.deepEqual(registered.slice(firstCount), registered.slice(0, firstCount))
+  assert.equal(restricted.length, 2)
+  assert.equal(restricted[1].followups, 1)
+  assert.equal(second.childId, first.childId)
+})
+
+test('replayed and late old-window events cannot complete or charge the next window', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  let old = []
+  const ctx = host({ childEvents: () => old })
+  const id = ctx.bindSession('wl-late-event')
+  const first = await runWorkerWindow(ctx, id)
+  assert.equal(first.ok, true, first.error || '')
+  old = ctx.rec.childEvents.map(row => structuredClone(row.event))
+  old.push({ type: 'turn/end', seq: old[1].seq, data: { reason: { kind: 'error', error: { message: 'late old failure' } } } })
+  ctx.pushTurn(wrappedTurn(10))
+  const second = await runWorkerWindow(ctx, id)
+  assert.equal(second.ok, true, second.error || '')
+  assert.equal(state.getSessionBinding(id).lastSleepSeq, 16)
+  const newText = ctx.rec.childEvents.filter(row => row.event.seq > old[1].seq && row.event.type === 'assistant/message')[0].event.data.message.content[0].text
+  assert.equal(second.measurement.observed.outputTextChars, newText.length)
+})
+
+test('measurement counts JSON arguments/PTC top-level results once and aggregates verified cache usage', () => {
+  const args = { text: '中文参数', nested: [1, true] }
+  const results = [{ type: 'text', text: 'PTC结果正文' }]
+  const tracker = workerPool.createConsolidationMeasurement('worker', { sessionId: 'child' })
+  const events = [
+    { seq: 1, type: 'assistant/message', data: { requestId: 'r0', usage: { inputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 4, reasoningTokens: 0 }, message: { content: [{ type: 'tool-call', id: 'c1', arguments: args }] } } },
+    { seq: 2, type: 'tool/call', data: { callId: 'c1', arguments: args } },
+    { seq: 3, type: 'tool/ptc-dispatch-start', data: { subCallId: 'p1', arguments: ' {"raw": true} ' } },
+    { seq: 4, type: 'tool/ptc-dispatch', data: { subCallId: 'p1', arguments: ' {"raw": true} ', content: results } },
+    { seq: 5, type: 'tool/result', data: { message: { callId: 'p1', content: results } } },
+    { seq: 6, type: 'assistant/message', data: { requestId: 'r1', usage: { inputTokens: 10, cacheReadTokens: 100, cacheWriteTokens: 20, outputTokens: 30, reasoningTokens: 8 }, message: { content: [{ type: 'text', text: '正文' }, { type: 'reasoning', text: '思考' }] } } },
+    { seq: 7, type: 'assistant/message', data: { requestId: 'r1', usage: { inputTokens: 10, cacheReadTokens: 100, cacheWriteTokens: 20, outputTokens: 30, reasoningTokens: 8 }, message: { content: [] } } },
+    { seq: 8, type: 'assistant/message', data: { requestId: 'r2', usage: { inputTokens: 4, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 6 }, message: { content: [] } } },
+  ]
+  for (const event of events) { assert.equal(tracker.observe(event), true); assert.equal(tracker.observe(structuredClone(event)), false) }
+  const m = tracker.measurement
+  assert.equal(m.observed.toolArgumentsChars, JSON.stringify(args).length + ' {"raw": true} '.length)
+  assert.equal(m.observed.toolResultsChars, JSON.stringify(results).length)
+  assert.equal(m.observed.outputTextChars, 2)
+  assert.equal(m.observed.reasoningChars, 2)
+  assert.deepEqual(m.usage, { inputTokens: 16, cacheReadTokens: 100, cacheWriteTokens: 20, outputTokens: 40, reasoningTokens: null, source: 'assistant/message.data.usage', requests: 3 })
+  assert.ok(!JSON.stringify(m).includes('中文参数'), 'no payload copies enter diagnostics')
+})
+
+test('unknown usage stays null and a serialization failure is observable, not object-toString', () => {
+  const tracker = workerPool.createConsolidationMeasurement('fork')
+  const cyclic = {}; cyclic.self = cyclic
+  tracker.observe({ seq: 1, type: 'tool/call', data: { arguments: cyclic } })
+  tracker.observe({ seq: 2, type: 'assistant/message', data: { usage: { inputTokens: '10', outputTokens: -1 }, message: { content: [] } } })
+  assert.equal(tracker.measurement.observed.toolArgumentsChars, null)
+  assert.equal(tracker.measurement.observed.estimatedTokens, null)
+  assert.equal(tracker.measurement.serializationErrors, 1)
+  assert.equal(tracker.measurement.usage.inputTokens, null)
+  assert.equal(tracker.measurement.usage.outputTokens, null)
+})
+
+test('real dispatch observation includes JSON args, PTC results, replay dedup and epoch cache totals', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  const args = { fact: '额外参数正文' }
+  const content = [{ type: 'text', text: '额外工具结果' }]
+  const event = { seq: 800, type: 'tool/ptc-dispatch', data: { subCallId: 'ptc1', arguments: args, content } }
+  const ctx = host({ usage: { inputTokens: 10, cacheReadTokens: 100, cacheWriteTokens: 5, outputTokens: 20 }, childEvents: [event, structuredClone(event)] })
+  const id = ctx.bindSession('wl-real-measure')
+  await seedMemory(id, '额外目录标题'.repeat(15), '这条目录必须在实际完整包中计量。')
+  const result = await runWorkerWindow(ctx, id)
+  assert.equal(result.ok, true, result.error || '')
+  const m = result.measurement
+  const text = textOf(ctx.rec.forkFollowups[0])
+  assert.match(text, /额外目录标题/)
+  assert.equal(m.packet.inputChars, text.length)
+  assert.equal(m.observed.toolArgumentsChars, JSON.stringify(args).length)
+  assert.equal(m.observed.toolResultsChars, JSON.stringify(content).length)
+  const epoch = state.getSessionBinding(id).workerEpoch
+  assert.equal(epoch.chars, text.length + m.observed.outputTextChars + JSON.stringify(args).length + JSON.stringify(content).length)
+  assert.equal(epoch.usage.inputTokens, 10)
+  assert.equal(epoch.usage.cacheReadTokens, 100)
+  assert.equal(epoch.usage.cacheWriteTokens, 5)
+  assert.equal(epoch.usage.outputTokens, 20)
+  assert.equal(epoch.usage.reasoningTokens, null)
+})
+
+test('legacy measurement epochs retire at the next acquire without migrating bodies', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  const ctx = host({ resume: 'works' })
+  const id = ctx.bindSession('wl-upgrade')
+  const first = await runWorkerWindow(ctx, id)
+  assert.equal(first.ok, true, first.error || '')
+  const epoch = { ...state.getSessionBinding(id).workerEpoch }; delete epoch.measurementVersion
+  state.setSessionBinding(id, { workerEpoch: epoch })
+  const acquired = await workerPool.acquireWorker(ctx, { ...state.getSessionBinding(id), sessionId: id }, { probe: { hasWrite: true }, agentOptions: { provider: 'p', model: 'm' }, header: { cwd: home } })
+  assert.equal(acquired.ok, true)
+  assert.deepEqual(acquired.retired.map(row => row.reason), ['measurement-upgrade'])
+  assert.notEqual(acquired.forkId, first.childId)
+  assert.equal(acquired.epoch.measurementVersion, 2)
+  assert.equal(acquired.epoch.chars, 0)
+})
+
+test('a final packet exceeding the remaining epoch retires once and is remeasured as a handoff', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  const ctx = host({})
+  const id = ctx.bindSession('wl-packet-budget')
+  const first = await runWorkerWindow(ctx, id)
+  assert.equal(first.ok, true, first.error || '')
+  state.setSessionBinding(id, { workerEpoch: { ...state.getSessionBinding(id).workerEpoch, chars: 119_900 } })
+  ctx.pushTurn(wrappedTurn(10))
+  const second = await runWorkerWindow(ctx, id)
+  assert.equal(second.ok, true, second.error || '')
+  assert.equal(ctx.rec.created.length, 2)
+  assert.deepEqual(ctx.rec.disposed, [first.childId])
+  assert.notEqual(second.childId, first.childId)
+  assert.equal(ctx.rec.forkFollowups.filter(row => row.child === first.childId).length, 1)
+  const text = textOf(ctx.rec.forkFollowups[1])
+  assert.match(text, /私有整理 worker/)
+  assert.match(text, /已结算参考/)
+  assert.equal(second.measurement.packet.kind, 'handoff')
+  assert.equal(second.measurement.packet.inputChars, text.length)
+  assert.equal(state.getSessionBinding(id).lastSleepSeq, 16)
+})
+
+test('an oversized first packet returns pending without a dispatch, cursor advance or rebirth loop', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  const ctx = host({})
+  const id = ctx.bindSession('wl-first-too-large')
+  state.setSessionBinding(id, { sceneTime: '中'.repeat(50_000) })
+  const result = await runWorkerWindow(ctx, id, { force: true })
+  assert.equal(result.ok, false)
+  assert.equal(result.reasonCode, 'packet-too-large')
+  assert.equal(result.settled, false)
+  assert.equal(ctx.rec.created.length, 1)
+  assert.equal(ctx.rec.forkFollowups.length, 0)
+  assert.equal(state.getSessionBinding(id).lastSleepSeq, undefined)
+  assert.equal(result.measurement.dispatched.followups, 0)
+  assert.equal(result.measurement.packet.dispatched, false)
+  const { sessionState } = await import('../lib/consolidation-ledger.js')
+  assert.deepEqual({ fromSeq: sessionState(id).pending.fromSeq, throughSeq: sessionState(id).pending.throughSeq }, { fromSeq: 0, throughSeq: 6 })
+  assert.equal(sessionState(id).checked, null)
+  assert.equal(sessionState(id).inflight, null)
+})
+
+test('an idle persistent worker is recreated when the requested output budget changes', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  const ctx = host({})
+  const id = ctx.bindSession('wl-output-options-change')
+  const binding = { ...state.getSessionBinding(id), sessionId: id }
+  const first = await workerPool.acquireWorker(ctx, binding, { agentOptions: { provider: 'test-provider', model: 'test-model', maxTokens: 4096 }, probe: { hasWrite: true }, header: { cwd: path.join(home, 'proj'), agentPreset: 'coding' } })
+  assert.equal(first.ok, true, first.error || '')
+  const second = await workerPool.acquireWorker(ctx, binding, { agentOptions: { provider: 'test-provider', model: 'test-model', maxTokens: 32768 }, probe: { hasWrite: true }, header: { cwd: path.join(home, 'proj'), agentPreset: 'coding' } })
+  assert.equal(second.ok, true, second.error || '')
+  assert.equal(second.birth, true)
+  assert.notEqual(second.forkId, first.forkId)
+  assert.equal(second.retired[0]?.reason, 'model-options-change')
+  assert.equal(second.handoff, true)
+  assert.ok(ctx.rec.disposed.includes(first.forkId))
+  assert.equal(ctx.rec.created.at(-1).agentOptions.maxTokens, 32768)
+  await workerPool.retireWorker(ctx, second.forkId, 'test-cleanup', { handoff: false })
+})
+
+test('wrapup followups are included in actual input and retained epoch totals', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  const ctx = host({ childEvents: Array.from({ length: 12 }, (_, i) => ({ type: 'tool/call', data: { callId: 'wrap-' + i, arguments: '{}' } })) })
+  const id = ctx.bindSession('wl-wrapup-measure')
+  const result = await runWorkerWindow(ctx, id)
+  assert.equal(result.ok, true, result.error || '')
+  assert.equal(ctx.rec.forkFollowups.length, 2)
+  const { estTokens } = await import('../lib/budget.js')
+  const texts = ctx.rec.forkFollowups.map(textOf)
+  const m = result.measurement
+  assert.equal(m.dispatched.inputChars, texts.reduce((sum, text) => sum + text.length, 0))
+  assert.equal(m.dispatched.estimatedTokens, texts.reduce((sum, text) => sum + estTokens(text), 0))
+  assert.equal(m.dispatched.wrapupChars, texts[1].length)
+  assert.equal(state.getSessionBinding(id).workerEpoch.chars, m.dispatched.inputChars + m.observed.outputTextChars + m.observed.toolArgumentsChars)
+})
+
+test('a synchronously rejected wrapup is not charged as dispatched input', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  const ctx = host({ wrapupThrows: true, childEvents: Array.from({ length: 12 }, (_, i) => ({ type: 'tool/call', data: { callId: 'rejected-wrap-' + i, arguments: '{}' } })) })
+  const id = ctx.bindSession('wl-rejected-wrapup')
+  const result = await runWorkerWindow(ctx, id)
+  assert.equal(result.ok, true, result.error || '')
+  assert.equal(ctx.rec.forkFollowups.length, 1)
+  const text = textOf(ctx.rec.forkFollowups[0])
+  const { estTokens } = await import('../lib/budget.js')
+  const m = result.measurement
+  assert.equal(m.dispatched.followups, 1)
+  assert.equal(m.dispatched.wrapupChars, 0)
+  assert.equal(m.dispatched.inputChars, text.length)
+  assert.equal(m.dispatched.estimatedTokens, estTokens(text))
+  assert.equal(state.getSessionBinding(id).workerEpoch.chars, text.length + m.observed.outputTextChars + m.observed.toolArgumentsChars)
+})
+
+test('a timed-out turn landing with its listener detached is fenced by the public child cursor', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  let replay = []
+  const ctx = host({ childEvents: () => replay })
+  const id = ctx.bindSession('wl-detached-late-replay')
+  ctx.setDelayTurn(true)
+  const first = await runWorkerWindow(ctx, id, { maxWaitMs: 40 })
+  assert.equal(first.timedOut, true)
+  ctx.completeTurn()
+  replay = ctx.rec.childEvents.map(row => structuredClone(row.event))
+  ctx.setDelayTurn(false)
+  const second = await runWorkerWindow(ctx, id)
+  assert.equal(second.ok, true, second.error || '')
+  assert.equal(second.childId, first.childId)
+  const lastText = ctx.rec.childEvents.filter(row => row.event.type === 'assistant/message').at(-1).event.data.message.content[0].text
+  assert.equal(second.measurement.observed.outputTextChars, lastText.length, 'old receipts are neither charged nor used by the next job')
+  const oldText = replay.find(event => event.type === 'assistant/message').data.message.content[0].text
+  const epoch = state.getSessionBinding(id).workerEpoch
+  assert.equal(epoch.lateOutputChars, oldText.length, 'late output is charged to its old epoch, not silently treated as zero')
+  assert.equal(epoch.chars, first.measurement.dispatched.inputChars + oldText.length + second.measurement.dispatched.inputChars + lastText.length)
+  assert.equal(epoch.windows, 2, 'catching up late output does not create an extra window')
+  assert.equal(state.getSessionBinding(id).lastSleepSeq, 6)
+})
+
+test('packet metering distinguishes languages without changing the existing character budget policy', () => {
+  const latin = workerPool.measurePacket('a'.repeat(20_000))
+  const chinese = workerPool.measurePacket('中'.repeat(20_000))
+  assert.ok(chinese.estimatedTokens > latin.estimatedTokens)
+  assert.equal(workerPool.budgetFit({ chars: 0 }, chinese.inputChars), true)
+  assert.equal(workerPool.packetBudgetFit({ chars: 0 }, latin), true)
+  assert.equal(workerPool.packetBudgetFit({ chars: 0 }, chinese), true)
+  assert.equal(workerPool.packetBudgetFit({ chars: 120_000 }, chinese), false)
+})
+
+test('a request without usage prevents later known requests from masquerading as complete totals', () => {
+  const tracker = workerPool.createConsolidationMeasurement('worker', { sessionId: 'usage-missing' })
+  tracker.observe({ seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'first' }] } } })
+  tracker.observe({ seq: 2, type: 'assistant/message', data: { usage: { inputTokens: 10, cacheReadTokens: 20, cacheWriteTokens: 0, outputTokens: 5, reasoningTokens: 0 }, message: { content: [{ type: 'text', text: 'second' }] } } })
+  assert.equal(tracker.measurement.usage.requests, 2)
+  assert.equal(tracker.measurement.usage.inputTokens, null)
+  assert.equal(tracker.measurement.usage.cacheReadTokens, null)
+  assert.equal(tracker.measurement.usage.outputTokens, null)
+})
+
+test('missing usage fields remain unknown when requests are aggregated', () => {
+  const tracker = workerPool.createConsolidationMeasurement('worker', { sessionId: 'usage-partial' })
+  tracker.observe({ seq: 1, type: 'assistant/message', data: { requestId: 'r1', usage: { inputTokens: 1, cacheReadTokens: 5, outputTokens: 2 } } })
+  tracker.observe({ seq: 2, type: 'assistant/message', data: { requestId: 'r2', usage: { inputTokens: 3, outputTokens: 4 } } })
+  assert.equal(tracker.measurement.usage.inputTokens, 4)
+  assert.equal(tracker.measurement.usage.outputTokens, 6)
+  assert.equal(tracker.measurement.usage.cacheReadTokens, null)
+  assert.equal(tracker.measurement.usage.cacheWriteTokens, null)
+  assert.equal(tracker.measurement.usage.reasoningTokens, null)
+})
+
+test('late PTC results catch up epoch size without double-counting arguments from the old prefix', async () => {
+  const ctx = host({})
+  const id = ctx.bindSession('wl-late-ptc-size')
+  const binding = () => ({ ...state.getSessionBinding(id), sessionId: id })
+  const options = { probe: { hasWrite: true }, agentOptions: { provider: 'p', model: 'm' }, header: { cwd: home } }
+  const first = await workerPool.acquireWorker(ctx, binding(), options)
+  const tracker = workerPool.createConsolidationMeasurement('worker', { sessionId: first.forkId })
+  const args = { fact: '工具参数' }
+  const content = [{ type: 'text', text: '迟到的PTC结果' }]
+  const start = { seq: 1, type: 'tool/ptc-dispatch-start', data: { subCallId: 'p1', arguments: args } }
+  ctx.emit(first.handle.agent.session, start)
+  tracker.observe(start)
+  tracker.dispatch('first packet', 'handoff')
+  const before = workerPool.recordEpochProgress(binding(), { measurement: tracker.measurement })
+  ctx.emit(first.handle.agent.session, { seq: 2, type: 'tool/ptc-dispatch', data: { subCallId: 'p1', arguments: args, content } })
+  const second = await workerPool.acquireWorker(ctx, binding(), options)
+  assert.equal(second.ok, true, second.error || '')
+  assert.equal(second.reused, true)
+  assert.equal(second.epoch.chars, before.chars + JSON.stringify(content).length)
+  assert.equal(second.epoch.lateOutputChars, JSON.stringify(content).length)
+  assert.equal(second.epoch.windows, 1)
+  assert.equal(second.eventCursor, 2)
+})
+
+test('an unreadable late-output snapshot retires conservatively and keeps the range pending', async () => {
+  state.updateSettings({ consolidationRunner: 'worker' })
+  const ctx = host({})
+  const id = ctx.bindSession('wl-late-snapshot-unavailable')
+  ctx.setDelayTurn(true)
+  const first = await runWorkerWindow(ctx, id, { maxWaitMs: 40 })
+  assert.equal(first.timedOut, true)
+  ctx.completeTurn()
+  ctx.setDelayTurn(false)
+  const get = ctx.get
+  ctx.get = name => name === 'sessionQuery' ? { readSession: async target => {
+    if (target === first.childId) throw new Error('child snapshot unreadable')
+    return get(name).readSession(target)
+  } } : get(name)
+  const second = await runWorkerWindow(ctx, id)
+  assert.equal(second.ok, false)
+  assert.equal(second.reasonCode, 'worker-measurement-unavailable')
+  assert.equal(ctx.rec.created.length, 1)
+  assert.equal(ctx.rec.forkFollowups.length, 1)
+  assert.equal(state.getSessionBinding(id).lastSleepSeq, undefined)
+  assert.equal(state.getSessionBinding(id).workerEpoch, null)
+  const { sessionState } = await import('../lib/consolidation-ledger.js')
+  assert.equal(sessionState(id).pending.throughSeq, 6)
+  assert.equal(sessionState(id).checked, null)
 })

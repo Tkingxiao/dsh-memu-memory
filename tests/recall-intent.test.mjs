@@ -5,7 +5,9 @@ import os from 'node:os'
 import path from 'node:path'
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memu-memory-recall-intent-'))
+process.env.DSH_HOME = home
 process.env.DSH_MEMU_HOME = home
+process.env.DSH_MEMU_MEMORY_HOME = home
 
 const state = await import('../lib/state.js')
 const memory = await import('../lib/memory.js')
@@ -26,7 +28,44 @@ function session(name) {
   }
 }
 
-test('a date question raises the candidate count; a general question keeps the requested topK', async () => {
+test('style removal preserves dotted identifiers, URLs, decimals and line separators in topic evidence', async () => {
+  const { exec, sessionId } = session('ranking-topic-text')
+  const previous = state.getSettings().crossLibraryRecall
+  state.updateSettings({ crossLibraryRecall: false })
+  try {
+    for (const topic of ['node.js', 'release-1.2', 'https://example.test/a', 'version 1.25', 'runtime\npackage']) {
+      state.savePrivateIndex(state.getSessionBinding(sessionId).libraryId, { entries: {
+        'mem-topic-text': { title: topic, content: topic, status: 'active', layer: 'long_term', strength: 1 },
+      } })
+      const plain = await memory.privateRecall({ exec, query: topic, relevanceThreshold: 0 })
+      const styled = await memory.privateRecall({ exec, query: topic + '。请简洁回答。', relevanceThreshold: 0 })
+      assert.equal(styled.files[0]?.name, 'mem-topic-text')
+      assert.ok(plain.files[0].lexicalEvidence > 0)
+      assert.equal(styled.files[0].lexicalEvidence, plain.files[0].lexicalEvidence, topic)
+    }
+  } finally { state.updateSettings({ crossLibraryRecall: previous }) }
+})
+
+test('lexical dominance evidence excludes the date boost consistently with and without style text', async () => {
+  const { exec, sessionId } = session('ranking-date-evidence')
+  const previous = state.getSettings().crossLibraryRecall
+  state.updateSettings({ crossLibraryRecall: false })
+  try {
+    state.savePrivateIndex(state.getSessionBinding(sessionId).libraryId, { entries: {
+      'mem-date-evidence': { title: 'production release', content: 'release schedule', absolute_date: '2026-11-18', status: 'active', layer: 'long_term', strength: 1 },
+    } })
+    const plain = await memory.privateRecall({ exec, query: 'release 2026-11-18', relevanceThreshold: 0 })
+    const styled = await memory.privateRecall({ exec, query: 'release 2026-11-18。请简洁回答。', relevanceThreshold: 0 })
+    const a = plain.files.find(file => file.name === 'mem-date-evidence')
+    const b = styled.files.find(file => file.name === 'mem-date-evidence')
+    assert.ok(a && b)
+    assert.ok(Math.abs(a.lexical - a.lexicalEvidence * 1.35) < 1e-10)
+    assert.ok(Math.abs(b.lexical - b.lexicalEvidence * 1.35) < 1e-10)
+    assert.equal(b.lexicalEvidence, a.lexicalEvidence)
+  } finally { state.updateSettings({ crossLibraryRecall: previous }) }
+})
+
+test('date intent expands candidates but explicit topK remains a hard row limit', async () => {
   const { exec } = session('intent-topk')
   const topics = ['灯光', '投影仪', '白板', '咖啡机', '门禁', '椅子', '窗帘', '空调', '插座', '网络', '打印纸', '绿植']
   for (const [index, topic] of topics.entries()) {
@@ -41,8 +80,18 @@ test('a date question raises the candidate count; a general question keeps the r
   assert.equal(general.files.length, 3, 'general respects the requested three')
 
   const dated = await memory.privateRecall({ exec, query: '会议什么时候开', topK: 3, relevanceThreshold: 0 })
-  assert.ok(dated.files.length > general.files.length, 'a date question asks for a bigger timeline')
-  assert.ok(dated.files.length <= 8)
+  assert.ok(dated.files.length <= 3, 'explicit date search does not silently enlarge topK')
+  assert.equal(dated.trace.request.requestedTopK, 3)
+  assert.equal(dated.trace.request.candidateTopK, 8)
+  const automatic = await memory.privateRecall({ exec, query: '会议什么时候开', topK: 3, relevanceThreshold: 0, purpose: 'automatic' })
+  assert.ok(automatic.groups.length <= 3, 'automatic intent expands candidates, not the configured group limit')
+  assert.ok(automatic.files.length <= 3)
+  assert.equal(automatic.trace.request.candidateTopK, 8)
+  assert.equal(automatic.trace.request.maxGroups, 3)
+  for (const query of ['会议什么时候开', '会议人物是谁', '会议有矛盾冲突', '会议']) {
+    const one = await memory.privateRecall({ exec, query, topK: 1, relevanceThreshold: 0 })
+    assert.ok(one.files.length <= 1, query)
+  }
 })
 
 test('one-hop expansion follows an explicit link to a memory the query never matched', async () => {

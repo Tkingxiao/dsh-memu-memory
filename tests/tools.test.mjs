@@ -10,8 +10,11 @@ process.env.DSH_MEMU_HOME = home
 const { registerTools } = await import('../lib/tools.js')
 const state = await import('../lib/state.js')
 const { updateSettings } = state
+const { redactSecrets } = await import('../lib/paths.js')
+const { createHash } = await import('node:crypto')
 
 test.after(() => {
+  state.flushState()
   try { fs.rmSync(home, { recursive: true, force: true }) } catch {}
 })
 
@@ -319,3 +322,394 @@ test('unpin is the model\'s call, guarded by reason, quota and cooldown', async 
   assert.match(quota, /quota/)
   dispose()
 })
+
+let readFixtureNumber = 0
+function readFixture(entries = {}, domain = 'coding') {
+  const sessionId = `tools-read-${++readFixtureNumber}`
+  const cwd = path.join(home, sessionId)
+  const binding = state.ensureSession(sessionId, { cwd, agentPreset: domain })
+  state.setSessionBinding(sessionId, { domainOverride: domain })
+  const index = { version: 1, entries: Object.fromEntries(Object.entries(entries).map(([id, entry]) => [id, {
+    id, title: '读取测试', content: '', status: 'active', layer: 'long_term', visibility: 'shared', disclosure: 'can_tell',
+    source: 'user_said', source_kind: 'user_said', speaker_id: 'user', domain,
+    createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-01T00:00:00.000Z', ...entry,
+  }])) }
+  state.savePrivateIndex(binding.libraryId, index)
+  const registered = fakeCtx()
+  return { ...registered, sessionId, cwd, binding, exec: { agent: { session: { header: { id: sessionId, cwd } } } },
+    privateTool: registered.tools.find((tool) => tool.name === 'memu_private_recall'),
+    globalTool: registered.tools.find((tool) => tool.name === 'memu_global_recall') }
+}
+
+function parsedPage(reply) {
+  assert.equal(typeof reply, 'string', 'tool receipts remain strings')
+  const match = reply.match(/pagination: unit=codepoint · offset=(\d+) · returned_chars=(\d+) · total_chars=(\d+) · truncated=(true|false) · next_offset=(\d+|null)/)
+  assert.ok(match, `missing codepoint pagination: ${reply}`)
+  const revision = reply.match(/^revision=([a-f0-9]{64})$/m)?.[1]
+  assert.ok(revision, 'the redacted body SHA256 must be visible')
+  const body = reply.split('\nbody:\n')[1]?.split(/\n(?:next:|conflict:)/)[0]
+  assert.notEqual(body, undefined)
+  return { body, revision, offset: Number(match[1]), returnedChars: Number(match[2]), totalChars: Number(match[3]),
+    truncated: match[4] === 'true', nextOffset: match[5] === 'null' ? null : Number(match[5]) }
+}
+
+const sha256 = (body) => createHash('sha256').update(body).digest('hex')
+const tailBody = (length) => '甲'.repeat(length - 5) + '仅限测试尾'
+
+test('empty bodies and the exact end offset are valid zero-length pages, not range errors', async () => {
+  const f = readFixture({ 'mem-empty': { content: '' }, 'mem-end': { content: '😀末尾' } })
+  try {
+    const empty = parsedPage(await f.privateTool.execute({ query: 'mem-empty' }, f.exec))
+    assert.deepEqual([empty.body, empty.totalChars, empty.returnedChars, empty.truncated, empty.nextOffset], ['', 0, 0, false, null])
+    assert.equal(empty.revision, sha256(''))
+    const start = parsedPage(await f.privateTool.execute({ query: 'mem-end' }, f.exec))
+    const end = parsedPage(await f.privateTool.execute({ query: 'mem-end', offset: start.totalChars, revision: start.revision }, f.exec))
+    assert.equal(end.body, '')
+    assert.equal(end.returnedChars, 0)
+    assert.equal(end.nextOffset, null)
+    assert.match(await f.privateTool.execute({ query: 'mem-empty', offset: 1, revision: empty.revision }, f.exec), /MEMORY_OFFSET_OUT_OF_RANGE/)
+  } finally { f.dispose() }
+})
+
+test('exact snippet centering reports its actual codepoint coordinates and a resumable next ref', async () => {
+  const id = 'mem-centered-exact'
+  const body = '😀'.repeat(200) + id + '🚀'.repeat(200)
+  const f = readFixture({ [id]: { content: body } })
+  try {
+    const reply = await f.privateTool.execute({ query: id, view: 'snippet' }, f.exec)
+    const page = parsedPage(reply)
+    assert.equal(page.offset, 160)
+    assert.equal(page.returnedChars, 160)
+    assert.equal(page.body, '…' + Array.from(body).slice(160, 320).join('') + '…')
+    assert.equal(page.nextOffset, 320)
+    assert.equal(page.totalChars, Array.from(body).length)
+    const rest = parsedPage(await f.privateTool.execute({ query: id, libraryId: f.binding.libraryId, offset: page.nextOffset, revision: page.revision }, f.exec))
+    assert.equal(rest.body, Array.from(body).slice(320).join(''))
+  } finally { f.dispose() }
+})
+
+test('private explicit reads allow secret/disclosure but never open archived or superseded entries', async () => {
+  const f = readFixture({
+    'mem-secret': { content: '显式秘密正文', visibility: 'secret', disclosure: 'never_say' },
+    'mem-asked': { content: '仅当被问到的正文', disclosure: 'only_if_asked' },
+    'mem-archived': { content: '归档正文不开放', status: 'archived' },
+    'mem-superseded': { content: '被替代正文不开放', status: 'superseded' },
+    'mem-held': { content: '待复核正文不开放', status: 'pending_review' },
+  })
+  try {
+    assert.equal(parsedPage(await f.privateTool.execute({ query: 'mem-secret' }, f.exec)).body, '显式秘密正文')
+    assert.equal(parsedPage(await f.privateTool.execute({ query: 'mem-asked' }, f.exec)).body, '仅当被问到的正文')
+    for (const id of ['mem-archived', 'mem-superseded', 'mem-held']) {
+      const reply = await f.privateTool.execute({ query: id }, f.exec)
+      assert.match(reply, /MEMORY_NOT_READABLE/)
+      assert.doesNotMatch(reply, /正文不开放/)
+    }
+    state.setSessionBinding(f.sessionId, { useLibrary: false })
+    assert.doesNotMatch(await f.privateTool.execute({ query: 'mem-secret' }, f.exec), /显式秘密正文/)
+  } finally { f.dispose() }
+})
+
+test('global exact reads retain automatic/domain eligibility', async () => {
+  const f = readFixture()
+  const saved = state.loadGlobalIndex()
+  state.saveGlobalIndex({ version: 1, entries: {
+    'gmem-good': { content: '合法全局正文', status: 'active', domain: 'coding', source: 'tool' },
+    'gmem-secret': { content: '不开放秘密', status: 'active', domain: 'coding', visibility: 'secret' },
+    'gmem-never': { content: '不开放披露', status: 'active', domain: 'coding', disclosure: 'never_say' },
+    'gmem-asked': { content: '不开放仅问', status: 'active', domain: 'coding', disclosure: 'only_if_asked' },
+    'gmem-rp': { content: '不开放异域', status: 'active', domain: 'rp' },
+    'gmem-archived': { content: '不开放归档', status: 'archived', domain: 'coding' },
+  } })
+  try {
+    assert.equal(parsedPage(await f.globalTool.execute({ query: 'gmem-good.md' }, f.exec)).body, '合法全局正文')
+    for (const id of ['gmem-secret', 'gmem-never', 'gmem-asked', 'gmem-rp', 'gmem-archived']) {
+      const reply = await f.globalTool.execute({ query: id }, f.exec)
+      assert.match(reply, /MEMORY_NOT_READABLE/)
+      assert.doesNotMatch(reply, /不开放/)
+    }
+    assert.match(await f.globalTool.execute({ query: 'gmem-unknown' }, f.exec), /MEMORY_NOT_FOUND/)
+    state.setSessionBinding(f.sessionId, { useGlobal: false })
+    assert.doesNotMatch(await f.globalTool.execute({ query: 'gmem-good' }, f.exec), /合法全局正文/)
+  } finally { state.saveGlobalIndex(saved); f.dispose() }
+})
+
+test('cross-library same-id reads honor libraryId, domain and opt-in without changing bindings', async () => {
+  const current = readFixture({ 'mem-same': { content: '本库正文', domain: 'rp' } })
+  const foreign = readFixture({ 'mem-same': { content: '外库正文' }, 'mem-foreign-rp': { content: '外库异域禁止', domain: 'rp' } })
+  const different = readFixture({ 'mem-same': { content: '异域库正文禁止' } }, 'rp')
+  const savedCross = state.getSettings().crossLibraryRecall
+  try {
+    updateSettings({ crossLibraryRecall: false })
+    assert.match(await current.privateTool.execute({ query: 'mem-same', libraryId: foreign.binding.libraryId }, current.exec), /MEMORY_LIBRARY_FORBIDDEN/)
+    updateSettings({ crossLibraryRecall: true })
+    const before = JSON.stringify(state.getSessionBinding(current.sessionId))
+    assert.equal(parsedPage(await current.privateTool.execute({ query: 'mem-same' }, current.exec)).body, '本库正文', 'primary does not domain-filter its own entries')
+    const directed = await current.privateTool.execute({ query: 'mem-same', libraryId: foreign.binding.libraryId }, current.exec)
+    assert.equal(parsedPage(directed).body, '外库正文')
+    assert.ok(directed.includes(`libraryId="${foreign.binding.libraryId}"`))
+    assert.equal(JSON.stringify(state.getSessionBinding(current.sessionId)), before)
+    assert.match(await current.privateTool.execute({ query: 'mem-foreign-rp', libraryId: foreign.binding.libraryId }, current.exec), /MEMORY_NOT_READABLE/)
+    assert.match(await current.privateTool.execute({ query: 'mem-same', libraryId: different.binding.libraryId }, current.exec), /MEMORY_LIBRARY_FORBIDDEN/)
+    state.setWorkspacePolicy(foreign.cwd, { useLibrary: false })
+    assert.match(await current.privateTool.execute({ query: 'mem-same', libraryId: foreign.binding.libraryId }, current.exec), /MEMORY_LIBRARY_FORBIDDEN/)
+  } finally {
+    updateSettings({ crossLibraryRecall: savedCross })
+    current.dispose(); foreign.dispose(); different.dispose()
+  }
+})
+
+test('unbound private/full and global reads never create a binding or library', async () => {
+  const f = readFixture()
+  const saved = state.loadGlobalIndex()
+  const sessionId = 'tools-full-unbound'
+  const unboundExec = { agent: { session: { header: { id: sessionId, cwd: path.join(home, sessionId) } } } }
+  state.saveGlobalIndex({ version: 1, entries: { 'gmem-unbound': { title: '通用全局', content: '通用只读正文', domain: 'general', status: 'active' } } })
+  try {
+    const libraries = JSON.stringify(state.listLibraries())
+    assert.match(await f.privateTool.execute({ query: 'mem-unknown' }, unboundExec), /MEMORY_UNBOUND/)
+    const global = await f.globalTool.execute({ query: 'gmem-unbound' }, unboundExec)
+    assert.equal(parsedPage(global).body, '通用只读正文')
+    assert.match(global, /unbound=true/)
+    assert.equal(state.getSessionBinding(sessionId), null)
+    assert.equal(JSON.stringify(state.listLibraries()), libraries)
+  } finally { state.saveGlobalIndex(saved); f.dispose() }
+})
+
+test('natural search keeps snippets, provenance, cross-library refs and explicit truncation flags', async () => {
+  const f = readFixture({
+    'mem-search-long': { title: '码头部署约定', content: '甲'.repeat(200) + '码头部署约定' + '乙'.repeat(200), visibility: 'secret', disclosure: 'never_say' },
+    'mem-search-short': { title: '短条咖啡约定', content: '短条咖啡约定：仅供测试。', source: 'tool', source_kind: 'tool' },
+  })
+  const foreign = readFixture({ 'mem-search-foreign': { title: '外库专用检索词', content: '外库专用检索词。' } })
+  const saved = state.loadGlobalIndex()
+  const savedSettings = state.getSettings()
+  state.saveGlobalIndex({ version: 1, entries: { 'gmem-search-long': { title: '全局分页检索词', content: '甲'.repeat(200) + '全局分页检索词' + '乙'.repeat(200), status: 'active', domain: 'coding', source: 'tool' } } })
+  updateSettings({ memoryBackend: 'agent', crossLibraryRecall: false, relevanceThreshold: 0 })
+  try {
+    const long = await f.privateTool.execute({ query: '码头部署约定', topK: 1 }, f.exec)
+    assert.match(long, /1\. \[mem-search-long\]/)
+    assert.match(long, /view=snippet.*scope=private.*truncated=true/)
+    assert.match(long, /source=user_said/)
+    assert.match(long, /visibility=secret/)
+    assert.match(long, /disclosure=never_say/)
+    assert.ok(long.includes(`libraryId="${f.binding.libraryId}"`))
+    assert.doesNotMatch(long, /甲{200}|乙{200}/)
+    const short = await f.privateTool.execute({ query: '短条咖啡约定', topK: 1 }, f.exec)
+    assert.match(short, /\[mem-search-short\]/)
+    assert.match(short, /truncated=false/)
+    updateSettings({ crossLibraryRecall: true })
+    const cross = await f.privateTool.execute({ query: '外库专用检索词', topK: 1 }, f.exec)
+    assert.match(cross, /\[mem-search-foreign\]/)
+    assert.ok(cross.includes(`libraryId="${foreign.binding.libraryId}"`))
+    assert.match(cross, /跨库只读/)
+    const global = await f.globalTool.execute({ query: '全局分页检索词', topK: 1 }, f.exec)
+    assert.match(global, /1\. \[gmem-search-long\]/)
+    assert.match(global, /view=snippet.*scope=global.*truncated=true/)
+    assert.match(global, /source=tool/)
+    assert.doesNotMatch(global, /甲{200}|乙{200}/)
+  } finally {
+    updateSettings({ memoryBackend: savedSettings.memoryBackend, crossLibraryRecall: savedSettings.crossLibraryRecall, relevanceThreshold: savedSettings.relevanceThreshold })
+    state.saveGlobalIndex(saved)
+    f.dispose(); foreign.dispose()
+  }
+})
+
+test('private/global natural search retain degradation warnings with no active engine', async () => {
+  const f = readFixture({ 'mem-degraded': { title: '降级专用检索词', content: '降级专用检索词。' } })
+  const savedSettings = state.getSettings()
+  const savedGlobal = state.loadGlobalIndex()
+  state.saveGlobalIndex({ version: 1, entries: { 'gmem-degraded': { title: '降级专用检索词', content: '降级专用检索词。', status: 'active', domain: 'coding' } } })
+  // No active vector generation in this temporary home: preflight rejects before
+  // retrieve/ensure/engine startup. The local index hit must remain visible.
+  updateSettings({ memoryBackend: 'api', vectorSource: 'local', crossLibraryRecall: false })
+  try {
+    for (const tool of [f.privateTool, f.globalTool]) {
+      const reply = await tool.execute({ query: '降级专用检索词', topK: 1 }, f.exec)
+      assert.equal(typeof reply, 'string')
+      assert.match(reply, /\[(?:g?mem)-degraded\]/)
+      assert.match(reply, /注意：本次召回已降级：/)
+      assert.match(reply, /semantic recall failed/)
+    }
+  } finally {
+    updateSettings({ memoryBackend: savedSettings.memoryBackend, vectorSource: savedSettings.vectorSource, crossLibraryRecall: savedSettings.crossLibraryRecall })
+    state.saveGlobalIndex(savedGlobal)
+    f.dispose()
+  }
+})
+
+test('redaction happens before coordinates/revision; changed continuations retain MEMORY_CHANGED', async () => {
+  const id = 'mem-redacted-page'
+  const original = '😀开头 sk-fixtureOnly12345678901234567890 尾部🚀' + '乙'.repeat(180)
+  const safe = redactSecrets(original)
+  const f = readFixture({ [id]: { content: original } })
+  try {
+    const first = parsedPage(await f.privateTool.execute({ query: id, limitChars: 19 }, f.exec))
+    assert.equal(first.body, Array.from(safe).slice(0, 19).join(''))
+    assert.equal(first.totalChars, Array.from(safe).length)
+    assert.equal(first.revision, sha256(safe))
+    const restReply = await f.privateTool.execute({ query: id, offset: first.nextOffset, revision: first.revision, limitChars: 8000 }, f.exec)
+    const rest = parsedPage(restReply)
+    assert.equal(first.body + rest.body, safe)
+    assert.doesNotMatch(first.body + rest.body, /fixtureOnly/)
+    assert.match(await f.privateTool.execute({ query: id, offset: first.nextOffset }, f.exec), /REVISION_REQUIRED/)
+    const index = state.loadPrivateIndex(f.binding.libraryId)
+    index.entries[id].content += '新版'
+    state.savePrivateIndex(f.binding.libraryId, index)
+    const changed = await f.privateTool.execute({ query: id, offset: first.nextOffset, revision: first.revision }, f.exec)
+    assert.match(changed, /\[MEMORY_CHANGED\]/)
+    assert.match(changed, /offset 0/)
+    assert.doesNotMatch(changed, /新版|body:/)
+    assert.notEqual(parsedPage(await f.privateTool.execute({ query: id }, f.exec)).revision, first.revision)
+  } finally { f.dispose() }
+})
+
+test('exact snippet stays at 160 codepoints, respects smaller page limits, and never expands conflicts', async () => {
+  const id = 'mem-exact-snippet'
+  const f = readFixture({
+    [id]: { content: tailBody(4000), conflicts_with: 'mem-other-version', visibility: 'secret', disclosure: 'never_say' },
+    'mem-other-version': { title: '不得渲染另一正文', content: '第二版秘密正文不得出现在第一版读取中。' },
+  })
+  try {
+    const before = JSON.stringify(state.loadPrivateIndex(f.binding.libraryId))
+    const reply = await f.privateTool.execute({ query: id, view: 'snippet', topK: 20 }, f.exec)
+    const page = parsedPage(reply)
+    assert.equal(page.returnedChars, 160)
+    assert.equal(page.totalChars, 4000)
+    assert.equal(page.truncated, true)
+    assert.equal(page.nextOffset, 160, 'continue after visible text, not the hidden 2000-char API page')
+    assert.equal(page.body, '甲'.repeat(160) + '…')
+    assert.match(reply, /view=snippet/)
+    assert.match(reply, /visibility=secret.*disclosure=never_say/)
+    assert.match(reply, /conflict: \[mem-other-version\]/)
+    assert.doesNotMatch(reply, /第二版秘密正文|不得渲染另一正文|仅限测试尾/)
+    const small = parsedPage(await f.privateTool.execute({ query: id, view: 'snippet', limitChars: 3 }, f.exec))
+    assert.equal(small.returnedChars, 3)
+    assert.equal(small.body, '甲'.repeat(3))
+    assert.equal(small.truncated, true)
+    assert.equal(small.nextOffset, 3)
+    const full = parsedPage(await f.privateTool.execute({ query: id, limitChars: 8000 }, f.exec))
+    assert.equal(full.body, tailBody(4000))
+    assert.equal(JSON.stringify(state.loadPrivateIndex(f.binding.libraryId)), before, 'exact full/snippet reads are not recall')
+  } finally { f.dispose() }
+})
+
+test('exact prefixes/.md resolve to full refs; ambiguity and unknown ids never fall back to search', async () => {
+  const f = readFixture({ 'mem-prefix-unique': { content: '唯一前缀正文' }, 'mem-prefix-two': { content: '另一个版本' } })
+  try {
+    const resolved = await f.privateTool.execute({ query: 'mem-prefix-u.md' }, f.exec)
+    assert.match(resolved, /id="mem-prefix-unique"/)
+    assert.equal(parsedPage(resolved).body, '唯一前缀正文')
+    assert.match(await f.privateTool.execute({ query: 'mem-prefix' }, f.exec), /MEMORY_ID_AMBIGUOUS/)
+    assert.match(await f.privateTool.execute({ query: 'mem-missing' }, f.exec), /MEMORY_NOT_FOUND/)
+    assert.match(await f.privateTool.execute({ query: '部署限制', view: 'full' }, f.exec), /EXACT_ID_REQUIRED/)
+    for (const query of [' mem-prefix-unique', 'mem-prefix-unique ', 'mem-prefix-unique\n', 'mem-prefix unique']) {
+      assert.match(await f.privateTool.execute({ query, view: 'full' }, f.exec), /EXACT_ID_REQUIRED/, 'no whitespace in exact ids')
+    }
+  } finally { f.dispose() }
+})
+
+test('recall parser enforces ranges/types and rejects natural-query paging/library targeting', async () => {
+  const f = readFixture({ 'mem-validation': { content: '校验正文' } })
+  try {
+    for (const tool of [f.privateTool, f.globalTool]) {
+      assert.match(await tool.execute({ query: '自然语言', view: 'full' }, f.exec), /EXACT_ID_REQUIRED/)
+      for (const topK of [0, 21, 1.5, '2', NaN, Infinity, null]) {
+        assert.match(await tool.execute({ query: '自然语言', topK }, f.exec), /INVALID_RECALL_ARGUMENT.*topK/)
+      }
+      for (const field of ['offset', 'limitChars', 'revision', 'libraryId']) {
+        assert.match(await tool.execute({ query: '自然语言', [field]: field === 'offset' ? 0 : field === 'limitChars' ? 2000 : 'value' }, f.exec), /INVALID_RECALL_ARGUMENT/)
+      }
+      for (const query of ['', '   ', null, 42]) assert.match(await tool.execute({ query }, f.exec), /query is required/)
+      for (const view of ['object', '', 42, null]) assert.match(await tool.execute({ query: 'mem-validation', view }, f.exec), /INVALID_RECALL_ARGUMENT.*view/)
+      for (const offset of [-1, 0.5, '1', NaN, Infinity, null]) assert.match(await tool.execute({ query: 'mem-validation', offset }, f.exec), /INVALID_RECALL_ARGUMENT.*offset/)
+      for (const limitChars of [0, -1, 8001, 1.5, '20', Infinity, null]) assert.match(await tool.execute({ query: 'mem-validation', limitChars }, f.exec), /INVALID_RECALL_ARGUMENT.*limitChars/)
+      for (const revision of ['', 42, null]) assert.match(await tool.execute({ query: 'mem-validation', revision }, f.exec), /INVALID_RECALL_ARGUMENT.*revision/)
+    }
+    const first = parsedPage(await f.privateTool.execute({ query: 'mem-validation', limitChars: 1 }, f.exec))
+    assert.equal(first.returnedChars, 1)
+    assert.match(await f.privateTool.execute({ query: 'mem-validation', offset: 99, revision: first.revision }, f.exec), /MEMORY_OFFSET_OUT_OF_RANGE/)
+    assert.match(await f.globalTool.execute({ query: 'gmem-any', libraryId: f.binding.libraryId }, f.exec), /INVALID_RECALL_ARGUMENT/)
+    assert.match(await f.privateTool.execute({ query: 'mem-validation', libraryId: '' }, f.exec), /INVALID_RECALL_ARGUMENT/)
+  } finally { f.dispose() }
+})
+
+for (const scope of ['private', 'global']) {
+  for (const length of [160, 161, 169]) {
+    test(`${scope} exact auto/full keeps the tail condition of a ${length}-codepoint body`, async () => {
+      const id = `${scope === 'private' ? 'mem' : 'gmem'}-tail-${length}`
+      const body = tailBody(length)
+      const f = readFixture(scope === 'private' ? { [id]: { content: body } } : {})
+      const savedGlobal = state.loadGlobalIndex()
+      if (scope === 'global') state.saveGlobalIndex({ version: 1, entries: { [id]: {
+        title: '全局尾条件', content: body, status: 'active', domain: 'coding', appliesTo: ['coding'], source: 'tool',
+      } } })
+      try {
+        const tool = scope === 'private' ? f.privateTool : f.globalTool
+        const before = JSON.stringify(state.loadPrivateIndex(f.binding.libraryId))
+        for (const view of [undefined, 'auto', 'full']) {
+          const reply = await tool.execute({ query: id, ...(view ? { view } : {}), topK: 20 }, f.exec)
+          const page = parsedPage(reply)
+          assert.equal(page.body, body)
+          assert.equal(page.totalChars, length)
+          assert.equal(page.returnedChars, length)
+          assert.equal(page.truncated, false)
+          assert.equal(page.nextOffset, null)
+          assert.equal(page.revision, sha256(body))
+          assert.match(reply, /view=full/)
+          assert.match(reply, /source=(user_said|tool)/)
+          assert.match(reply, new RegExp(`ref: scope=${scope}`))
+          assert.deepEqual(tool.output.render({}, reply), [{ type: 'text', text: reply }])
+        }
+        assert.equal(JSON.stringify(state.loadPrivateIndex(f.binding.libraryId)), before, 'exact reads must not touch search access counters')
+      } finally {
+        if (scope === 'global') state.saveGlobalIndex(savedGlobal)
+        f.dispose()
+      }
+    })
+  }
+}
+
+for (const scope of ['private', 'global']) {
+  for (const length of [169, 4000]) {
+    test(`${scope} ${length}-codepoint pagination is continuous and defaults to 2000`, async () => {
+      const id = `${scope === 'private' ? 'mem' : 'gmem'}-paged-${length}`
+      const body = '😀甲🚀乙'.repeat(Math.ceil(length / 4))
+      const expected = Array.from(body).slice(0, length - 5).join('') + '仅限测试尾'
+      const f = readFixture(scope === 'private' ? { [id]: { content: expected } } : {})
+      const savedGlobal = state.loadGlobalIndex()
+      if (scope === 'global') state.saveGlobalIndex({ version: 1, entries: { [id]: { title: '分页', content: expected, status: 'active', domain: 'coding' } } })
+      try {
+        const tool = scope === 'private' ? f.privateTool : f.globalTool
+        const defaultPage = parsedPage(await tool.execute({ query: id }, f.exec))
+        assert.equal(defaultPage.returnedChars, Math.min(2000, length))
+        let offset = 0
+        let revision = null
+        let assembled = ''
+        do {
+          const reply = await tool.execute({ query: id, view: 'full', offset, limitChars: length === 169 ? 61 : 997,
+            ...(revision ? { revision } : {}) }, f.exec)
+          const page = parsedPage(reply)
+          assert.equal(page.offset, offset)
+          assert.equal(page.totalChars, length)
+          assert.equal(page.returnedChars, Array.from(page.body).length)
+          assert.equal(page.revision, sha256(expected))
+          assert.equal(page.truncated, offset + page.returnedChars < length)
+          assert.equal(page.body, Array.from(expected).slice(offset, offset + page.returnedChars).join(''))
+          assert.equal(page.body.isWellFormed(), true, 'never split emoji surrogate pairs')
+          assembled += page.body
+          revision = page.revision
+          offset = page.nextOffset
+          if (offset !== null) {
+            assert.match(reply, new RegExp(`next: memu_${scope}_recall query="${id}" view="full"`))
+            assert.match(reply, new RegExp(`offset=${offset}.*revision="${revision}"`))
+            if (scope === 'private') assert.ok(reply.includes(`libraryId="${f.binding.libraryId}"`))
+          } else assert.doesNotMatch(reply, /^next:/m)
+        } while (offset !== null)
+        assert.equal(assembled, expected)
+      } finally {
+        if (scope === 'global') state.saveGlobalIndex(savedGlobal)
+        f.dispose()
+      }
+    })
+  }
+}
