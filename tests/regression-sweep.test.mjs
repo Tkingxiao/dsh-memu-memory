@@ -223,7 +223,8 @@ test('issue #4/defect 1: a frozen snapshot is not settled, keeps the error visib
 
 test('issue #4/defect 1: the freeze expires after its cooldown and a real retry is allowed', async () => {
   // 沿用上一条冻结的 issue4-freeze：把冻结记录的 at 改到冷却期之外
-  //（failures 保持 2），下一扫应当清零连击并真的 fork 一次。
+  //（failures 保持 2），下一扫应当清零连击并真的 fork 一次。绑定侧的
+  // sleepFrozenUntil 也要同步拨到过去——候选守卫读它，与账本冷却同时到期。
   const frozen = ledger.loadLedger().sessions['issue4-freeze']
   assert.ok(frozen, 'the ledger entry exists')
   const failedKeys = Object.entries(frozen.operations || {})
@@ -235,11 +236,40 @@ test('issue #4/defect 1: the freeze expires after its cooldown and a real retry 
     }
     entry.retryAt = null
   })
-  state.setSessionBinding('issue4-freeze', { sleepRetryAt: null, sleepAttempts: 0 })
+  state.setSessionBinding('issue4-freeze', { sleepRetryAt: null, sleepAttempts: 0, sleepFrozenUntil: new Date(Date.now() - 60_000).toISOString() })
 
   const ctx = fakeCtx({ live: ['issue4-freeze'], receipts: 'error' })
   await cycle.runSleepPass(ctx, { limit: 10 })
   assert.equal(ctx.created.length, 1, 'the cooldown expiry lets one real fork through (was frozen forever before the fix)')
+})
+
+test('issue #4/defect 1 (1.3.10): the freeze backoff skips idle re-sweeps but yields to a new human turn', async () => {
+  state.updateSettings({ sleepConsolidation: true, sleepAfterIdleMinutes: 5 })
+  ensureIdle('issue4-freeze-yield', { minutesAgo: 60 })
+  const errorCtx = () => fakeCtx({ live: ['issue4-freeze-yield'], receipts: 'error' })
+  // 两次真实失败 + 一次闸门扫入 → 冻结并写下 sleepFrozenUntil/At。
+  await cycle.runSleepPass(errorCtx(), { limit: 10 })
+  clearBackoffs('issue4-freeze-yield')
+  await cycle.runSleepPass(errorCtx(), { limit: 10 })
+  clearBackoffs('issue4-freeze-yield')
+  await cycle.runSleepPass(errorCtx(), { limit: 10 })
+  const frozenBinding = state.getSessionBinding('issue4-freeze-yield')
+  const frozenAt = Date.parse(frozenBinding.sleepFrozenAt)
+  assert.ok(Date.parse(frozenBinding.sleepFrozenUntil) > frozenAt, 'the freeze backoff fields are written')
+  const probeAtFrozen = frozenBinding.lastConsolidationProbeAt
+
+  // 冻结期内、无新活动：候选守卫直接跳过——不重读快照、不更新探针时间。
+  clearBackoffs('issue4-freeze-yield')
+  await cycle.runSleepPass(errorCtx(), { limit: 10, now: frozenAt + 60_000 })
+  assert.equal(state.getSessionBinding('issue4-freeze-yield').lastConsolidationProbeAt, probeAtFrozen,
+    'a guarded sweep does not re-enter consolidation (probe stamp untouched)')
+
+  // 冻结后来了新真人回合（lastTurnAt 越过 frozenAt）：守卫立刻让路，重新扫入。
+  state.setSessionBinding('issue4-freeze-yield', { lastTurnAt: new Date(frozenAt + 120_000).toISOString() })
+  clearBackoffs('issue4-freeze-yield')
+  await cycle.runSleepPass(errorCtx(), { limit: 10, now: frozenAt + 120_000 })
+  assert.equal(state.getSessionBinding('issue4-freeze-yield').lastConsolidationProbeAt, new Date(frozenAt + 120_000).toISOString(),
+    'a new human turn after the freeze yields immediately — the backoff never penalizes new activity')
 })
 
 // —— Issue #4 缺陷 2：多窗尾段 ——
