@@ -1,5 +1,17 @@
 # 更新日志 / Changelog
 
+## [1.3.9] - 2026-11-19
+
+> 联合扫雷 #3 / #4 / #5：全局提炼兼容两代宿主激活契约、空闲整理不再被熔断/多窗尾段/归档会话/冷 inbound 残骸永久卡死。附带复审修正与保守死代码清理。
+
+- **#3 全局提炼兼容两代宿主契约**：`@deepseek-ai/dsh-subagent` 0.2.2-rc.2 把 `SubagentActivationSpec` 扁平化（移除 `request` 外层），0.2.2-rc.2+ 上全局提炼（手动 + 每 6 小时自动）100% 崩溃（`Cannot read properties of undefined (reading 'id')`）。现按 `docs/host-adaptation.md` §3.4 约定用结构探测（`rootOf`/`namesOf` 标记方法）选形态，另带零副作用 `TypeError` 单次回退兜底（核对过两代宿主，均在任何副作用之前抛错）；提炼失败现在落 `activity.jsonl`（此前只存内存，重启无痕）。用例：`tests/curator-contract.test.mjs`（flat/nested/双向回退/失败日志四条）；`tests/curator.test.mjs`、`tests/curator-probe.test.mjs` 主链路同步改走扁平契约。
+- **#4-1 snapshot-failed 熔断不再假装完工**：同一快照失败达上限的熔断此前返回 `ok:true, settled:true`，`cycle.js` 把游标推平 → 安静会话永久静默、`lastSleepError` 被清、1.3.7 的 `effortRefusal` 自愈结构性失效。现返回 `settled:false`（走 deferred 路径：不推游标、不清错误），熔断加 6 小时冷却（到期清零连击、放行一次真实重试），冻结期内重复扫入不再刷活动日志（同一冻结记录只落一条）。
+- **#4-2 多窗尾段不再悬空**：多窗整理的 `settled` 是「本窗完成」语义，`cycle.js` 却直接推平粗游标——尾段 <200 事件（够不着 backlog 水位）的会话被永久跳过。现仅 `remaining === 0` 时推 `lastSleepAt`；`lastSleepSeq` 本就随回执逐窗推进，不会重扫。
+- **#4-3 归档会话事前跳过**：宿主在 `agent/pre-step` 拒绝祖先含归档会话的 subagent，撞两次就踩进熔断。现 `cycle.js` 候选阶段跳过（不占 budget、不计失败、不推游标），`private.js` 入口拦手动调用并返回 `reasonCode: 'session-archived'`。
+- **#5 冷掉的 inbound 残骸不再永久阻断**：召回异常留下的 `inbound.pending` 只有用户再次发言才被排空，旧代码在候选阶段无条件跳过导致「一次召回异常 + 用户不再发言 = 永不整理且零日志」。现改为热窗判断（队列非空 **且** 最近入站活动 < 15 分钟才让路）。注意不能换用 `hasPendingInbound()`——其语义是「不在 30s 退避期内」，`retryAt` 过期后恒为 true，仍会永久挡死。
+- 全链路回归：`tests/regression-sweep.test.mjs` 7 条（热队列让路 / 冷残骸放行 / 归档候选跳过 / 手动归档拒绝 / 熔断 settled:false + 日志去重 / 冷却放行 / 多窗尾段收口），均走 `runSleepPass → requestPrivateConsolidation → fork → 回执 → 账本` 真实链路；三条 A/B 对照（还原旧代码各跑一次）确认每条用例都能抓住对应旧缺陷。
+- 复审修正与保守清理：拆分 `startGlobalCuration` 合并行；宿主契约注释改引 §3.4 与 src 抛点行号；`inFlight` 诊断行号注释同步 1014；冷却到期去掉与下方共用的重复 `recordOperation`；`cycle.js` 复用 `archivedSessionIdsOf` 消除重复读法。删除死代码 `entryText`（auto-link/decide.js，与 `eligibleEntries` 内联重复）与零引用测试助手 `resetLocalVectorService`。curator-policy 规格常量表、`candidateConfirmationTarget` 等有意单点定义/功能钩子按设计保留。后续：snapshot-failed 冻结回执已带 `cooldownUntil`，据此退避可省冻结期每扫重读快照/种子，但需「冻结感知且不惩罚新活动」的独立字段——直接写 `sleepRetryAt` 会把冻结期到来的新活动一并挡死，故本版未做。
+
 ## [1.3.8] - 2026-11-18
 
 > 修复新会话领域弹窗失效（issue #2）：点「稍后」的空白会话在「再点新建会话」后永不再问、首轮注入静默按 RP 兜底提炼。附带：RPC 失败不再被当成"已答"、错误落活动日志、隐式绑定可重问、未询问会话的领域兜底跟随 detectDomain。同版并入召回与整理链路优化（R1–R4 / W1/W2 / O1）。

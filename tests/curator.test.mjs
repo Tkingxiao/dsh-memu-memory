@@ -90,8 +90,10 @@ function fakeContext() {
       if (name === 'agents') return { get: (id) => id === 'parent' ? parent : undefined }
       if (name === 'subagents') {
         return {
+          // 0.2.2-rc.2+ 的树内省方法（plugin 用它探测扁平化后的激活契约）。
+          rootOf: () => { throw new Error('not used by the plugin') },
           startActivation: async (spec) => {
-            assert.equal(spec.request.parent, parent)
+            assert.equal(spec.parent, parent, 'flat SubagentActivationSpec (0.2.2-rc.2+)')
             return {
               result: Promise.resolve({
                 stopReason: 'completed',

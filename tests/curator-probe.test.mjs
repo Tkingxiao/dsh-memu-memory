@@ -181,7 +181,7 @@ function ctxFor(events, onActivation) {
     get(name) {
       if (name === 'sessionQuery') return sessionQueryFor(events)
       if (name === 'agents') return { get: (id) => (id === 'parent' ? parent : undefined) }
-      if (name === 'subagents') return { startActivation: onActivation }
+      if (name === 'subagents') return { rootOf: () => { throw new Error('not used by the plugin') }, startActivation: onActivation } // 0.2.2-rc.2+ 树内省标记 → 扁平激活契约
       return undefined
     },
   }
@@ -280,7 +280,7 @@ test('six channels, layer by layer: transcript -> prompt -> simulated output -> 
 
   const onActivation = async (spec) => {
     captured = spec
-    const input = promptInput(spec.request.prompt[0].text)
+    const input = promptInput(spec.prompt[0].text)
     const transcript = input.sessions[0].transcript
     const existing = JSON.stringify(input.existing_global_index)
     // A strict copy-through model: it can only echo markers that its prompt
@@ -320,10 +320,10 @@ test('six channels, layer by layer: transcript -> prompt -> simulated output -> 
   assert.ok(captured, 'startGlobalCuration should reach subagents.startActivation')
   assert.equal(captured.provider, 'spawn')
   assert.equal(captured.delivery, 'caller')
-  assert.equal(captured.request.prompt.length, 1)
-  assert.equal(captured.request.parent.session.header.cwd, path.join(home, 'project'))
+  assert.equal(captured.prompt.length, 1)
+  assert.equal(captured.parent.session.header.cwd, path.join(home, 'project'))
 
-  const prompt = captured.request.prompt[0].text
+  const prompt = captured.prompt[0].text
   assert.match(prompt, /全局记忆提炼任务/)
   const input = promptInput(prompt)
   assert.deepEqual(Object.keys(input).sort(), ['candidate_clusters', 'clusters_truncated', 'existing_global_index', 'index_truncated', 'sessions'])

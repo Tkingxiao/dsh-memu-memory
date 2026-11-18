@@ -28,7 +28,7 @@
 | `ctx.get('agents')`（`list()` / `get()` / `create()`） | `lib/preset-scope.js`、`lib/private.js`、`lib/curator.js` | 未变；`Agent.ctx` 仍在 |
 | `ctx.get('sessionQuery')`（`listSessions` / `readSession` / `observeSession` / `readTitleSnapshots`） | `lib/rpc.js`、`lib/private.js`、`lib/curator.js` | 包源码未变 |
 | `ctx.get('workspaceRegistry')` / `domain/changed` | `lib/rpc.js`、`lib/cycle.js` | 未变 |
-| `ctx.get('subagents').startActivation` | `lib/curator.js` | 形状未变（`provider`/`label`/`delivery`/`request`/`signal`；结果 `stopReason`/`output`） |
+| `ctx.get('subagents').startActivation` | `lib/curator.js` | **0.2.2-rc.2 起形状变了**：`SubagentActivationSpec` 扁平化（`parent`/`cwd`/`prompt`/`agentOptions` 平铺顶层，移除 `request` 外层），同批新增树内省方法 `rootOf`/`namesOf`/`resolveName`/`waitForTreeWork`。插件按 §3.4 用标记方法做结构探测选形态，另带零副作用 `TypeError` 单次回退兜底（两代宿主都在任何副作用之前抛 `TypeError`）；覆盖两代契约的用例在 `tests/curator-contract.test.mjs`。结果 `stopReason`/`output` 未变 |
 | `ctx.get('attachments').readImage` | `lib/media.js` | 未变 |
 | `ctx.get('schedule')` | `lib/salient-wake.js` | **变了**：见 §6.1 |
 | `connection.requestRejection` / `authorizeLibrary` / `webServer.register` | `lib/rpc.js` | 未变；路由仍是 `kind:'prefix'` + `handler` |
