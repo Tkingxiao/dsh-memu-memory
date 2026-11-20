@@ -1391,3 +1391,113 @@ test('the log page renders rows with copy, download and locate actions', async (
   assert.match(text, /logKindCheck/, 'the activity log labels wake-up checks')
   assert.match(text, /large-transcript-thin/, 'the check row keeps its reason and score visible')
 })
+
+test('the memory wall global block bulk-archives and the drawer deletes global entries two-step', async () => {
+  const rpcCalls = []
+  const ctx = fakeCtx({ rpcCalls })
+  const originalGetState = RPC_ANSWERS.getState
+  const originalSettingsState = RPC_ANSWERS.getSettingsState
+  const loaded = {
+    ...EMPTY_STATE,
+    libraries: [{ id: 'lib-1', name: 'demo', scopeKey: '/proj/demo', privateCount: 0 }],
+  }
+  RPC_ANSWERS.getState = loaded
+  RPC_ANSWERS.getSettingsState = loaded
+  RPC_ANSWERS.browseWall = {
+    total: 2,
+    items: [
+      { id: 'mem-g-active', libraryId: null, libraryName: 'global', title: 'global active', preview: 'active body', layer: 'long_term', status: 'active', source: 'inferred', decay: 0.5, tags: [] },
+      { id: 'mem-g-archived', libraryId: null, libraryName: 'global', title: 'global archived', preview: 'archived body', layer: 'long_term', status: 'archived', source: 'inferred', decay: 0.5, tags: [] },
+    ],
+  }
+  RPC_ANSWERS.listGlobal = {
+    files: [
+      { id: 'mem-g-active', title: 'global active', content: 'active body', status: 'active', domain: 'general' },
+      { id: 'mem-g-archived', title: 'global archived', content: 'archived body', status: 'archived', domain: 'general' },
+    ],
+  }
+  RPC_ANSWERS.archiveMemory = { id: 'mem-g-active', entry: { status: 'archived' } }
+  RPC_ANSWERS.deleteMemory = { id: 'mem-g-archived', libraryId: null, deleted: true }
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+  // harness 的 hook 游标是全局的：同一棵树只能展开一次，二次 walk 会把子组件
+  // 的 useState 重新初始化。所以每次 renderPage 后只 walk 一遍，收齐所有节点。
+  const collect = (tree) => {
+    const labels = new Map()
+    const cards = []
+    const tabs = []
+    walkNodes(tree, (node) => {
+      if (typeof node.type === 'function' && typeof node.props?.children === 'string' && !labels.has(node.props.children)) {
+        labels.set(node.props.children, node)
+      }
+      if (node.type === 'button' && String(node.props?.className || '').includes('dshm-wall-item')) cards.push(node)
+      if (node.type === 'button' && node.props?.role === 'tab') tabs.push(node)
+    })
+    return { labels, cards, tabs }
+  }
+  try {
+    globalThis.__dshMemuExports.apply(ctx)
+    const settings = registrations.filter((r) => r.slot === 'settings.section').pop()
+    const props = { ctx, t: (key) => key }
+    const first = await renderPage(settings.component, props, undefined, { remount: true })
+    collectPageHook()
+    for (const effect of first.effects) effect.fn()
+    await tick(); await tick()
+    let view = collect((await renderPage(settings.component, props, 9)).tree)
+    for (const effect of effects) effect.fn()
+    await tick(); await tick()
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+
+    // 切到全局块：多选开关必须存在（旧版全局块没有）。
+    const scopeTab = view.tabs.find((node) => String(node.props?.children || '').startsWith('wallScopeGlobal'))
+    assert.ok(scopeTab, 'the global scope tab did not render')
+    scopeTab.props.onClick()
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+    assert.ok(view.labels.has('multiSelect'), 'the global block offers multi-select')
+    view.labels.get('multiSelect').props.onClick()
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+    assert.equal(view.cards.length, 1, 'the active pool shows the active global card')
+    view.cards[0].props.onClick()
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+    assert.ok(view.labels.has('archive (1)'), 'selecting one global card arms the bulk archive button')
+    view.labels.get('archive (1)').props.onClick()
+    await tick(); await tick()
+    const archived = rpcCalls.filter((call) => call.endpoint === 'archiveMemory')
+    assert.equal(archived.length, 1)
+    assert.equal(archived[0].payload.scope, 'global')
+    assert.equal(archived[0].payload.id, 'mem-g-active')
+    assert.equal(archived[0].payload.libraryId, undefined, 'global bulk writes never name a private library')
+
+    // 已归档池开抽屉：恢复与两段删除都在，删除第一段只武装、第二段才发请求。
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+    view.labels.get('wallMultiExit').props.onClick()
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+    const archivedTab = view.tabs.find((node) => String(node.props?.children || '').startsWith('browseArchivedTab'))
+    archivedTab.props.onClick()
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+    assert.equal(view.cards.length, 1)
+    view.cards[0].props.onClick()
+    await tick(); await tick()
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+    assert.ok(view.labels.has('restore'), 'the archived global drawer offers restore')
+    assert.ok(view.labels.has('deleteForever'), 'the archived global drawer offers permanent delete')
+    assert.ok(!view.labels.has('save'), 'global content stays curator-written')
+    view.labels.get('deleteForever').props.onClick()
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+    assert.equal(rpcCalls.filter((call) => call.endpoint === 'deleteMemory').length, 0, 'the first click only arms')
+    assert.ok(view.labels.has('confirmDelete'))
+    view.labels.get('confirmDelete').props.onClick()
+    await tick(); await tick()
+    const deleted = rpcCalls.filter((call) => call.endpoint === 'deleteMemory')
+    assert.equal(deleted.length, 1)
+    assert.equal(deleted[0].payload.scope, 'global')
+    assert.equal(deleted[0].payload.id, 'mem-g-archived')
+    assert.equal(deleted[0].payload.confirmed, true)
+  } finally {
+    RPC_ANSWERS.getState = originalGetState
+    RPC_ANSWERS.getSettingsState = originalSettingsState
+    delete RPC_ANSWERS.browseWall
+    delete RPC_ANSWERS.listGlobal
+    delete RPC_ANSWERS.archiveMemory
+    delete RPC_ANSWERS.deleteMemory
+  }
+})

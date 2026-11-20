@@ -37,6 +37,7 @@
 worker 前置依赖 / 完整包超限 / usage 未知 → §3.39
 整理输出截断 / 改预算后同快照仍冻结 → §3.40
 隐藏记忆增加后可见结果消失 / 必写候选误结算 → §3.41
+全局记忆归档/删除不生效或越权 / 合并稿被误删 → §3.42
 聊很久一条记忆都没写 → §3.18
 人格预设会话里完全没有记忆 → §3.19
 鉴权 / 401/403 行为说不清 → §3.20
@@ -730,3 +731,11 @@ grep tests 里的硬编码清单。守卫：全量 `npm test` 1676/1674 pass / 0
 **落点：** `lib/memory.js` 的私库纯词法与混合召回词法支路在建 BM25 语料前应用会话、自动资格、披露与说话人过滤。只在最终排序时过滤会让隐藏条目污染词频，甚至触发高频词裁剪。显式精确 id 读取维持原资格规则；全局路由不扩大可见范围。`lib/private.js` 的 `candidateCovered` 不能仅凭日期相同或两个相邻字片段就结算候选。
 
 **守卫：** `tests/recall-corpus-eligibility.test.mjs` 用隔离临时库覆盖纯词法、成功的混合路径与向量故障回退，加入 secret、错角色、never_say、only_if_asked 条目后，可见命中保持不变，并保留精确 id 读取。`tests/consolidation-fork.test.mjs` 覆盖同日不同事件、极性相反、动作改变、数值改变及日期单独命中等反例，并保留真实改写正例。`scripts/recall-bench.mjs` 的 `recallAt3` 是任一预期条目命中率；新增 `allExpectedAt3` 要求前三名包含所有预期 id，避免冲突题仅命中一方就被误读为完整覆盖。
+
+### 3.42 全局记忆生命周期管理面
+
+**症状：** 全局块没有多选/归档/删除按钮（1.3.12 前的旧版）；或归档后全局记忆仍被召回；或带 `sessionId` 的全局写被拒/越权；或合并稿、活跃合并的来源被永久删除后撤销合并悬空。
+
+**落点：** 全局生命周期走既有 `archiveMemory` / `updateMemory` / `deleteMemory` 加显式 `scope:'global'`（`lib/rpc.js`），鉴权与全局复核队列同口径（`authorizeGlobalReviewRoute`：embedded 要活绑定，standalone 走 `libraryId=null` 的 `review.manage`）；`scope:'global'` 与 `libraryId` 同现在鉴权层就拒。`lib/memory.js` 的 `globalSetStatus` 只改 status（召回/锚点/注入统一过 `isMemoryEligible`，archived 立即排除，不动向量行）；全局 `updateMemory` 只接受 `{status:'active'}`。`globalDelete` 只开放 archived/suppressed/expired + 显式确认 + 删除前 `backupDatabases`，单事务级联清他条 `links[].to` 与 `duplicateOf/relatedTo/conflictingWith/supersededBy/absorbedBy`；带 `absorbedFrom` 的合并稿与活跃合并的来源拒删。前端：记忆墙全局块多选与私有同权（`lib/client.js` MemoryWallPanel），抽屉全局条目内容只读但生命周期按钮齐全，全局记忆页每条带归档/恢复/两段删除。
+
+**守卫：** `tests/global-lifecycle.test.mjs`（归档即排除召回/恢复即回来、状态机边界、内容补丁拒绝、删除级联与合并守卫、管理视图仍见 archived、私有路径回归）；`tests/webui-auth.test.mjs` 的「global lifecycle」凭据矩阵（活绑定/悬空会话/作用域冲突/review.manage 四态）；`tests/client-render.test.mjs` 的全局块多选批量归档与抽屉两段删除（注意 harness 的 hook 游标全局递增：同一棵树只能 walk 一遍）。

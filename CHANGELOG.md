@@ -1,5 +1,16 @@
 # 更新日志 / Changelog
 
+## [1.3.12] - 2026-11-20
+
+> 全局记忆生命周期与私有同权：记忆墙全局块多选批量归档/恢复/删除、抽屉与全局记忆页的归档/恢复/两段确认永久删除补齐；内容仍由 curator 书写。
+
+- **管理面 RPC（不新增方法）**：既有 `archiveMemory` / `updateMemory` / `deleteMemory` 支持显式 `scope:'global'`。全局 `updateMemory` 只接受 `{status:'active'}` 恢复补丁，其余字段一律拒绝（内容写入仍归 curator，硬规则 2 不变）；`scope:'global'` 与 `libraryId` 同现是作用域冲突，鉴权层直接拒。鉴权与全局复核队列同口径：embedded 要活绑定，standalone 走 `libraryId=null` 的 `review.manage` capability。
+- **归档即生效**：`globalSetStatus` 只改 status——召回/锚点/注入统一过 `isMemoryEligible`，archived 立即自动排除，不动向量行（与 privateArchive 同口径）。`pending_review` 必须先走复核队列；`superseded` 可归档但不能直接恢复。
+- **永久删除**：只开放 archived/suppressed/expired，需显式确认 + 删除前整库备份；先删引擎/向量行再单事务删行，级联清他条 `links[].to` 与 `duplicateOf/relatedTo/conflictingWith/supersededBy/absorbedBy` 指针。合并稿（带 `absorbedFrom`）与活跃合并的来源拒删——`absorbSnapshot` 是撤销合并的唯一依据。全局删除没有 preview/restore 撤销缓冲（明确报错，不静默）。
+- **UI 统一**：记忆墙全局块启用多选（批量归档/恢复/两段删除，逐条失败一次性报错口径与私有一致）；抽屉全局条目内容只读但生命周期按钮齐全（待复核条目不显示归档，走复核裁决）；全局记忆页每条带状态 Tag 与归档/恢复/两段删除。侧栏会话视图保持只读。
+- 守卫：`tests/global-lifecycle.test.mjs`（状态机/召回排除/级联/合并守卫/管理视图/私有回归）、`tests/webui-auth.test.mjs` 全局生命周期凭据矩阵、`tests/client-render.test.mjs` 全局块多选与抽屉两段删除；`tests/webui.test.mjs` 抽屉删除静态守卫更新为双作用域形状。
+- 文档同步：README（中英）抽屉口径、`docs/memory-semantics.md` §8.3 生命周期管理面、`docs/troubleshooting.md` §3.42。
+
 ## [1.3.11] - 2026-11-20
 
 > 隐藏记忆不再经词法统计挤掉可见召回；必写候选核验改为保守证据比对，同日不同事/极性相反/数值改变不再被误判「已覆盖」。

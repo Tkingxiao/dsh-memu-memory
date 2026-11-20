@@ -26,6 +26,8 @@
 
 只有 curator 写，主 agent 只读。domain：`universal / coding / rp / project:<name> / tooling / personal`，**RP 与 coding 冲突分域存，不合并**。RP 剧情事实、关系进度、临时情绪**不写全局**；每条必须有 `evidence` + `confidence`。
 
+**生命周期管理面（1.3.12）**：内容仍由 curator 书写，但用户管理面与私有同权——记忆墙全局块支持多选批量归档/恢复/删除，抽屉与全局记忆页提供归档、恢复、两段确认永久删除。RPC 走既有 `archiveMemory` / `updateMemory` / `deleteMemory` 加显式 `scope:'global'`（不新增方法）：全局 `updateMemory` 只接受 `{status:'active'}` 恢复补丁，其余字段一律拒绝；鉴权与全局复核队列同口径（embedded 要活绑定，standalone 走 `libraryId=null` 的 `review.manage`），`scope:'global'` 与 `libraryId` 同现是作用域冲突。归档只改 status——召回/锚点/注入统一过 `isMemoryEligible`，archived 立即自动排除，不动向量行；`pending_review` 必须先走复核队列，`superseded` 不能直接恢复。永久删除只开放 archived/suppressed/expired，需显式确认 + 删除前整库备份，单事务级联清他条 `links[].to` 与 `duplicateOf/relatedTo/conflictingWith/supersededBy/absorbedBy` 指针；合并稿（带 `absorbedFrom`）与活跃合并的来源拒删——`absorbSnapshot` 是撤销合并的唯一依据。全局删除没有 preview/restore 撤销缓冲。守卫：`tests/global-lifecycle.test.mjs`、`tests/webui-auth.test.mjs`（全局生命周期凭据矩阵）、`tests/client-render.test.mjs`（全局块多选与抽屉两段删除）。
+
 **审核模式（`curatorReviewMode`）**：`auto`（默认）= 有落地证据的提炼结果自动通过；`review-all` = 提炼产物一律进待复核。`conflict`（说法矛盾）与无证据的条目在任何模式下都进人审；rewrite 类操作（merge/supersede/absorb）在 auto 下风险 ≥0.70 也暂扣。每条都带 `reviewRisk/reviewRiskReasons` 供审计与复核排序。
 
 **证据落地（grounding）**：evidence 的 quote 必须是本次策划所含会话转录的规范化子串（≥6 字，省略号分段校验，先脱敏）——模型编造的"原话"进不了库；未落地恒 pending 或不落库。

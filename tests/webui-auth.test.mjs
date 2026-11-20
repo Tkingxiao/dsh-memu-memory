@@ -783,6 +783,78 @@ test('global review queue: embedded sessions may read, writes need a live bindin
   }
 })
 
+// 全局生命周期（1.3.12）：scope:'global' 的 archiveMemory/updateMemory/deleteMemory
+// 与全局复核队列同一管理面凭据模型——embedded 要活绑定、standalone 走 libraryId=null
+// 的 review.manage；scope 与 libraryId 同时出现是作用域冲突，先于 dispatch 拒绝。
+test('global lifecycle: scope global follows the global management credential model', async () => {
+  const seedGlobalActive = () => {
+    state.updateGlobalIndex((index) => {
+      index.entries['mem-global-lifecycle'] = {
+        title: 'global lifecycle', content: 'global lifecycle body', status: 'active', layer: 'long_term',
+        domain: 'general', visibility: 'shared', disclosure: 'can_tell', source: 'inferred',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }
+    })
+    state.flushState()
+  }
+  const post = (prefix, endpoint, payload) => send(prefix.route, prefix.base + '/' + endpoint, { method: 'POST', body: envelope(endpoint, payload) })
+  for (const prefix of prefixes) {
+    seedGlobalActive()
+    auth.callbackMode = 'present'
+    auth.libraryDecision = true
+    auth.libraryCalls = 0
+    const embedded = await post(prefix, 'archiveMemory', { scope: 'global', sessionId, id: 'mem-global-lifecycle' })
+    assert.equal(embedded.res.status, 200, `${prefix.name}: a live binding may archive global memory without the host callback`)
+    assert.equal(JSON.parse(embedded.res.text).result.ok, true)
+    assert.equal(state.loadGlobalIndex().entries['mem-global-lifecycle'].status, 'archived')
+    assert.equal(auth.libraryCalls, 0)
+
+    seedGlobalActive()
+    const ghost = await post(prefix, 'archiveMemory', { scope: 'global', sessionId: 'ghost-session', id: 'mem-global-lifecycle' })
+    assert.equal(ghost.res.status, 403, `${prefix.name}: a dangling session is never a credential`)
+    assert.equal(state.loadGlobalIndex().entries['mem-global-lifecycle'].status, 'active', 'a denied write must not touch the store')
+
+    const conflict = await post(prefix, 'archiveMemory', { scope: 'global', libraryId: 'lib-whatever', id: 'mem-global-lifecycle' })
+    assert.equal(conflict.res.status, 403, `${prefix.name}: scope global alongside a libraryId is a scope conflict`)
+
+    const rows = [
+      ['archiveMemory', { scope: 'global', id: 'mem-global-lifecycle' }],
+      ['updateMemory', { scope: 'global', id: 'mem-global-lifecycle', patch: { status: 'active' } }],
+      ['deleteMemory', { scope: 'global', id: 'mem-global-lifecycle', confirmed: true }],
+    ]
+    for (const [endpoint, payload] of rows) {
+      seedGlobalActive()
+      if (endpoint !== 'archiveMemory') {
+        state.updateGlobalIndex((index) => { index.entries['mem-global-lifecycle'].status = 'archived' })
+      }
+      auth.callbackMode = 'present'
+      auth.libraryDecision = true
+      auth.libraryCalls = 0
+      auth.libraryRequests.length = 0
+      const granted = await post(prefix, endpoint, payload)
+      assert.equal(granted.res.status, 200, `${prefix.name} ${endpoint}: review.manage true must grant`)
+      assert.equal(JSON.parse(granted.res.text).result.ok, true)
+      assert.equal(auth.libraryCalls, 1)
+      assert.equal(auth.libraryRequests.at(-1).libraryId, null, 'global lifecycle authorizes with libraryId null')
+      assert.equal(auth.libraryRequests.at(-1).operation, 'review.manage')
+
+      seedGlobalActive()
+      auth.libraryDecision = false
+      auth.libraryCalls = 0
+      assert.equal((await post(prefix, endpoint, payload)).res.status, 403, `${prefix.name} ${endpoint}: review.manage false must deny`)
+      assert.equal(auth.libraryCalls, 1)
+
+      auth.callbackMode = 'throw'
+      auth.libraryDecision = true
+      assert.equal((await post(prefix, endpoint, payload)).res.status, 403, `${prefix.name} ${endpoint}: a thrown callback must deny`)
+
+      auth.callbackMode = 'absent'
+      assert.equal((await post(prefix, endpoint, payload)).res.status, 200, `${prefix.name} ${endpoint}: absent callback falls back to the HTTP boundary`)
+      auth.callbackMode = 'present'
+    }
+  }
+})
+
 
 // ---- 2026-11-01 现场（Unexpected token "forbidden" / Invalid RPC response: 403）----
 // 无 libraryId 的 browseWall（"全部记忆库"视图）曾被硬拒 403：capability 缺席的宿主
