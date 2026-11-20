@@ -282,6 +282,8 @@ function top3Of(ids) {
  * Definitions and empty-set rules:
  * - Recall@3 denominator = answerable samples only. A sample counts as a hit if
  *   at least one expected id is in the first three positions.
+ * - allExpectedAt3 denominator = answerable samples only; all expected ids must
+ *   appear in top-3 (sets larger than three cannot score a complete hit).
  * - MRR@3 denominator = answerable samples only. The reciprocal rank is 0 when no
  *   expected id appears in the first three positions.
  * - No-answer false-recall denominator = no-answer samples only. It is the fraction
@@ -294,6 +296,7 @@ function top3Of(ids) {
 export function computeMetrics(records) {
   let answerable = 0
   let hits = 0
+  let completeHits = 0
   let reciprocalRankSum = 0
   let noAnswer = 0
   let noAnswerFalseRecall = 0
@@ -306,6 +309,8 @@ export function computeMetrics(records) {
       if (top3.length > 0) noAnswerFalseRecall += 1
     } else {
       answerable += 1
+      const expected = [...new Set(record.expectedIds || [])]
+      if (expected.length > 0 && expected.every(id => top3.includes(id))) completeHits += 1
       let rank = 0
       for (let index = 0; index < top3.length; index += 1) {
         if (record.expectedIds?.includes(top3[index])) {
@@ -325,6 +330,7 @@ export function computeMetrics(records) {
   }
   return {
     recallAt3: answerable === 0 ? 0 : round(hits / answerable),
+    allExpectedAt3: answerable === 0 ? 0 : round(completeHits / answerable),
     mrrAt3: answerable === 0 ? 0 : round(reciprocalRankSum / answerable),
     noAnswerFalseRecallRate: noAnswer === 0 ? 0 : round(noAnswerFalseRecall / noAnswer),
     isolationViolations: violations.length,
@@ -335,6 +341,7 @@ export function computeMetrics(records) {
     },
     emptySet: {
       recallAt3: answerable === 0,
+      allExpectedAt3: answerable === 0,
       mrrAt3: answerable === 0,
       noAnswerFalseRecallRate: noAnswer === 0,
       isolationViolations: forbiddenChecked === 0,

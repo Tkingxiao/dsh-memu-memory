@@ -111,7 +111,7 @@
 - 评估通过但整理写了 0 条 = 正常成功（`lastSleepAt` 前移），不会每小时重来。整理日志额外记录 `scanned/fresh/index +N`（`scanned` 现在是**这一窗**的事件数，`fresh` 是游标后的总增量）和 `remaining`（还余多少事件），`check` 日志记录 `score/reason/parts/空闲分钟/会话事件数/待整理事件数`。
 - 会话被删：host 对 `readSession` 报 `session "…" not found`，这是**不变量**而不是瞬时故障。`runSleepPass` 一旦看到就把 binding 标 `sessionGone: true` 并清掉重试计数，此后直接跳过（以前会按 2 的幂退避、封顶 1 小时，永远重试）；同名会话后来真的收到新消息时（`lib/inbound.js`）会清掉这个标记。**"读不出来"不是"被删了"**：转录读失败（例如 `ENOENT`）由快照层显式标成可重试（`lib/consolidation-snapshot.js` 的 `failed()` → `retryable: true`），`runSleepPass` 只按退避重试、不打 `sessionGone`——`isGoneSessionError` 只认宿主那句 `session "…" not found` / `no such session`。
 - 手动「整理这场对话」（RPC `generatePrivate`）带 `force: true`，跳过上面两道评估与抑制：用户已经决定了。若游标已经到末尾，手动整理只重查最后 ≤300 个事件，不再重放整段历史。
-- **必写候选跨窗顺延。** 每窗本地抽 salience ≥3 的轮次（最多 8 条）作为必写清单；本窗没写进库的候选记入账本 `carry`，下一窗优先带 4 条、其余名额留给新候选。核验是纯本地 token 比对（日期命中或 ≥2 个有效 bigram），不额外调模型；最后一窗也会在同一份任务书里看到顺延候选，不需要为补写再开一次整窗 fork。
+- **必写候选跨窗顺延。** 每窗本地抽 salience ≥3 的轮次（最多 8 条）作为必写清单；本窗没写进库的候选记入账本 `carry`，下一窗优先带 4 条、其余名额留给新候选。核验是纯本地保守证据比对，不额外调模型：日期从文本重合证据中剔除；至少 2 个有效 token，重合数须达 min(3, 候选 token 数) 且覆盖率 ≥55%，候选里的汉字 / Latin 词必须在同一条新增或更新记忆中出现，数值集合须包含候选值，共享 token 的子句否定极性须一致。日期相同、少量重词、不同动作或数值、相反极性不再单独算覆盖；不足以证明时保留在 carry。它仍是词法近似，不能证明任意改写的语义等价，因此可能保守保留已写入的改写候选；最后一窗也会在同一份任务书里看到顺延候选，不需要为补写再开一次整窗 fork。
 
 ---
 
@@ -142,6 +142,8 @@
 默认 `memoryBackend="agent"` 的有效路由是 `lexical`，不调用 embedding。启用向量库（`memoryBackend="api"`）后，`vectorSource="local"` 对应 `managed-local`，`vectorSource="api"` 对应 `remote-api`；API 来源也可配置 localhost 端点。两者复用 MemU 存储与检索，不维护平行向量数据库。`memoryMode`（`local` / `cloud`）仅保留 MemU 存储兼容语义，不是 embedding 开关，也不覆盖来源选择。旧 `hybridRecall` / `hybridRecallMode` 生产开关已移除。
 
 总结生成与向量路由解耦：常规私有整理通过 Agent fork；显式远程总结动作调用配置的聊天端点，其产物同样经 `privateRemember` 提交。启用向量不自动启用远程总结；聊天/总结模型不参与召回重排，也不作为向量失败回退。
+
+私有单库词法召回和受管召回的词法分支，均在构建 BM25 语料前应用会话可见性、说话人及披露资格；不可见条目不参与 DF/avgdl 或高频剪枝，避免通过统计量挤掉可见命中。自动 secret/never_say/未明确询问的 only_if_asked 被排除，显式查询保留原读取资格，精确 id 直达不改变。
 
 受管召回只在候选阶段把词法结果与 MemU semantic retrieve 结果按 RRF（k=60）融合：先按 `isMemoryEligible`、`visibleToSession`、自动召回的 `secret` 排除及 context/scope 过滤，再按 canonical id 去重与候选上限处理。显式与自动召回共用候选融合；`touchAccessMany` 仍只对显式召回执行。精确记忆 id 走直达路径，切库期间中止以避免混合两个库。
 

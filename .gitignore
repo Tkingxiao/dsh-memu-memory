@@ -1,6 +1,7 @@
 node_modules/
 .engine-smoke/
 .screenshots/
+logs/
 *.log
 *.tgz
 coverage/

@@ -40,6 +40,8 @@ export const commit = async ({ payload, db }) => {
   for (const row of payload.recall_files) rows.set(db + '|' + row.name, row)
   return { ok: true }
 }
+export const closeMemuResident = () => 0
+export const prewarmMemuResident = async () => false
 export const retrieve = async () => ({ files: [] })
 export const forget = async ({ db, name }) => {
   calls.forget.push({ db, name })

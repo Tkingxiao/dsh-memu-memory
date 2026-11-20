@@ -111,6 +111,17 @@ test('sample validation fails closed on a false answerable marker and on an out-
   assert.throws(() => bench.validateSampleShape({ ...base, draft: false, expectedIds: ['mem-rb-invalid'] }, 'bad'), /draft must be true/)
 })
 
+test('complete expected-set metric distinguishes a partial conflict recall from full coverage', () => {
+  const records = [
+    { noAnswer: false, expectedIds: ['old', 'new'], top3: ['new'] },
+    { noAnswer: false, expectedIds: ['old', 'new'], top3: ['new', 'old'] },
+  ]
+  const metrics = bench.computeMetrics(records)
+  assert.equal(metrics.recallAt3, 1)
+  assert.equal(metrics.allExpectedAt3, 0.5)
+  assert.equal(bench.computeMetrics([{ noAnswer: true, top3: [] }]).emptySet.allExpectedAt3, true)
+})
+
 test('metric math uses explicit denominators and scores empty top-3 as a no-answer success', () => {
   const metrics = bench.computeMetrics([
     { id: 'a', noAnswer: false, expectedIds: ['e1'], forbiddenIds: ['f'], top3: ['x', 'e1'] },

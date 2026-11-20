@@ -564,6 +564,20 @@ test('a candidate is covered only when a written entry carries the fact', () => 
   assert.equal(candidateCovered({ text: '父亲不吃芹菜' }, [], index), false, 'no writes means no coverage')
 })
 
+test('coverage does not discard facts for matching dates, polarity, values, or generic overlap', () => {
+  const covered = (text, content, title = '') => candidateCovered({ text }, ['mem-written'], { entries: { 'mem-written': { title, content } } })
+  assert.equal(covered('11月20日阿兰取伞', '11月20日小林去医院'), false, 'same date is not the same event')
+  assert.equal(covered('父亲不吃芹菜', '父亲爱吃芹菜'), false, 'opposite polarity is not coverage')
+  assert.equal(covered('父亲周末去图书馆还书', '父亲周末去图书馆借书'), false, 'shared topic must retain the action')
+  assert.equal(covered('父亲生日是11月20日', '父亲生日是11月21日'), false, 'different date is not coverage')
+  assert.equal(covered('项目预算是1200元', '项目预算是1500元'), false, 'different value is not coverage')
+  assert.equal(covered('11月20日', '11月20日小林去医院'), false, 'date alone is insufficient evidence')
+  assert.equal(covered('父亲不吃芹菜', '父亲不吃芹菜，母亲喜欢白菜'), true)
+  assert.equal(covered('父亲喜欢芹菜', '父亲喜欢芹菜，母亲不吃白菜'), true, 'unrelated negation does not alter the fact')
+  assert.equal(covered('11月20日阿兰取伞', '11月20日阿兰取伞，记得提前联系'), true)
+  assert.equal(covered('项目预算是1200元', '项目预算是1200元'), true)
+})
+
 test('the same failed snapshot stops automatic re-forking after the failure cap', async () => {
   state.ensureSession('fork-failcap', { cwd: path.join(home, 'proj-failcap'), agentPreset: 'coding' })
   const ctx = host({ live: true, turnReason: { kind: 'error', error: { message: 'provider refused max-tokens argument' } } })
