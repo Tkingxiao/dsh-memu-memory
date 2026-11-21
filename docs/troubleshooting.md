@@ -50,6 +50,8 @@ WebUI 开着 GPU 占用高 / 时钟钉高档 → §3.28
 长链跑批库不增长 / 考试大面积「不知道」→ §3.29
 同一条用户消息每轮注入两次 / 第二次召回 0 条 → §3.30
 mac 一键安装引擎报 dlopen 签名错 / 事后引擎目录是空的 → §3.31
+插件内部报错要取证与一键修复 / 启动弹窗 → §3.45
+库从列表消失但仍在写入 / 召回正常 → §3.46
 ```
 
 ## 3. 出过的问题：症状 → 落点 → 守卫
@@ -367,28 +369,6 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 **守卫**：`tests/webui.test.mjs` 的 `the shell keeps no always-on compositor drivers`（无限动画只许出现在 boot；ambient 不许 will-change/animation；backdrop-filter 只许 topbar/boot-card；共享 UI 不许全屏模糊；缩略图不许轮询）+ `scripts/check-idle-compositing.mjs` 真机数帧。
 
-
-### 3.29 诊断页：插件内部到底哪儿坏了（1.3.13 起）
-
-**症状**：召回突然降级成"只有关键词命中"、写入报 `VECTOR_PROFILE_MANIFEST_CHANGED` / `the local embedding worker exited before it became ready`、整理任务一直说 `the consolidation lease could not be persisted`，但设置页一切正常、活动日志里只有一行警告。
-
-**落点**：这类故障以前**没有出口**——`logs/activity.jsonl` 记的是流程（谁在什么时候召回了几条），而"哪个文件坏了、能不能修"无处可看；活动日志里那一行 `logger.warn` 还是被 `fail-open` 吞掉之后的残渣。2026-11 这三类真实故障就是这样坏了 9 天才被发现（同一句 manifest 报错在活动日志里出现 661 次，最早的 2026-11-12）：
-
-| 症状 | 真实根因 | 诊断里的 code | 修复动作 |
-|---|---|---|---|
-| 召回降级 661 次 | catalog 的 `runtime.sources` 加了国内镜像元数据，摘要却把整个 `runtime` 算进身份 → 向量空间被误判为"制品清单已变" | `VECTOR_PROFILE_MANIFEST_CHANGED` | `resign-vector-profile`（重签摘要，不动 25 条向量） |
-| 写入/召回报 worker exited | `vector-active.json` 的 `runtimeDir` 指向一个已不存在的 UUID 目录（`onnxruntime-node` MODULE_NOT_FOUND，而这行 stderr 被旧代码 `() => {}` 丢掉了） | `LOCAL_VECTOR_RUNTIME_UNAVAILABLE` | `repoint-runtime-dir` |
-| 整理 84 次 `lease could not be persisted` | `consolidation.json.lock` 是 0 字节（写锁时崩在 `writeFileSync` 之前），旧 `withFileLock` 把锁内容当 pid，`Number('')===0` 永远进不了清理分支 → 每次都等到超时 | `DSH_MEMU_STORE_BUSY` | `release-stale-locks` |
-
-**现在**：
-- **诊断页**：设置 → 诊断（`#/settings/diagnostics`），或独立 WebUI 的「诊断」。上半张是**环境自检**（数据目录可写 / 遗留锁 / 引擎 python / 向量 profile 摘要 / 向量运行时 / 模型目录 / embedding worker），每项给状态、证据、怎么办，能自动修的给按钮、破坏性的标"需手动"；下半张是**诊断记录**，按 level 与关键词过滤，`detail` 里是结构化证据（脱敏后的 stderr 尾巴、路径、changedFields），可整页复制。
-- **主页启动弹窗**：启动引导自检发现 error/warn 级问题时，主页顶部弹一张卡（最多 4 条，按 code 汇总"×N"）。点"稍后"或"打开诊断"都会 `acknowledgeDiagnostics`，**同一问题不再天天弹**，只有再次发生（count 增长）才重新提醒。
-- **启动自动修复**：`autoInstallEngine` 打开时，启动 6 秒后跑一次自检，只自动执行**安全且幂等**的三件事（清遗弃锁 / 重签摘要 / 重指运行时目录）；重建索引、重装运行时/模型/引擎一律留手动入口——它们会动用户数据或几十 MB 下载，不该静默发生。
-- **落盘位置**：`~/.dsh/dsh-memu-memory/diagnostics/events.jsonl`（2MB 轮转到 `events.1.jsonl`），与 `logs/activity.jsonl` 分开；同一 `(scope, code, message)` 60 秒内只累加 `count`，维修动作无论成功失败都记一行 `MEMU_DIAGNOSTIC_REPAIRED` / `MEMU_DIAGNOSTIC_REPAIR_FAILED`。
-
-**自己查的顺序**：先看诊断页环境自检的红项（它们决定"能不能修"），再看诊断记录里最新一条的 `detail`——`stderrTail` / `changedFields` / `busy.owner`+`busy.ageMs` 通常直接点名坏在哪。锁类问题不要手动删 `*.lock`：诊断页的「释放遗留锁」会先核对 pid 是否还活着、锁是否超过 60 秒，只清能证明是遗弃的（手动删可能拆掉另一个插件副本正在用的事务）。
-
-**守卫**：`tests/diagnostics.test.mjs`（去重计数、独立落盘、脱敏、告警确认后不再弹、修复双向记账、锁四种遗弃判据、三种摘要算法兼容、镜像漂移 vs 身份变更）、`tests/environment-check.test.mjs`（缺什么报什么、安全/手动分组、`confirmed` 门禁）、`tests/client-render.test.mjs` 的逐页探针（14 页）。
 
 ## 守卫索引表
 
@@ -781,3 +761,41 @@ grep tests 里的硬编码清单。守卫：全量 `npm test` 1676/1674 pass / 0
 **原因与修复**：旧候选提取把完整引号或名字引导后的文本再次拆成 n-gram，内部片段也继承表面证据。新候选只给完整称呼背书，并过滤没有独立边界的子片段。模型通过 `memu_private_link` 创建未知实体时，来源记忆本身必须包含完整引号、名字引导加右边界、或两侧分隔的名称，link note 不算来源证据；先校验来源、边类型、理由、置信度和数量限制，再创建 provisional 实体，普通参数错误不再遗留孤立节点。既有实体和别名仍可复用，手动创建与已确认实体的提及匹配保持原规则。
 
 **守卫与旧数据**：`tests/tools.test.mjs` 覆盖四种碎片、虚构理由、Latin 子串、完整姓名/昵称/别名与失败不留节点；`tests/auto-link-candidates.test.mjs` 覆盖完整表面、内部片段和派生缓存。不能仅按字符串把历史节点自动删除或归并——「主人一」也可能是真实昵称；先核对原始记忆，再在关系图中按证据改名、合并或删除。此修复不改写现有记忆或实体。
+
+### 3.45 诊断页：插件内部到底哪儿坏了（1.3.13 起）
+
+**症状**：召回突然降级成"只有关键词命中"、写入报 `VECTOR_PROFILE_MANIFEST_CHANGED` / `the local embedding worker exited before it became ready`、整理任务一直说 `the consolidation lease could not be persisted`，但设置页一切正常、活动日志里只有一行警告。
+
+**落点**：这类故障以前**没有出口**——`logs/activity.jsonl` 记的是流程（谁在什么时候召回了几条），而"哪个文件坏了、能不能修"无处可看；活动日志里那一行 `logger.warn` 还是被 `fail-open` 吞掉之后的残渣。2026-11 这三类真实故障就是这样坏了 9 天才被发现（同一句 manifest 报错在活动日志里出现 661 次，最早的 2026-11-12）：
+
+| 症状 | 真实根因 | 诊断里的 code | 修复动作 |
+|---|---|---|---|
+| 召回降级 661 次 | catalog 的 `runtime.sources` 加了国内镜像元数据，摘要却把整个 `runtime` 算进身份 → 向量空间被误判为"制品清单已变" | `VECTOR_PROFILE_MANIFEST_CHANGED` | `resign-vector-profile`（重签摘要，不动 25 条向量） |
+| 写入/召回报 worker exited | `vector-active.json` 的 `runtimeDir` 指向一个已不存在的 UUID 目录（`onnxruntime-node` MODULE_NOT_FOUND，而这行 stderr 被旧代码 `() => {}` 丢掉了） | `LOCAL_VECTOR_RUNTIME_UNAVAILABLE` | `repoint-runtime-dir` |
+| 整理 84 次 `lease could not be persisted` | `consolidation.json.lock` 是 0 字节（写锁时崩在 `writeFileSync` 之前），旧 `withFileLock` 把锁内容当 pid，`Number('')===0` 永远进不了清理分支 → 每次都等到超时 | `DSH_MEMU_STORE_BUSY` | `release-stale-locks` |
+
+**现在**：
+- **诊断页**：设置 → 诊断（`#/settings/diagnostics`），或独立 WebUI 的「诊断」。上半张是**环境自检**（数据目录可写 / 遗留锁 / 引擎 python / 向量 profile 摘要 / 向量运行时 / 模型目录 / embedding worker），每项给状态、证据、怎么办，能自动修的给按钮、破坏性的标"需手动"；下半张是**诊断记录**，按 level 与关键词过滤，`detail` 里是结构化证据（脱敏后的 stderr 尾巴、路径、changedFields），可整页复制。
+- **主页启动弹窗**：启动引导自检发现 error/warn 级问题时，主页顶部弹一张卡（最多 4 条，按 code 汇总"×N"）。点"稍后"或"打开诊断"都会 `acknowledgeDiagnostics`，**同一问题不再天天弹**，只有再次发生（count 增长）才重新提醒。
+- **启动自动修复**：`autoInstallEngine` 打开时，启动 6 秒后跑一次自检，只自动执行**安全且幂等**的三件事（清遗弃锁 / 重签摘要 / 重指运行时目录）；重建索引、重装运行时/模型/引擎一律留手动入口——它们会动用户数据或几十 MB 下载，不该静默发生。
+- **落盘位置**：`~/.dsh/dsh-memu-memory/diagnostics/events.jsonl`（2MB 轮转到 `events.1.jsonl`），与 `logs/activity.jsonl` 分开；同一 `(scope, code, message)` 60 秒内只累加 `count`，维修动作无论成功失败都记一行 `MEMU_DIAGNOSTIC_REPAIRED` / `MEMU_DIAGNOSTIC_REPAIR_FAILED`。
+
+**自己查的顺序**：先看诊断页环境自检的红项（它们决定"能不能修"），再看诊断记录里最新一条的 `detail`——`stderrTail` / `changedFields` / `busy.owner`+`busy.ageMs` 通常直接点名坏在哪。锁类问题不要手动删 `*.lock`：诊断页的「释放遗留锁」会先核对 pid 是否还活着、锁是否超过 60 秒，只清能证明是遗弃的（手动删可能拆掉另一个插件副本正在用的事务）。
+
+**守卫**：`tests/diagnostics.test.mjs`（去重计数、独立落盘、脱敏、告警确认后不再弹、修复双向记账、锁四种遗弃判据、三种摘要算法兼容、镜像漂移 vs 身份变更）、`tests/environment-check.test.mjs`（缺什么报什么、安全/手动分组、`confirmed` 门禁）、`tests/client-render.test.mjs` 的逐页探针（14 页）。
+
+### 3.46 库从列表消失但仍在被读写（归档判定只看工作区注册表）
+
+**症状**：某个记忆库在 UI / `memu_status` / 库列表里查不到，但绑定它的会话照常写入、召回也 `ok=true`；`state.json` 里该库 `archived: true`，而 `lastUsedAt` 还在持续刷新。宿主日志能搜到一行 `archived library <id>: workspace <scopeKey> is no longer registered in DSH`。
+
+**落点（1.3.13 及更早）**：归档判定只认 `workspaceRegistry`（`cycle.js` 的 `registeredScopes`）——它回答「这个目录是不是 DSH 工作区」，**不回答「这个库还有没有人用」**。于是 IM 插件数据目录、profile 下的目录这类 scope 永远不在册，建库后几分钟就被 sweep 归档；而 `ensureSession` 快路径与召回准入都不看 `archived`，会话继续读写，形成「归档但活跃」。恢复条件（scope 回到注册表）对这类路径永不满足，所以不会自愈。更糟的是 `deleteLibrary` 只接受「已归档」的库、`purgeArchivedAfterDays` 只按年龄清理，在用的库恰好落进可删状态。真实现场（2026-11-21 外部报告）：建库 176 秒后被归档，之后 9 小时 172 条活动、6 次召回全成功。
+
+**现在（1.3.14 起）**：
+- 归档前先看「有没有存活绑定」：`state.inUseLibraryIds()` 按 `sessionGone !== true` 的会话绑定判定；在用的库不归档，结果里给 `skippedInUse`，同一个库只提示一次。
+- 归档来源写入 `archivedBy`（`sweep` / `user`）。扫描遇到「已归档 + 仍有存活绑定 + 非用户归档」会**就地复活**；`ensureSession` 快路径同样复活误归档库。用户主动归档的不动。
+- 旧数据（1.3.13 及更早，没有 `archivedBy`）分不清是谁归档的，所以只复活**还热**的库：`lastUsedAt` 在 14 天内才算误归档；更早的保持归档（本机 `rp` / `ai中转站` 就属于这种「归档 + 旧绑定」的冷数据，升级后不会被突然翻出来）。
+- `deleteLibrary(id)` 只拒绝「危险归档 + 仍在用」这一类（判据 `archivedWhileInUse` 与自愈共用）；用户主动归档、冷数据的旧归档照旧可删。RPC 只在 `confirmed` 时透传 `force`；`purgeArchivedAfterDays` 的候选排除在用库。
+
+**怎么确认**：`state.json` 里看 `archived` / `archivedBy` / `lastUsedAt` 三者是否自相矛盾；宿主日志搜 `archived library` 与 `kept library`。修好后旧数据在下一轮 sweep（启动后 8 秒或每 5 分钟）或下一条消息时自动复活。
+
+**守卫**：`tests/cycle.test.mjs` —— 在用库跨三轮 sweep 不归档且仍在列表、无人用的库照常归档并记 `archivedBy='sweep'`、误归档在用库被复活、用户归档不被复活、purge 不把在用库列入候选、删除在用库被拒（解绑后放行）、快路径复活。

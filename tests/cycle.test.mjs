@@ -409,3 +409,160 @@ test('only the host saying the conversation is gone counts as deleted', () => {
   assert.equal(cycle.isGoneSessionError("ENOENT: no such file or directory, open 'D:/x/log.jsonl'"), false)
   assert.equal(cycle.isGoneSessionError('EACCES: permission denied, open D:/x'), false)
 })
+// ---------------------------------------------------------------- 归档 vs 在用（2026-11-21 外部报告）
+
+// 报告里的真实形态：IM 插件数据目录不是 DSH 工作区，库建好后 176 秒被扫描归档，
+// 而绑定会话继续写 9 小时。这里把那条时间线压成三轮 sweep。
+
+test('a library bound to a live conversation is never archived for an unregistered scope', () => {
+  const cwd = path.join(home, 'im-in-use')
+  state.ensureSession('cycle-im', { cwd })
+  const binding = state.getSessionBinding('cycle-im')
+  const libId = binding.libraryId
+  assert.ok(libId, 'the session created a library')
+
+  const first = cycle.runLibraryHousekeeping(registryCtx(['/work/unrelated']))
+  assert.ok(!first.archived.includes(libId), 'an in-use library must not be archived')
+  assert.ok(first.skippedInUse.includes(libId), 'the sweep must report why it skipped')
+  assert.ok(state.listLibraries().some((lib) => lib.id === libId), 'it stays in the active list')
+
+  // 连续三轮（≈15 分钟的真实节奏）都不能翻车。
+  const second = cycle.runLibraryHousekeeping(registryCtx(['/work/unrelated']))
+  const third = cycle.runLibraryHousekeeping(registryCtx(['/work/unrelated']))
+  for (const pass of [second, third]) assert.ok(!pass.archived.includes(libId))
+  const lib = state.getLibrary(libId)
+  assert.equal(lib.archived, undefined, 'never archived')
+  assert.equal(lib.archivedAt, undefined)
+})
+
+test('an unbound library with an unregistered scope still archives (the cleanup keeps working)', () => {
+  const lib = state.createLibrary({ name: 'cycle-unused', cwd: '/work/cycle-unused' })
+  const pass = cycle.runLibraryHousekeeping(registryCtx(['/work/unrelated']))
+  assert.ok(pass.archived.includes(lib.id), 'nobody uses it, so the old behaviour stands')
+  assert.equal(state.getLibrary(lib.id).archivedBy, 'sweep', 'the sweep records that it did the archiving')
+})
+
+test('a library the old sweep archived while in use comes back instead of staying hidden', () => {
+  const cwd = path.join(home, 'im-misarchived')
+  state.ensureSession('cycle-im-revive', { cwd })
+  const libId = state.getSessionBinding('cycle-im-revive').libraryId
+  // 复现旧版：扫描把在用的库归档，且当时还没有 archivedBy 字段。
+  state.archiveLibrary(libId, { by: 'sweep' })
+  assert.ok(state.listArchivedLibraries().some((lib) => lib.id === libId))
+
+  const pass = cycle.runLibraryHousekeeping(registryCtx(['/work/unrelated']))
+  assert.ok(pass.revived.includes(libId), 'an in-use archive is a bug and must self-heal')
+  assert.ok(state.listLibraries().some((lib) => lib.id === libId))
+  assert.ok(!pass.archived.includes(libId), 'and it must not be archived again in the same pass')
+})
+
+test('a user-archived library is respected even while a conversation still points at it', () => {
+  const cwd = path.join(home, 'im-user-archived')
+  state.ensureSession('cycle-user-archive', { cwd })
+  const libId = state.getSessionBinding('cycle-user-archive').libraryId
+  state.archiveLibrary(libId) // 默认 by: 'user'
+  const pass = cycle.runLibraryHousekeeping(registryCtx(['/work/unrelated']))
+  assert.ok(!pass.revived.includes(libId), 'the sweep must not undo a deliberate archive')
+  assert.ok(state.listArchivedLibraries().some((lib) => lib.id === libId))
+})
+
+test('purging never proposes an archived library that is still in use', () => {
+  const cwd = path.join(home, 'im-purge')
+  state.ensureSession('cycle-purge', { cwd })
+  const libId = state.getSessionBinding('cycle-purge').libraryId
+  state.archiveLibrary(libId)
+  const st = state.loadState()
+  st.libraries[libId].archivedAt = new Date(Date.now() - 40 * 86_400_000).toISOString()
+  state.saveState(st)
+  state.updateSettings({ purgeArchivedAfterDays: 30 })
+  const pass = cycle.runLibraryHousekeeping(registryCtx(['/work/unrelated']))
+  assert.ok(!pass.purgeCandidates.includes(libId), 'age alone must not queue a live library for deletion')
+})
+
+test('deleting a library the sweep archived while still in use is refused', () => {
+  const cwd = path.join(home, 'im-delete')
+  state.ensureSession('cycle-delete', { cwd })
+  const libId = state.getSessionBinding('cycle-delete').libraryId
+  // 危险类：旧版扫描归档的库（archivedBy='sweep'）仍在被会话使用，一次误点就会删掉全部记忆。
+  state.archiveLibrary(libId, { by: 'sweep' })
+  const refused = state.deleteLibrary(libId)
+  assert.equal(refused.ok, false)
+  assert.match(refused.error, /still uses it|live conversations/)
+  assert.ok(state.getLibrary(libId), 'the refusal leaves the data alone')
+
+  // 解绑之后不再是「在用」，同一个调用就放行——这正是正常删除流程。
+  state.deleteSessionBinding('cycle-delete')
+  const allowed = state.deleteLibrary(libId)
+  assert.equal(allowed.ok, true, allowed.error || '')
+  assert.equal(state.getLibrary(libId), null)
+})
+
+test('a user-archived library can still be deleted while a conversation points at it', () => {
+  const cwd = path.join(home, 'im-user-delete')
+  state.ensureSession('cycle-user-delete', { cwd })
+  const libId = state.getSessionBinding('cycle-user-delete').libraryId
+  state.archiveLibrary(libId) // by: 'user'
+  const result = state.deleteLibrary(libId)
+  assert.equal(result.ok, true, result.error || 'the user asked for this; the bindings go with it')
+  assert.equal(state.getLibrary(libId), null)
+})
+
+test('a session arriving at an archived library revives it through the fast path', () => {
+  const cwd = path.join(home, 'im-fastpath')
+  state.ensureSession('cycle-fastpath', { cwd })
+  const libId = state.getSessionBinding('cycle-fastpath').libraryId
+  state.archiveLibrary(libId, { by: 'sweep' })
+  // 快路径 = 已绑定会话再来一轮。旧版只刷新 lastUsedAt，库永远停在归档。
+  const again = state.ensureSession('cycle-fastpath', { cwd })
+  assert.equal(again.libraryId, libId, 'the binding is unchanged')
+  const lib = state.getLibrary(libId)
+  assert.notEqual(lib.archived, true, 'an in-use library must not stay archived')
+  assert.ok(lib.revivedAt)
+})
+
+test('a legacy archive with no recorded source is not revived just because an old binding exists', () => {
+  // 本机实测：rp（14 个绑定）、ai中转站（4 个）都是「归档 + 还有旧绑定」，但 lastUsed 三周前。
+  // 旧数据分不清是用户归档还是老扫描误归档，所以只复活「还热」的；冷的不动。
+  const lib = state.createLibrary({ name: 'legacy-cold', cwd: path.join(home, 'legacy-cold') })
+  const st = state.loadState()
+  st.libraries[lib.id].archived = true
+  st.libraries[lib.id].archivedAt = new Date(Date.now() - 40 * 86_400_000).toISOString()
+  st.libraries[lib.id].lastUsedAt = new Date(Date.now() - 30 * 86_400_000).toISOString()
+  delete st.libraries[lib.id].archivedBy
+  st.sessions['cycle-legacy'] = { libraryId: lib.id, scopeKey: path.join(home, 'legacy-cold') }
+  state.saveState(st)
+
+  const pass = cycle.runLibraryHousekeeping(registryCtx(['/work/unrelated']))
+  assert.ok(!pass.revived.includes(lib.id), 'a cold legacy archive stays archived')
+  assert.ok(state.listArchivedLibraries().some((row) => row.id === lib.id))
+})
+
+test('a warm legacy archive (no source recorded, used minutes ago) is revived', () => {
+  const lib = state.createLibrary({ name: 'legacy-warm', cwd: path.join(home, 'legacy-warm') })
+  const st = state.loadState()
+  st.libraries[lib.id].archived = true
+  st.libraries[lib.id].archivedAt = new Date(Date.now() - 60_000).toISOString()
+  st.libraries[lib.id].lastUsedAt = new Date(Date.now() - 60_000).toISOString()
+  delete st.libraries[lib.id].archivedBy
+  st.sessions['cycle-warm'] = { libraryId: lib.id, scopeKey: path.join(home, 'legacy-warm') }
+  state.saveState(st)
+
+  const pass = cycle.runLibraryHousekeeping(registryCtx(['/work/unrelated']))
+  assert.ok(pass.revived.includes(lib.id), 'a library still being written minutes ago must not stay hidden')
+  assert.ok(state.listLibraries().some((row) => row.id === lib.id))
+})
+
+test('a cold legacy archive with an old binding can still be deleted', () => {
+  // 本机 rp / ai中转站 形态：很久以前归档、仍留着旧绑定、lastUsed 三周前。
+  // 它不是扫描误归档（那类会被自愈），也不该因为“有旧绑定”变成永远删不掉。
+  const lib = state.createLibrary({ name: 'legacy-deletable', cwd: path.join(home, 'legacy-deletable') })
+  const st = state.loadState()
+  st.libraries[lib.id].archived = true
+  st.libraries[lib.id].archivedAt = new Date(Date.now() - 40 * 86_400_000).toISOString()
+  st.libraries[lib.id].lastUsedAt = new Date(Date.now() - 30 * 86_400_000).toISOString()
+  delete st.libraries[lib.id].archivedBy
+  st.sessions['cycle-legacy-del'] = { libraryId: lib.id, scopeKey: path.join(home, 'legacy-deletable') }
+  state.saveState(st)
+  const result = state.deleteLibrary(lib.id)
+  assert.equal(result.ok, true, result.error || '')
+})
