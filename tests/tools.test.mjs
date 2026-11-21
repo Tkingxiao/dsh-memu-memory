@@ -163,6 +163,101 @@ test('lexicon propose writes an active entry immediately; search only sees activ
   dispose()
 })
 
+function namedEntityFixture(suffix, content, extra = {}) {
+  const id = 'tools-named-' + suffix
+  const cwd = path.join(home, id)
+  const binding = state.ensureSession(id, { cwd, agentPreset: 'rp' })
+  const namedExec = { agent: { session: { header: { id, cwd, agentPreset: 'rp' } } } }
+  state.savePrivateIndex(binding.libraryId, { version: 1, entries: {
+    'mem-source': { title: '来访记录', content, status: 'active', visibility: 'shared', layer: 'long_term', ...extra },
+  } })
+  return { binding, namedExec }
+}
+
+for (const [i, name] of ['忆组件', '主人一', '人一', '主人一说'].entries()) {
+  test('new named entity rejects an unsupported fragment: ' + name, async () => {
+    const { tools, dispose } = fakeCtx()
+    const { binding, namedExec } = namedEntityFixture('fragment-' + i, '记忆组件负责保存资料，主人一说话就会得到回应。')
+    const link = tools.find(tool => tool.name === 'memu_private_link')
+    const graph = await import('../lib/graph.js')
+    try {
+      const reply = await link.execute({ from: 'mem-source', entity: { name, kind: 'person' }, kind: 'person', note: '原文出现了相同片段，因此把它作为同一人物关联。' }, namedExec)
+      assert.match(reply, /完整名称|complete name/, 'a substring is not evidence of a complete identity')
+      assert.equal(graph.listEntities({ libraryId: binding.libraryId }).total, 0, 'rejection creates no entity')
+      assert.deepEqual(state.loadPrivateIndex(binding.libraryId).entries['mem-source'].links || [], [], 'rejection creates no link')
+    } finally { dispose() }
+  })
+}
+
+test('new named entity validates source and link before creating any entity', async () => {
+  const { tools, dispose } = fakeCtx()
+  const link = tools.find(tool => tool.name === 'memu_private_link')
+  const graph = await import('../lib/graph.js')
+  const cases = [
+    { suffix: 'missing', args: { from: 'mem-missing' } },
+    { suffix: 'secret', extra: { visibility: 'secret' } },
+    { suffix: 'archived', extra: { status: 'archived' } },
+    { suffix: 'note', args: { note: 'short' } },
+    { suffix: 'confidence', args: { confidence: 2 } },
+    { suffix: 'kind', args: { kind: 'typo' } },
+    { suffix: 'person-target', args: { entity: { name: '阿兰', kind: 'thing' } } },
+    { suffix: 'limit', extra: { links: Array.from({ length: 100 }, (_, i) => ({ to: 'mem-limit-' + i, kind: 'event' })) } },
+  ]
+  try {
+    for (const item of cases) {
+      const { binding, namedExec } = namedEntityFixture(item.suffix, '她叫阿兰，今天来送信。', item.extra)
+      const reply = await link.execute({ from: 'mem-source', entity: { name: '阿兰', kind: 'person' }, kind: 'person', note: '原文写着她叫阿兰，这封信由她送来。', ...item.args }, namedExec)
+      assert.match(reply, /error/, item.suffix + ' must be rejected')
+      assert.equal(graph.listEntities({ libraryId: binding.libraryId }).total, 0, item.suffix + ' leaves no orphan entity')
+    }
+  } finally { dispose() }
+})
+
+test('new named entities require evidence in source memory rather than an invented note', async () => {
+  const { tools, dispose } = fakeCtx()
+  const link = tools.find(tool => tool.name === 'memu_private_link')
+  const graph = await import('../lib/graph.js')
+  try {
+    for (const [suffix, name, content] of [
+      ['note-spoof', '阿兰', '今天由一位邻居送来一封信。'],
+      ['latin-fragment', 'alice', 'malice appeared in the log.'],
+    ]) {
+      const { binding, namedExec } = namedEntityFixture(suffix, content)
+      const reply = await link.execute({ from: 'mem-source', entity: { name, kind: 'person' }, kind: 'person', note: '据我推测，这位邻居的完整名字是「' + name + '」。' }, namedExec)
+      assert.match(reply, /完整名称|complete name/)
+      assert.equal(graph.listEntities({ libraryId: binding.libraryId }).total, 0)
+    }
+  } finally { dispose() }
+})
+
+test('complete quoted and introduced names remain usable and existing aliases are reused', async () => {
+  const { tools, dispose } = fakeCtx()
+  const link = tools.find(tool => tool.name === 'memu_private_link')
+  const graph = await import('../lib/graph.js')
+  try {
+    for (const [i, name, content] of [
+      [0, '阿兰', '她叫阿兰，今天来送信。'],
+      [1, '小柚', '「小柚」今天来送信。'],
+      [2, '主人一', '这个角色自称「主人一」，这是完整昵称。'],
+      [3, 'Alice', 'Alice delivered the letter.'],
+      [4, 'Old Zhou', 'Old Zhou delivered the letter.'],
+    ]) {
+      const { binding, namedExec } = namedEntityFixture('positive-' + i, content)
+      const reply = await link.execute({ from: 'mem-source', entity: { name, kind: 'person' }, kind: 'person', note: '原文明确写出完整名称 ' + name + '，关联这个同一人物。' }, namedExec)
+      const result = JSON.parse(reply)
+      const entity = graph.listEntities({ libraryId: binding.libraryId }).items.find(item => item.id === result.to)
+      assert.equal(entity.name, name)
+      assert.equal(entity.status, 'provisional', 'evidence of a full name alone is not user confirmation')
+    }
+    const { binding, namedExec } = namedEntityFixture('alias', '这位邻居送来一封信。')
+    const existing = graph.createEntity({ libraryId: binding.libraryId, name: '周宁', kind: 'person', aliases: ['Old Zhou'], status: 'confirmed' })
+    graph.linkEntries({ libraryId: binding.libraryId, fromId: 'mem-source', toId: existing.id, kind: 'person', note: '先前已由用户确认这位邻居的身份。' })
+    const result = JSON.parse(await link.execute({ from: 'mem-source', entity: { name: 'ＯＬＤ ＺＨＯＵ', kind: 'person' }, kind: 'person', note: '复用用户此前已经确认的同一人物别名。' }, namedExec))
+    assert.equal(result.to, existing.id)
+    assert.equal(graph.listEntities({ libraryId: binding.libraryId }).total, 1)
+  } finally { dispose() }
+})
+
 test('link suggest refreshes deterministic mention edges and returns only uncertain candidates', async () => {
   const { tools, dispose } = fakeCtx()
   const cwd = path.join(home, 'project-links')

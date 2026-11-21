@@ -212,15 +212,15 @@ test('the settings page renders every page instead of a blank panel', async () =
   await new Promise((resolve) => setTimeout(resolve, 0))
   await new Promise((resolve) => setTimeout(resolve, 0))
 
-  // 13 页（含新增的关系图谱 graph:10）；help 仍是最后一页，未纳入这轮巡检。
-  for (let page = 0; page < 13; page++) {
+  // 14 页（含新增的关系图谱 graph:10 与诊断页 diagnostics:14）；help 仍是最后一页，未纳入这轮巡检。
+  for (let page = 0; page < 14; page++) {
     const { tree } = await renderPage(settings.component, { ctx, t: (key) => key }, page)
     const text = treeText(tree)
     assert.match(String(tree.props?.className), /dshm-root/, `page ${page} did not render the shell`)
     // The rail is the nav: every page label has to be there. Counting the shared
     // dshm-nav-item class instead would also pick up the in-page tab strips (memory
     // backend, prompt scope, browser view), which use the same widget on purpose.
-    const NAV = ['pageOverview', 'pageConnection', 'pageSettings', 'pageFolders', 'pageLibraries', 'pageBrowser', 'pageGlobal', 'pagePrompts', 'pageStats', 'pageMemories', 'pageGraph', 'pageLogs', 'pageLexicon']
+    const NAV = ['pageOverview', 'pageConnection', 'pageSettings', 'pageFolders', 'pageLibraries', 'pageBrowser', 'pageGlobal', 'pagePrompts', 'pageStats', 'pageMemories', 'pageGraph', 'pageLogs', 'pageLexicon', 'pageDiagnostics']
     assert.ok(NAV.every((key) => text.includes(key)), `page ${page} lost a nav entry`)
     assert.equal((text.match(/dshm-nav-ind/g) || []).length, 1, `page ${page} lost or duplicated its rail indicator`)
     assert.match(text, /dshm-page/, `page ${page} lost the content pane`)
@@ -228,6 +228,119 @@ test('the settings page renders every page instead of a blank panel', async () =
     // exactly how the sidebar domain picker broke.
     assert.ok(!text.includes('[object Object]'), `page ${page} rendered an object as text`)
   }
+})
+
+async function graphStudioHarness(call, libraries) {
+  const ctx = fakeCtx()
+  globalThis.__dshMemuExports.apply(ctx)
+  const settings = registrations.filter(row => row.slot === 'settings.section').pop()
+  const shell = await withHash('#/settings/graph', async () => {
+    const props = { ctx, t: key => key, standalone: true }
+    const first = await renderPage(settings.component, props, undefined, { remount: true })
+    for (const effect of first.effects) effect.fn()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    return (await renderPage(settings.component, props)).tree
+  })
+  let studio
+  walkNodes(shell, node => { if (node.type?.name === 'GraphStudioPanel') { studio = node; return false } })
+  assert.ok(studio, 'graph studio not found')
+  const props = { ...studio.props, t: key => key, call, libraries }
+  const previous = new Map()
+  const pick = (tree, predicate) => {
+    const found = []
+    const visit = node => {
+      if (!node || typeof node !== 'object') return
+      if (Array.isArray(node)) { node.forEach(visit); return }
+      if (predicate(node)) found.push(node)
+      if (typeof node.type !== 'function') visit(node.props?.children)
+    }
+    visit(tree)
+    return found
+  }
+  let first = true
+  const render = async (flush = false) => {
+    let view = await renderPage(studio.type, props, undefined, { remount: first })
+    first = false
+    if (flush) {
+      for (const effect of view.effects) {
+        const old = previous.get(effect.index)
+        if (old && effect.deps?.length === old.deps?.length && effect.deps?.every((value, i) => Object.is(value, old.deps[i]))) continue
+        old?.cleanup?.()
+        previous.set(effect.index, { deps: effect.deps, cleanup: effect.fn() })
+      }
+      await new Promise(resolve => setTimeout(resolve, 0))
+      view = await renderPage(studio.type, props)
+    }
+    return view.tree
+  }
+  return { render, pick, close: () => { for (const value of previous.values()) value.cleanup?.() } }
+}
+
+test('graph studio pages all libraries and filters custom domains without merging identities', async () => {
+  const libraries = [{ id: 'lib-a', name: 'A' }, { id: 'lib-b', name: 'B' }], calls = []
+  const call = async (endpoint, payload) => {
+    calls.push({ endpoint, payload })
+    if (endpoint === 'getMemory') return { entry: { title: 'B editable', content: 'B full body' } }
+    if (endpoint !== 'getGraph') return { items: [] }
+    const domain = payload.libraryId === 'lib-a' ? 'coding' : 'project:travel'
+    const memories = Array.from({ length: payload.libraryId === 'lib-a' ? 201 : 1 }, (_, i) => ({
+      id: i ? 'mem-' + i : 'mem-shared', title: payload.libraryId + '-memory-' + i, kind: 'memory', domain,
+    }))
+    const nodes = payload.domain && payload.domain !== domain ? [] : [...memories, { id: 'ent-shared', title: payload.libraryId + '-person', kind: 'person' }]
+    const offset = payload.offset || 0, next = offset + 200
+    return { nodes: nodes.slice(offset, next), edges: !offset && nodes.length ? [{ from: 'mem-shared', to: 'ent-shared', kind: 'person' }] : [],
+      nextOffset: next < nodes.length ? next : null, domains: ['coding', 'project:travel'] }
+  }
+  const view = await graphStudioHarness(call, libraries)
+  try {
+    let tree = await view.render(true)
+    view.pick(tree, node => node.type === 'select' && node.props['aria-label'] === 'currentLibrary')[0].props.onChange({ target: { value: '__global__' } })
+    tree = await view.render(true)
+    const canvas = () => view.pick(tree, node => node.type?.name === 'GraphCanvas')[0].props.graph
+    assert.equal(canvas().nodes.length, 204)
+    assert.equal(canvas().nodes.filter(node => node.kind === 'person').length, 2)
+    assert.equal(new Set(canvas().nodes.map(node => node.id)).size, 204)
+    assert.equal(canvas().edges.length, 2)
+    for (const edge of canvas().edges) assert.equal(canvas().nodes.find(node => node.id === edge.from).libraryId, canvas().nodes.find(node => node.id === edge.to).libraryId)
+    assert.ok(calls.some(row => row.payload.libraryId === 'lib-a' && row.payload.offset === 200))
+    view.pick(tree, node => node.type === 'input' && node.props['aria-label'] === 'gsDomain')[0].props.onChange({ target: { value: '  PROJECT:travel  ' } })
+    tree = await view.render(true)
+    assert.equal(canvas().nodes.length, 2)
+    assert.ok(canvas().nodes.every(node => node.libraryId === 'lib-b'))
+    assert.ok(calls.some(row => row.payload.domain === 'project:travel'))
+    view.pick(tree, node => node.type === 'input' && node.props['aria-label'] === 'gsDomain')[0].props.onChange({ target: { value: 'project:travel' } })
+    tree = await view.render(true)
+    assert.equal(canvas().nodes.length, 2, 'equivalent domain input must not clear the graph')
+    view.pick(tree, node => node.type === 'button' && node.props.children === 'gsManage')[0].props.onClick()
+    tree = await view.render()
+    const rows = view.pick(tree, node => String(node.props?.className || '').split(' ').includes('dshm-gs-mgr-row'))
+    assert.equal(rows.length, 2, 'management uses the same domain filter')
+    rows.find(row => treeText(row).includes('lib-b-memory-0')).props.onClick()
+    tree = await view.render()
+    view.pick(tree, node => node.type === 'button' && node.props['aria-label'] === 'gsEditNode')[0].props.onClick()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.deepEqual(calls.find(row => row.endpoint === 'getMemory').payload, { libraryId: 'lib-b', id: 'mem-shared' })
+    tree = await view.render()
+    view.pick(tree, node => node.type === 'input' && node.props['aria-label'] === 'gsDomain')[0].props.onChange({ target: { value: '' } })
+    tree = await view.render(true)
+    assert.equal(canvas().nodes.length, 204)
+  } finally { view.close() }
+})
+
+test('graph studio surfaces failed libraries and retains successful results', async () => {
+  const call = async (endpoint, payload) => {
+    if (endpoint !== 'getGraph') return { items: [] }
+    if (payload.libraryId === 'lib-denied') throw new Error('forbidden')
+    return { nodes: [{ id: 'mem-ok', title: 'visible', kind: 'memory' }], edges: [], nextOffset: null }
+  }
+  const view = await graphStudioHarness(call, [{ id: 'lib-ok', name: 'OK' }, { id: 'lib-denied', name: 'Denied library' }])
+  try {
+    let tree = await view.render(true)
+    view.pick(tree, node => node.type === 'select' && node.props['aria-label'] === 'currentLibrary')[0].props.onChange({ target: { value: '__global__' } })
+    tree = await view.render(true)
+    assert.equal(view.pick(tree, node => node.type?.name === 'GraphCanvas')[0].props.graph.nodes.length, 1)
+    assert.match(treeText(view.pick(tree, node => node.props?.role === 'alert')[0]), /gsLoadPartial.*Denied library/)
+  } finally { view.close() }
 })
 
 test('the immersive graph shell stays with the standalone WebUI', async () => {

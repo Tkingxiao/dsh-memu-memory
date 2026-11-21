@@ -44,6 +44,8 @@ worker 前置依赖 / 完整包超限 / usage 未知 → §3.39
 本地向量模型装不上 / 切不过去 / 召回 400 → §3.25
 整理超时（fork 预算不够）→ §3.26
 图谱改了没生效 / 缩到最小打架 / 导航被掰竖 → §3.27
+全部库图谱缺绿色实体 / 按域筛选 → §3.43
+自动出现「忆组件 / 主人一 / 人一 / 主人一说」等碎片实体 → §3.44
 WebUI 开着 GPU 占用高 / 时钟钉高档 → §3.28
 长链跑批库不增长 / 考试大面积「不知道」→ §3.29
 同一条用户消息每轮注入两次 / 第二次召回 0 条 → §3.30
@@ -366,6 +368,28 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 **守卫**：`tests/webui.test.mjs` 的 `the shell keeps no always-on compositor drivers`（无限动画只许出现在 boot；ambient 不许 will-change/animation；backdrop-filter 只许 topbar/boot-card；共享 UI 不许全屏模糊；缩略图不许轮询）+ `scripts/check-idle-compositing.mjs` 真机数帧。
 
 
+### 3.29 诊断页：插件内部到底哪儿坏了（1.3.13 起）
+
+**症状**：召回突然降级成"只有关键词命中"、写入报 `VECTOR_PROFILE_MANIFEST_CHANGED` / `the local embedding worker exited before it became ready`、整理任务一直说 `the consolidation lease could not be persisted`，但设置页一切正常、活动日志里只有一行警告。
+
+**落点**：这类故障以前**没有出口**——`logs/activity.jsonl` 记的是流程（谁在什么时候召回了几条），而"哪个文件坏了、能不能修"无处可看；活动日志里那一行 `logger.warn` 还是被 `fail-open` 吞掉之后的残渣。2026-11 这三类真实故障就是这样坏了 9 天才被发现（同一句 manifest 报错在活动日志里出现 661 次，最早的 2026-11-12）：
+
+| 症状 | 真实根因 | 诊断里的 code | 修复动作 |
+|---|---|---|---|
+| 召回降级 661 次 | catalog 的 `runtime.sources` 加了国内镜像元数据，摘要却把整个 `runtime` 算进身份 → 向量空间被误判为"制品清单已变" | `VECTOR_PROFILE_MANIFEST_CHANGED` | `resign-vector-profile`（重签摘要，不动 25 条向量） |
+| 写入/召回报 worker exited | `vector-active.json` 的 `runtimeDir` 指向一个已不存在的 UUID 目录（`onnxruntime-node` MODULE_NOT_FOUND，而这行 stderr 被旧代码 `() => {}` 丢掉了） | `LOCAL_VECTOR_RUNTIME_UNAVAILABLE` | `repoint-runtime-dir` |
+| 整理 84 次 `lease could not be persisted` | `consolidation.json.lock` 是 0 字节（写锁时崩在 `writeFileSync` 之前），旧 `withFileLock` 把锁内容当 pid，`Number('')===0` 永远进不了清理分支 → 每次都等到超时 | `DSH_MEMU_STORE_BUSY` | `release-stale-locks` |
+
+**现在**：
+- **诊断页**：设置 → 诊断（`#/settings/diagnostics`），或独立 WebUI 的「诊断」。上半张是**环境自检**（数据目录可写 / 遗留锁 / 引擎 python / 向量 profile 摘要 / 向量运行时 / 模型目录 / embedding worker），每项给状态、证据、怎么办，能自动修的给按钮、破坏性的标"需手动"；下半张是**诊断记录**，按 level 与关键词过滤，`detail` 里是结构化证据（脱敏后的 stderr 尾巴、路径、changedFields），可整页复制。
+- **主页启动弹窗**：启动引导自检发现 error/warn 级问题时，主页顶部弹一张卡（最多 4 条，按 code 汇总"×N"）。点"稍后"或"打开诊断"都会 `acknowledgeDiagnostics`，**同一问题不再天天弹**，只有再次发生（count 增长）才重新提醒。
+- **启动自动修复**：`autoInstallEngine` 打开时，启动 6 秒后跑一次自检，只自动执行**安全且幂等**的三件事（清遗弃锁 / 重签摘要 / 重指运行时目录）；重建索引、重装运行时/模型/引擎一律留手动入口——它们会动用户数据或几十 MB 下载，不该静默发生。
+- **落盘位置**：`~/.dsh/dsh-memu-memory/diagnostics/events.jsonl`（2MB 轮转到 `events.1.jsonl`），与 `logs/activity.jsonl` 分开；同一 `(scope, code, message)` 60 秒内只累加 `count`，维修动作无论成功失败都记一行 `MEMU_DIAGNOSTIC_REPAIRED` / `MEMU_DIAGNOSTIC_REPAIR_FAILED`。
+
+**自己查的顺序**：先看诊断页环境自检的红项（它们决定"能不能修"），再看诊断记录里最新一条的 `detail`——`stderrTail` / `changedFields` / `busy.owner`+`busy.ageMs` 通常直接点名坏在哪。锁类问题不要手动删 `*.lock`：诊断页的「释放遗留锁」会先核对 pid 是否还活着、锁是否超过 60 秒，只清能证明是遗弃的（手动删可能拆掉另一个插件副本正在用的事务）。
+
+**守卫**：`tests/diagnostics.test.mjs`（去重计数、独立落盘、脱敏、告警确认后不再弹、修复双向记账、锁四种遗弃判据、三种摘要算法兼容、镜像漂移 vs 身份变更）、`tests/environment-check.test.mjs`（缺什么报什么、安全/手动分组、`confirmed` 门禁）、`tests/client-render.test.mjs` 的逐页探针（14 页）。
+
 ## 守卫索引表
 
 正文只留「症状 + 落点」；拦复发的测试与信号集中在这里。
@@ -408,7 +432,7 @@ S8 展示回写  client.js 面板 + useMemoryBeat 心跳 + rpc.js allowed + tool
 
 ### 2.1 模块地图
 
-<!-- rpc-method-count: 102 -->
+<!-- rpc-method-count: 109 -->
 
 | 文件 | 职责 / 什么时候碰它 |
 |---|---|
@@ -739,3 +763,21 @@ grep tests 里的硬编码清单。守卫：全量 `npm test` 1676/1674 pass / 0
 **落点：** 全局生命周期走既有 `archiveMemory` / `updateMemory` / `deleteMemory` 加显式 `scope:'global'`（`lib/rpc.js`），鉴权与全局复核队列同口径（`authorizeGlobalReviewRoute`：embedded 要活绑定，standalone 走 `libraryId=null` 的 `review.manage`）；`scope:'global'` 与 `libraryId` 同现在鉴权层就拒。`lib/memory.js` 的 `globalSetStatus` 只改 status（召回/锚点/注入统一过 `isMemoryEligible`，archived 立即排除，不动向量行）；全局 `updateMemory` 只接受 `{status:'active'}`。`globalDelete` 只开放 archived/suppressed/expired + 显式确认 + 删除前 `backupDatabases`，单事务级联清他条 `links[].to` 与 `duplicateOf/relatedTo/conflictingWith/supersededBy/absorbedBy`；带 `absorbedFrom` 的合并稿与活跃合并的来源拒删。前端：记忆墙全局块多选与私有同权（`lib/client.js` MemoryWallPanel），抽屉全局条目内容只读但生命周期按钮齐全，全局记忆页每条带归档/恢复/两段删除。
 
 **守卫：** `tests/global-lifecycle.test.mjs`（归档即排除召回/恢复即回来、状态机边界、内容补丁拒绝、删除级联与合并守卫、管理视图仍见 archived、私有路径回归）；`tests/webui-auth.test.mjs` 的「global lifecycle」凭据矩阵（活绑定/悬空会话/作用域冲突/review.manage 四态）；`tests/client-render.test.mjs` 的全局块多选批量归档与抽屉两段删除（注意 harness 的 hook 游标全局递增：同一棵树只能 walk 一遍）。
+
+### 3.43 全部库图谱缺绿色实体与域筛选
+
+**症状**：选择全部库后，后面库的绿色实体不见，或大库只剩记忆节点。
+
+**原因与修复**：旧接口每库先取 200 个节点，实体排在记忆后；前端合并时用裸 id 去重，画布又把合并输入截到 200。现在私有图谱无焦点浏览显式传 `offset` 分页，按返回的 `nextOffset` 读完；跨页边保留端点，跨库显示 id 由库和原始 id 组成，管理操作仍用原始 id 写回所属库。画布不再重复截断输入。旧接口默认页上限与焦点邻域仍保留，分页不扩大会话可访问库。读取失败会显示库名，不再静默吞掉。
+
+**筛选**：顶部域输入框可输入完整自定义域，或选择已有域；NFKC、首尾空白和大小写规范化后精确匹配，清空显示全部域。缺失域按 `general`，实体随匹配记忆出现，图与管理列表共用结果。仅更改大小写或空白不会清空画布。
+
+**守卫**：`tests/graph.test.mjs` 覆盖分页、跨页边、域与权限；`tests/client-render.test.mjs` 覆盖 204 节点跨库分页、同 id 隔离、域切换、原始 id 编辑与部分失败；`tests/graph-view.test.mjs` 覆盖超过 200 节点的尾部实体与实际 bundle。改引擎后执行 `npm run build:graph`。
+
+### 3.44 自动实体把词语片段当成人名
+
+**症状**：自动整理或候选队列出现「忆组件」「主人一」「人一」「主人一说」等被截断的人物节点；无效的关联请求报错后还可能留下孤立实体。
+
+**原因与修复**：旧候选提取把完整引号或名字引导后的文本再次拆成 n-gram，内部片段也继承表面证据。新候选只给完整称呼背书，并过滤没有独立边界的子片段。模型通过 `memu_private_link` 创建未知实体时，来源记忆本身必须包含完整引号、名字引导加右边界、或两侧分隔的名称，link note 不算来源证据；先校验来源、边类型、理由、置信度和数量限制，再创建 provisional 实体，普通参数错误不再遗留孤立节点。既有实体和别名仍可复用，手动创建与已确认实体的提及匹配保持原规则。
+
+**守卫与旧数据**：`tests/tools.test.mjs` 覆盖四种碎片、虚构理由、Latin 子串、完整姓名/昵称/别名与失败不留节点；`tests/auto-link-candidates.test.mjs` 覆盖完整表面、内部片段和派生缓存。不能仅按字符串把历史节点自动删除或归并——「主人一」也可能是真实昵称；先核对原始记忆，再在关系图中按证据改名、合并或删除。此修复不改写现有记忆或实体。

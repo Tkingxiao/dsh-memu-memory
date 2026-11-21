@@ -1,5 +1,22 @@
 # 更新日志 / Changelog
 
+## [1.3.13] - 2026-11-21
+
+> 诊断体系：插件内部故障有了自己的出口（诊断页 + 启动弹窗 + 自动/手动修复），并修掉三类会让召回静默降级的真实故障——摘要把镜像元数据算成"制品已变"、运行时目录失效、0 字节遗留锁永不自愈。
+
+- **诊断存储（与活动日志分开）**：新增 `lib/diagnostics.js`，写 `diagnostics/events.jsonl`（2MB 轮转）+ `acknowledged.json`，内存环形 500 条；同 `(scope, code, message)` 60 秒内只累加 `count`；`detail` 统一脱敏。`KNOWN_CODES` 把故障码映射成「哪一层坏了 / 能不能自动修 / 修之前会不会丢数据」。
+- **诊断页（设置 → 诊断，`#/settings/diagnostics`）**：上半张环境自检（数据目录、遗留锁、引擎、向量 profile、运行时、模型、worker），每项给证据与建议并配按钮（可自动修的给按钮，破坏性的标"需手动"）；下半张按 level/关键词过滤诊断记录，可整页复制。独立 WebUI 的 `PAGE_NAMES` 同步。
+- **启动检查 + 主页弹窗**：启动 6 秒后跑一次自检，error/warn 项落诊断（`ENV_*`）；主页顶部弹出提醒卡（`getDiagnosticAlerts`，最多 4 条按 code 汇总），点"稍后/打开诊断"即 `acknowledgeDiagnostics`，同一问题不再天天弹、再次发生才重新提醒。
+- **修复：自动只做安全项**：`SAFE_REPAIRS`＝释放可证明遗弃的锁（`release-stale-locks`）、重签摘要（`resign-vector-profile`）、重指运行时目录（`repoint-runtime-dir`），受 `autoInstallEngine` 开关约束；`MANUAL_REPAIRS`＝重装运行时/模型、重建向量代际、重装引擎，只能手动、且 `confirmed === true`。每步无论成败都记 `MEMU_DIAGNOSTIC_REPAIRED` / `MEMU_DIAGNOSTIC_REPAIR_FAILED`。
+- **锁加固**：`withFileLock` 载荷改成 `pid\nISO`（兼容旧的一行裸 pid），EEXIST 时先判定遗弃（无法解析且≥10s / 自身 pid 但无事务且≥10s / 死 pid 立即 / ≥60s 超龄），遗弃则就地释放重试并发 `MEMU_LOCK_BROKEN` 事件。真实事故：0 字节 `consolidation.json.lock` 里 `Number('')===0` 永不满足清理条件，整理连败 84 次。
+- **摘要改成身份视图**：`manifestDigest` 只摘 `runtime` 的身份字段（engine/abi/version/os/arch 与制品 name/version/sha256/integrity），镜像源与文案（`sources`/`label`/`displayName`/`summary`）不再入摘要，字典与数组两种制品形态都剥；老算法继续接受；`manifestDrift` 区分"只有元数据漂移（warn 一次、继续用）"与"身份变了（抛错、要重建）"；逐字段一致却摘要对不上仍按不可信处理。
+- **重签与重指**：`resignVectorProfile` 拒绝身份变更，改前备份 `vector-active.json.bak-resign-*`；`repointVectorRuntimeDir` 备份 `.bak-runtimedir-*`，候选目录同时扫 `downloads/embeddings/runtime`（真实布局）与旧 `downloads/runtime`，且要求 `onnxruntime-node/package.json` 真在（只剩 `bin/` 的空壳不算候选）。
+- **整理收尾失败带原因**：worker 收尾 followup 失败原先只写 `consolidation wrapup followup failed`，诊断页照着查不到任何东西；现在带 `code: message`（`describeError`），并在 `lib/binding-diagnostics.js` 的 `RUNTIME_STATE` 里同步 `inFlight` 的源码位置。
+- **worker 可观测**：`local-embedding-manager` 不再丢弃子进程 stderr（脱敏后保留末 4000 字），失败时挂 `error.embedding = {stderrTail, modelDir, runtimeDir}` 并通过 `setEmbeddingFailureSink` 写诊断——「worker exited before it became ready」从此带原因。
+- **读盘修复**：`ensureLoaded` 只有在真的从中间截断时才丢第一行；此前无条件 `shift()`，导致"落盘了但重启后诊断页永远空白"。
+- 守卫：`tests/diagnostics.test.mjs`（去重/独立落盘/脱敏/确认后不再弹/修复双向记账/锁四判据/三算法兼容/drift 分类/重启后可读）、`tests/environment-check.test.mjs`（检查项形状、遗弃锁可见、`confirmed` 门禁、失败也记账、安全名单不可越界、运行时目录发现）、`tests/client-render.test.mjs` 逐页探针 13 → 14 页。
+- 文档同步：`docs/contributing.md` §5.4.1（诊断/修复扩展点）、`docs/troubleshooting.md` §3.29（三类真实故障的症状→根因→诊断码→修复动作）。
+
 ## [1.3.12] - 2026-11-20
 
 > 全局记忆生命周期与私有同权：记忆墙全局块多选批量归档/恢复/删除、抽屉与全局记忆页的归档/恢复/两段确认永久删除补齐；内容仍由 curator 书写。

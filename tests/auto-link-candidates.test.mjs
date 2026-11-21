@@ -159,3 +159,74 @@ test('legacy grading keeps asserted rows and downgrades everything else to provi
   assert.equal(graded[c.id].status, 'confirmed', 'a non-auto inbound link protects the row')
   assert.equal(graded[b.id].status, 'provisional', 'garbage without evidence stays provisional')
 })
+
+test('quoted and introduced surfaces do not nominate fragments, including spans beyond the n-gram cap', () => {
+  const entries = [
+    '她叫主人一说。提到「记忆组件」和「极光记忆组件」。我叫「小一」。',
+    '她自称「主人一说」。使用「记忆组件」和「极光记忆组件」。也叫“小一”。',
+    ...Array.from({ length: 8 }, (_, i) => '额外记录 ' + i),
+  ].map(text => ({ text, title: '' }))
+  const stats = terminology.buildTermStats(entries)
+  const ranked = terminology.rankCandidates(entries, stats)
+  const queue = [...ranked.tier1, ...ranked.tier2]
+  for (const fragment of ['忆组件', '主人一', '人一', '主人一说', '极光记忆']) {
+    assert.equal(stats.get(fragment)?.df, 2, fragment + ' is present in the raw statistics')
+    assert.ok(!queue.some(row => row.term === fragment), fragment + ' must stay out of the review queue')
+  }
+  assert.equal(ranked.tier1.find(row => row.term === '记忆组件')?.quoted, true)
+  const name = ranked.tier1.find(row => row.term === '小一')
+  assert.equal(name?.quoted, true)
+  assert.equal(name?.intro, true)
+})
+
+test('a candidate can qualify independently of a longer name intro and quoted span', () => {
+  const entries = [
+    '她叫主人一说得对。后来新成员报名，名字是「主人一」。',
+    '大家用“主人一”称呼新成员。另有「主人一说」。',
+    ...Array.from({ length: 8 }, (_, i) => '额外记录 ' + i),
+  ].map(text => ({ text, title: '' }))
+  const ranked = terminology.rankCandidates(entries, terminology.buildTermStats(entries))
+  const owner = ranked.tier1.find(row => row.term === '主人一')
+  assert.equal(owner?.quoted, true)
+  assert.equal(owner?.intro, true)
+  assert.ok(![...ranked.tier1, ...ranked.tier2].some(row => row.term === '人一'))
+})
+
+test('older candidate snapshots are rebuilt despite an unchanged source signature', () => {
+  const lib = library('old-snapshot')
+  state.savePrivateIndex(lib, { version: 1, entries: fixture() })
+  const fresh = candidates.generateAnchorCandidates({ libraryId: lib, now: 1 })
+  const file = candidates.candidatesFile(lib)
+  const legacy = { ...fresh, version: 1, tiers: { tier1: [{ term: '遗留碎片' }], tier2: [] } }
+  delete legacy.candidateVersion
+  fs.writeFileSync(file, JSON.stringify(legacy), 'utf8')
+  candidates.resetAnchorCandidatesCache()
+  const rebuilt = candidates.generateAnchorCandidates({ libraryId: lib, now: 2 })
+  assert.equal(rebuilt.revision, fresh.revision)
+  assert.equal(rebuilt.generatedAt, new Date(2).toISOString())
+  assert.deepEqual(rebuilt.tiers, fresh.tiers)
+})
+
+test('custom candidate policy invalidates both cache layers for that library', async () => {
+  const { AUTOLINK_POLICY_V3 } = await import('../lib/auto-link/policy.js')
+  const lib = library('policy-cache')
+  state.savePrivateIndex(lib, { version: 1, entries: fixture() })
+  const normal = candidates.generateAnchorCandidates({ libraryId: lib, now: 1 })
+  assert.equal(normal.tiers.tier1.find(row => row.term === '小柚')?.df, 2)
+  const strictPolicy = { ...AUTOLINK_POLICY_V3, minDf: 3 }
+  const strict = candidates.generateAnchorCandidates({ libraryId: lib, now: 2, policy: strictPolicy })
+  assert.equal(strict.tiers.tier1.some(row => row.term === '小柚'), false)
+  candidates.resetAnchorCandidatesCache()
+  assert.deepEqual(candidates.generateAnchorCandidates({ libraryId: lib, now: 3, policy: { ...strictPolicy } }), strict)
+  candidates.resetAnchorCandidatesCache()
+  const normalAgain = candidates.generateAnchorCandidates({ libraryId: lib, now: 4 })
+  assert.deepEqual(normalAgain.tiers, normal.tiers)
+})
+
+test('name-intro does not treat a prefix of a mixed-script surface as a whole name', () => {
+  const entries = ['她叫阿兰2。', '名字是「阿兰2」。', '额外记录'].map(text => ({ text, title: '' }))
+  const stats = terminology.buildTermStats(entries)
+  assert.equal(stats.get('阿兰')?.df, 2)
+  const { tier1, tier2 } = terminology.rankCandidates(entries, stats)
+  assert.ok(![...tier1, ...tier2].some(row => row.term === '阿兰'))
+})

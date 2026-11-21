@@ -41,13 +41,13 @@ test('disconnected 200-node layout stays finite, separated and framed without bo
   layout.dispose()
 })
 
-test('invalid/self edges are ignored, input bounded, node order deterministic', () => {
+test('invalid/self edges are ignored, all unique nodes retained, node order deterministic', () => {
   const data = graph(250, false)
   data.edges.push({ from: 'missing', to: 'n000' }, { from: 'n000', to: 'n000' })
   const a = createForceLayout(), b = createForceLayout()
   a.update(data)
-  b.update({ nodes: [...data.nodes.slice(0, 200)].reverse(), edges: [] })
-  assert.equal(a.nodes.length, 200); assert.equal(a.edges.length, 0)
+  b.update({ nodes: [...data.nodes, data.nodes[0]].reverse(), edges: [] })
+  assert.equal(a.nodes.length, 250); assert.equal(b.nodes.length, 250); assert.equal(a.edges.length, 0)
   a.settle(); b.settle()
   assert.deepEqual(a.nodes.map(n => [n.id, n.x, n.y]), b.nodes.map(n => [n.id, n.x, n.y]),
     'the jitter must be deterministic, never Math.random')
@@ -226,6 +226,30 @@ function harness(reducedMotion = true) {
   return { view, flush, emit, arcs, texts, frames, focuses, handlers, windowHandlers, getPaints: () => paints }
 }
 
+test('view snapshots retain multiple clusters and entities beyond the first 200 nodes', () => {
+  const data = graph(250, false)
+  for (let i = 0; i < 249; i++) {
+    if (i !== 119) data.edges.push({ from: data.nodes[i].id, to: data.nodes[i + 1].id })
+  }
+  for (const [id, from] of [['ent-first', 'n119'], ['ent-last', 'n249']]) {
+    data.nodes.push({ id, title: id, kind: 'person', strength: .5 })
+    data.edges.push({ from, to: id })
+  }
+  const h = harness()
+  h.view.update(data); h.flush()
+  const snapshot = h.view.snapshot()
+  assert.equal(snapshot.length, 252)
+  assert.deepEqual(new Set(snapshot.map(node => node.id)), new Set(data.nodes.map(node => node.id)))
+  for (const id of ['ent-first', 'ent-last']) {
+    const entity = snapshot.find(node => node.id === id)
+    assert.equal(entity.degree, 1, 'late entity links must survive canvas ingestion')
+    assert.ok(Number.isFinite(entity.x) && Number.isFinite(entity.y))
+  }
+  h.view.update({ nodes: [...data.nodes, data.nodes[0]].reverse(), edges: [...data.edges].reverse() }); h.flush()
+  assert.deepEqual(h.view.snapshot(), snapshot, 'equivalent refreshed input preserves every node and its position')
+  h.view.dispose()
+})
+
 test('the detailed layer actually paints labels and the label switch silences them', () => {
   const h = harness()
   h.view.update(graph(10)); h.flush()
@@ -383,4 +407,8 @@ test('shipped browser bundle exposes the controller with no runtime npm imports'
   assert.equal(typeof api.placeLabels, 'function')
   assert.equal(api.DEFAULT_OPTIONS.center, 0)
   assert.equal(api.DEFAULT_OPTIONS.clusterScope, true)
+  const layout = api.createForceLayout()
+  layout.update(graph(251, false))
+  assert.equal(layout.nodes.length, 251, 'the shipped browser bundle must retain nodes beyond 200')
+  layout.dispose()
 })

@@ -78,9 +78,9 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 
 ### 5.3 新增一个 RPC 方法
 
-<!-- rpc-method-count: 102 -->
+<!-- rpc-method-count: 109 -->
 
-1. `lib/rpc.js` 的 `switch` 加 case（共 102 个方法，按功能分组，别乱插）。
+1. `lib/rpc.js` 的 `switch` 加 case（共 109 个方法，按功能分组，别乱插）。
 2. 返回**形状稳定**：客户端 `call()` 直接解构，列表类给 `{items, total}` 而不是裸数组。
 3. `revisionOnly` 分支只回 `{revision, stamp}`、**不要求 sessionId**（三端轮询，设置页与独立页没会话）、**不塞业务数据**（每 2.5 秒一次）；顺带 `noteMemoryBeat()`，`memu_status` 靠它分「没写」与「没人轮询」。
 4. 写成功后 `bumpMemoryRevision()`/`notifyMemoryWrite()`（§7）；能让 `state.json` 或索引落盘的写，`state.js` 自动记写事件供 `memu_status` 展示。
@@ -93,6 +93,18 @@ npm run check                        # node --check + i18n 键对齐 + package.j
 3. 文案 zh/en 两字典都加，跑 `node scripts/check-i18n.mjs`；反面语义 → WebUI `settingRow(..., { invert: true })`。
 4. 独立页（`lib/webui/`）要同步显示就走 `BroadcastChannel` 的 `memory-write`，并让 WebUI `settingRow` 读同一份 `getSettingsState`。
 5. **新增整页**：`PAGE` 加键 → `pageDefs` → `pageBlocks` → 导航图标 → 两处文案 → 渲染探针（`tests/client-render.test.mjs` 逐页渲染）。
+
+### 5.4.1 新增一条诊断 / 一个修复动作
+
+诊断是**插件自己的体检**，与活动日志（`logs/activity.jsonl`，记"发生了什么"）刻意分开：活动日志给用户看流程，诊断记"哪里坏了、能怎么修"。
+
+1. **记一条**：`recordDiagnostic({level, scope, code, message, detail, hint, repair})`（`lib/diagnostics.js`）。`code` 用大写下划线常量，同一个 `(scope, code, message)` 在 60 秒窗口内只累加 `count`，不会刷屏；`detail` 里的 secret 会被 `redactSecrets`（`lib/paths.js:63`）脱敏——**宁可少记，不可记明文 key**。
+2. **让报错自动进来**：抛错路径统一走 `recordErrorDiagnostic(error, {source, detail})`；`error.code` 命中 `KNOWN_CODES` 表就自动带上 scope / 修复动作 / hint。
+3. **登记故障码**：`KNOWN_CODES`（`lib/diagnostics.js`）里给 `{scope, repair, manual, hint}`。`repair` 必须是 `lib/environment-check.js` 里 `REPAIRS` 的键，否则诊断页只显示"无可用修复"。
+4. **新增修复动作**：在 `lib/environment-check.js` 的 `REPAIRS` 加一项 `{label, run}`，同时决定它进 `SAFE_REPAIRS`（启动时自动跑、幂等、不删用户数据）还是 `MANUAL_REPAIRS`（必须用户点、可能重建索引或重装引擎）。**破坏性动作永远不进 SAFE**。
+5. **每一项修复都要 `recordRepair({action, ok, detail})`**——失败也要进诊断，否则"修了但没修好"无从判断。
+6. **检查项**：`runEnvironmentCheck` 的 items 形如 `{id, level, ok, title, detail, hint, repair}`，诊断页与启动弹窗都只认这个形状；加检查项记得在 `tests/environment-check.test.mjs` 里加一条"缺什么报什么"的用例。
+7. 前端：诊断页 `diagnosticsBlock`（`lib/client.js`）已把"环境自检 + 诊断记录"两块渲染完，新动作不用改前端，只要出现在 `getRepairOptions` 里就会长出按钮。
 
 ### 5.5 新增一个提示词变体 / 类型页
 

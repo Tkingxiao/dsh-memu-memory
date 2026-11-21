@@ -102,6 +102,116 @@ test('graphs cap nodes at 200 and the recall carries at most two pointers', asyn
   assert.ok((await memory.privateRecall({ exec, query: 'mem-2' })).files[0].related.length <= 2)
 })
 
+test('graph pagination reaches entities after 200 memories and returns each cross-page edge once', () => {
+  const { libraryId } = state.ensureSession('graph-pages', { cwd: path.join(home, 'rp-pages'), agentPreset: 'rp' })
+  const confirmed = graph.createEntity({ libraryId, name: 'Late confirmed', status: 'confirmed' })
+  const provisional = graph.createEntity({ libraryId, name: 'Late provisional' })
+  const entries = Object.fromEntries(Array.from({ length: 205 }, (_, i) => [
+    `mem-${i}`, { title: `node ${i}`, status: 'active', visibility: 'shared', domain: 'pages' },
+  ]))
+  entries['mem-0'].links = [{ to: 'mem-204', kind: 'event' }, { to: confirmed.id, kind: 'person' }]
+  entries['mem-204'].links = [{ to: 'mem-0', kind: 'relation' }, { to: provisional.id, kind: 'person' }]
+  state.savePrivateIndex(libraryId, { entries })
+  const edgePairs = page => page.edges.map(edge => [edge.from, edge.to])
+  const legacy = graph.getGraph({ libraryId, limit: 5000 })
+  assert.equal(legacy.nodes.length, 200)
+  assert.equal(legacy.limit, 200)
+  assert.equal(legacy.truncated, true)
+  assert.equal(legacy.total, undefined)
+  assert.equal(legacy.nextOffset, undefined)
+  assert.deepEqual(legacy.edges, [], 'legacy edges still require both endpoints in the result')
+
+  const first = graph.getGraph({ libraryId, offset: 0, limit: 5000 })
+  assert.deepEqual(first.nodes.map(node => node.id), legacy.nodes.map(node => node.id))
+  assert.equal(first.total, 207)
+  assert.equal(first.nextOffset, 200)
+  assert.equal(first.truncated, true)
+  assert.deepEqual(edgePairs(first), [['mem-0', 'mem-204'], ['mem-0', confirmed.id]])
+
+  const last = graph.getGraph({ libraryId, offset: first.nextOffset })
+  assert.equal(last.nodes.length, 7)
+  assert.equal(last.total, first.total)
+  assert.equal(last.nextOffset, null)
+  assert.equal(last.truncated, false)
+  assert.deepEqual(last.nodes.filter(node => node.kind === 'person').map(node => [node.id, node.status]), [
+    [confirmed.id, 'confirmed'], [provisional.id, 'provisional'],
+  ])
+  assert.deepEqual(edgePairs(last), [['mem-204', 'mem-0'], ['mem-204', provisional.id]])
+  assert.equal(new Set([...first.nodes, ...last.nodes].map(node => node.id)).size, first.total)
+
+  const fullLast = graph.getGraph({ libraryId, offset: 205, limit: 2 })
+  assert.equal(fullLast.nodes.length, 2)
+  assert.equal(fullLast.nextOffset, null)
+  assert.equal(fullLast.truncated, false, 'a full final page has no remainder')
+  const beyond = graph.getGraph({ libraryId, offset: 500 })
+  assert.deepEqual([beyond.nodes, beyond.edges, beyond.total, beyond.nextOffset, beyond.truncated], [[], [], 207, null, false])
+
+  const focused = graph.getGraph({ libraryId, focusId: 'mem-0', offset: 500, depth: 1 })
+  assert.deepEqual(focused.nodes.map(node => node.id), ['mem-0', 'mem-204', confirmed.id])
+  assert.equal(focused.nextOffset, undefined, 'offset never changes bounded focus traversal')
+})
+
+test('graph domain matches normalized exact memory domains and derives only their linked entities', () => {
+  const { libraryId } = state.ensureSession('graph-domains', { cwd: path.join(home, 'rp-domains'), agentPreset: 'rp' })
+  const coding = graph.createEntity({ libraryId, name: 'Coding contact' })
+  const other = graph.createEntity({ libraryId, name: 'Other contact' })
+  const orphan = graph.createEntity({ libraryId, name: 'Unrelated orphan' })
+  state.savePrivateIndex(libraryId, { entries: {
+    'mem-code': { title: 'coding', domain: '  Ｃｏｄｉｎｇ  ', links: [
+      { to: coding.id, kind: 'person' }, { to: 'mem-code-2', kind: 'event' },
+      { to: 'mem-legacy', kind: 'relation', note: 'cross-domain evidence' }, { to: 'mem-other', kind: 'event' },
+      { to: 'mem-removed', kind: 'relation' },
+    ] },
+    'mem-code-2': { title: 'also coding', domain: 'CODING' },
+    'mem-legacy': { title: 'legacy' },
+    'mem-other': { title: 'other', domain: 'coding-extra', links: [
+      { to: other.id, kind: 'person' }, { to: 'mem-code', kind: 'event' },
+    ] },
+  } })
+  const page = graph.getGraph({ libraryId, offset: 0, domain: '  CoＤinG  ', includeOrphans: true })
+  assert.deepEqual(page.domains, ['coding', 'coding-extra', 'general'])
+  assert.deepEqual(page.nodes.map(node => node.id), ['mem-code', 'mem-code-2', coding.id, 'mem-removed'])
+  assert.deepEqual(page.nodes.map(node => node.domain), ['coding', 'coding', undefined, undefined])
+  assert.equal(page.nodes.find(node => node.id === 'mem-removed').missing, true, 'genuine dangling links still have placeholders')
+  assert.equal(page.nodes.find(node => node.id === 'mem-code').degree, 3, 'out-of-domain neighbors do not even affect degree')
+  assert.deepEqual(page.edges.map(edge => edge.to), [coding.id, 'mem-code-2', 'mem-removed'])
+  assert.ok(!JSON.stringify(page).includes('cross-domain evidence'))
+  assert.deepEqual(graph.getGraph({ libraryId, domain: ' GENERAL ' }).nodes.map(node => [node.id, node.domain]), [['mem-legacy', 'general']])
+  assert.ok(graph.getGraph({ libraryId, domain: '　 ', includeOrphans: true }).nodes.some(node => node.id === orphan.id))
+  assert.throws(() => graph.getGraph({ libraryId, focusId: orphan.id, domain: 'coding' }), /unknown or inaccessible graph focus/)
+  assert.throws(() => graph.getGraph({ libraryId, focusId: 'mem-other', domain: 'coding' }), /unknown or inaccessible graph focus/)
+  const none = graph.getGraph({ libraryId, offset: 0, domain: 'unknown', includeOrphans: true })
+  assert.deepEqual([none.nodes, none.edges, none.total, none.nextOffset, none.truncated], [[], [], 0, null, false])
+  assert.deepEqual(none.domains, page.domains, 'suggestions are gathered before applying the selected domain')
+})
+
+test('paged graph keeps bound-library, session eligibility and context checks before collecting domains or edges', () => {
+  const { libraryId } = state.ensureSession('graph-page-session', { cwd: path.join(home, 'rp-page-session'), agentPreset: 'rp' })
+  const exec = { agent: { session: { header: { id: 'graph-page-session' } } } }
+  const visible = graph.createEntity({ libraryId, name: 'Visible contact' })
+  const hidden = graph.createEntity({ libraryId, name: 'Hidden contact' })
+  state.savePrivateIndex(libraryId, { entries: {
+    'mem-visible': { title: 'visible', status: 'active', visibility: 'shared', domain: 'coding', links: [
+      { to: visible.id, kind: 'person' }, { to: 'mem-secret', kind: 'relation' },
+      { to: 'mem-other-context', kind: 'relation' }, { to: 'mem-archived', kind: 'relation' },
+    ] },
+    'mem-secret': { title: 'secret', status: 'active', visibility: 'secret', domain: 'secret-domain', links: [{ to: hidden.id, kind: 'person' }] },
+    'mem-other-context': { title: 'private context', status: 'active', visibility: 'shared', domain: 'coding', context: { characterId: 'other' } },
+    'mem-archived': { title: 'archived', status: 'archived', visibility: 'shared', domain: 'coding' },
+  } })
+  const page = graph.getGraph({ exec, libraryId, offset: 0, limit: 1, domain: 'coding', includeOrphans: true })
+  assert.deepEqual(page.nodes.map(node => node.id), ['mem-visible'])
+  assert.deepEqual(page.domains, ['coding'])
+  assert.deepEqual(page.edges.map(edge => edge.to), [visible.id])
+  assert.equal(page.total, 2)
+  const last = graph.getGraph({ exec, libraryId, offset: page.nextOffset, limit: 1, domain: 'coding', includeOrphans: true })
+  assert.deepEqual(last.nodes.map(node => node.id), [visible.id])
+  assert.equal(last.nextOffset, null)
+  assert.throws(() => graph.getGraph({ exec, libraryId, focusId: hidden.id, offset: 0 }), /unknown or inaccessible graph focus/)
+  const otherLibrary = state.ensureSession('graph-page-unbound', { cwd: path.join(home, 'rp-page-unbound'), agentPreset: 'rp' }).libraryId
+  assert.throws(() => graph.getGraph({ exec, libraryId: otherLibrary, offset: 0 }), /library is not bound to this conversation/)
+})
+
 test('relationship snapshots preserve unknowns, evidence, boundaries and previous versions', () => {
   const a = graph.createEntity({ libraryId, name: 'A' })
   const b = graph.createEntity({ libraryId, name: 'B' })
