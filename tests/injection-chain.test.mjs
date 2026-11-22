@@ -281,8 +281,8 @@ test('the hint ships in the same plugin message as the recall block', async () =
   const out = await inject.injectForStep({ agent, decision: { kind: 'enter', messages: [user] }, turn: 1, step: 1, signal: { aborted: false } })
 
   assert.equal(out.messages.length, 2)
-  assert.equal(out.messages[0].source.kind, 'plugin:dsh-memu-memory')
-  const text = out.messages[0].content[0].text
+  assert.equal(out.messages[1].source.kind, 'plugin:dsh-memu-memory', 'memory follows the human turn')
+  const text = out.messages[1].content[0].text
   assert.ok(text.includes('[mem-fresh-message]'))
   assert.equal((text.match(/<memory-freshness>/g) || []).length, 1)
   assert.ok(text.indexOf('<memory-freshness>') > text.lastIndexOf('</memory-context>'))
@@ -401,4 +401,42 @@ test('typed cooldown follows content revisions, library identity and a new injec
   assert.deepEqual(state.recentMemoryRefs(state.getSessionBinding(id), 4, 16), [], 'old-epoch refs are not proof for a reinjection')
   const reinjected = await inject.buildRecall(state.getSessionBinding(id), '部署脚本的位置', 4, settings, exec, id)
   assert.ok(reinjected.ids.includes('mem-shared-id'))
+})
+
+// ---------------------------------------------------------------- I: mid-turn recall
+// 回合中途补充召回：只可能在非首步、批次无人类消息、inbound 没改动决策时出现；
+// 门 = 步距 + 增量证据 + 每回合上限 + 冷却 + 空召回退避；midTurnRecall 必须是可写设置
+// （1.3.15 审核修正：此前键未注册，updateSettings 会静默丢弃，「可关」是空头承诺）。
+
+test('a long tool-only step gets one mid-turn hint card, gated by step distance', async () => {
+  const cwd = path.join(home, 'mid-turn')
+  state.ensureSession('mid-turn', { cwd, agentPreset: 'coding' })
+  const agent = { session: { header: { id: 'mid-turn', cwd, agentPreset: 'coding', origin: 'user' } } }
+  const toolMsgs = (n) => Array.from({ length: n }, (_, i) => ({
+    id: 'mid-tool-' + i, role: 'tool', source: { kind: 'tool' },
+    content: [{ type: 'text', text: 'x'.repeat(120) + ' #' + i }],
+  }))
+  const out = await inject.injectForStep({ agent, decision: { kind: 'enter', messages: toolMsgs(3) }, turn: 11, step: 5, signal: { aborted: false } })
+  const plugin = out.messages.filter(m => m?.source?.kind === 'plugin:dsh-memu-memory')
+    .find(m => String(m?.content?.[0]?.text || '').includes('回合中途补充'))
+  assert.ok(plugin, 'step 5 with three distinct tool units earns the hint card')
+  const early = await inject.injectForStep({ agent, decision: { kind: 'enter', messages: toolMsgs(3) }, turn: 12, step: 2, signal: { aborted: false } })
+  assert.ok(!early.messages.some(m => String(m?.content?.[0]?.text || '').includes('回合中途补充')), 'step 2 cannot clear the four-step gap')
+})
+
+test('midTurnRecall:false is a writable kill switch for mid-turn recall', async () => {
+  const cwd = path.join(home, 'mid-turn-off')
+  state.ensureSession('mid-turn-off', { cwd, agentPreset: 'coding' })
+  const agent = { session: { header: { id: 'mid-turn-off', cwd, agentPreset: 'coding', origin: 'user' } } }
+  const toolMsgs = Array.from({ length: 3 }, (_, i) => ({
+    id: 'off-tool-' + i, role: 'tool', source: { kind: 'tool' },
+    content: [{ type: 'text', text: 'y'.repeat(120) + ' #' + i }],
+  }))
+  const before = await inject.injectForStep({ agent, decision: { kind: 'enter', messages: toolMsgs }, turn: 21, step: 6, signal: { aborted: false } })
+  assert.ok(before.messages.some(m => String(m?.content?.[0]?.text || '').includes('回合中途补充')), 'default-on proves the fixture actually reaches the gate')
+  const saved = state.updateSettings({ midTurnRecall: false })
+  assert.equal(saved.midTurnRecall, false, 'the switch survives updateSettings validation (it is a registered key now)')
+  const after = await inject.injectForStep({ agent, decision: { kind: 'enter', messages: toolMsgs }, turn: 22, step: 6, signal: { aborted: false } })
+  assert.ok(!after.messages.some(m => String(m?.content?.[0]?.text || '').includes('回合中途补充')), 'the kill switch stops it')
+  state.updateSettings({ midTurnRecall: true })
 })

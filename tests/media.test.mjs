@@ -42,7 +42,10 @@ test('image-only turns retrieve a saved image and expose the image count in stat
   const message = { id: 'image-only-native-user', role: 'user', ...event(4).data }
   const decision = await inject.injectForStep({ agent: exec.agent, decision: { kind: 'enter', messages: [message] }, turn: 2, step: 1 })
   assert.ok(decision.messages.length > 1)
-  assert.ok(decision.messages[0].content[0].text.includes(saved.id))
+  const injectedText = decision.messages
+    .filter(message => message?.source?.kind === 'plugin:dsh-memu-memory')
+    .map(message => String(message?.content?.[0]?.text || '')).join('\n')
+  assert.ok(injectedText.includes(saved.id))
   assert.equal(state.getSessionBinding('images').recentQueries.at(-1).imageCount, 1)
   const tools = []
   registerTools({ tools: { register: tool => { tools.push(tool); return () => {} } } })

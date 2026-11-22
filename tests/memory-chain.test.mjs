@@ -110,9 +110,10 @@ test('the real tool → recall → injection chain is reachable and carries S1�
   assert.match(datedText, /date=2026-11-07/, 'the resolved absolute date reaches the prompt')
   assert.match(datedText, /source=assistant_said/)
   assert.match(datedText, /speaker=assistant/)
-  // The user message is untouched and the plugin message comes before it.
-  assert.equal(dated.messages.at(-1).source.kind, 'user')
-  assert.equal(dated.messages.at(-1).content[0].text, dateUser.content[0].text)
+  // The user message is untouched and the plugin message comes right after it.
+  assert.equal(dated.messages.at(-2).source.kind, 'user')
+  assert.equal(dated.messages.at(-2).content[0].text, dateUser.content[0].text)
+  assert.equal(dated.messages.at(-1).source.kind, 'plugin:dsh-memu-memory')
 
   const floorUser = {
     id: 'chain-u2', role: 'user', source: { kind: 'user' },

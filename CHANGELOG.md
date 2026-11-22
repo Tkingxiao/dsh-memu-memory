@@ -1,5 +1,22 @@
 # 更新日志 / Changelog
 
+## [1.3.15] - 2026-11-23
+
+> 注入的位置与幂等：记忆块从"插在用户话之前"改成"紧跟用户话之后"，并让"投过"的记账不再只依赖宿主接纳回调——修掉长会话里锚点每步重投（单会话 5 次）与媒体块每步重投（单回合 22 次）。独立审核后修正：mid-turn 设置键未注册导致「可关」不可达、跨进程补认的凭据边角与诊断噪音。
+
+- **落点口径统一**（`lib/inject.js`）：step-1 路径与 inbound 路径都改为 `splice(humanIndex + 1)`；`reuseProposal` 复用提案同样落在人类消息之后。通道驱动（`channel-qq` 等）的消息不再因为 `source.kind !== 'user'` 被当成"没人说话"，因此不再退到批次末尾、出现在工具调用之后。
+- **人类消息判定**：新增 `humanMessage()` / `isHarnessUserMessage()`，把插件消息、宿主提醒（`runtime-context` / `skill-catalog` / `time-context` / `progress-rules` / `agent-instructions` / `dsh-ops:step-tail` / `user-approval`）与 `tool*` / `system*` 排除在外。
+- **进程内记账兜底**：`anchorSeen` / `servedHumans` / `servedMedia` / `servedInbound`。宿主接纳回调长期不来时，`anchorPushed` / `lastInjectedUserMessageId` / `pendingMedia` 的幂等本来全线失效；现在先记进程内（键含 turn 或人类消息 id），压缩与回合失败（`error` / `aborted`）时清空，重启后最多重发一次。
+- **回合中途补充召回（新）**：coding 这类多步回合不再"首步之后就没有记忆"。按增量重要性（复用 `active-memory` 计分口径：去重工具单元 + 封顶字符 + 步数）触发，标记 `[回合中途补充 · 这不是用户新说的话]`，独立预算 `midTurnTokens`(400)、每回合上限 `midTurnMaxPerTurn`(2)、冷却 `midTurnCooldownMs`(60s)；刚过线只投提示卡，明显过线才投正文召回；`midTurnRecall: false` 可关。
+- **待接纳提案落盘**（`lib/state.js` 新增 `rememberPendingInjection` / `findPendingInjection` / `forgetPendingInjection`）：`injectionAdmissions` 只是进程内 Map，宿主重启或另一个进程观察时提案会消失，于是接纳永不发生——qq-dm 会话 333 个回合里 `acceptedMemoryMessages` 一次都没出现（同库 qq-group 正常）。现在提案同时落一份最小凭据（按内容 digest 匹配、最多 8 条），观察端换进程也能补认；迟到接纳把时钟抬到 `max(当时, lastInjectedTurn, inbound.clock)` 以满足「时钟必须前进」；回合一收立即作废，避免迟到消息复活已丢弃提案。
+- **短句也召回（A 方案，取代曾试过的"每回合重发锚点"）**：召回门槛下限改为 2 字（`minUserChars` 仍可调高）。此前 2–5 字的回合（"摸摸"/"现在有点饿"）被 6 字门槛挡掉，叠加"锚点一会话一次"，首步就一条记忆都没有，锚点只能落到下一条模型消息之后。锚点频率**保持不变**（单测与验收 J-8 都钉着它）。
+- **接纳诊断到字段级**：`snapshot-stale` 现在带 `drift`（`epoch/libraryId/scopeKey/memoryContext/useLibrary/useGlobal` 的 `旧→新`）；不阻塞的漂移单独记一条 `注入接纳 · 记账漂移（不阻塞）`，这样"是谁把快照弄脏了"直接可读。
+- **接纳失败可查**：新增 `注入消息未被接纳 · <reason>` warn 记录（同会话同原因 60 秒合并），reason 取 `proposal-missing` / `proposal-<status>` / `digest-mismatch` / `snapshot-stale`。此前这条链路静默失败，只能靠猜（硬规则 10）。
+- **RPC 守卫补探针**：rc.5 仍有 `connection.requestRejection`；HEAD 0.2.3-alpha.2 已移除它，旧探针在那种宿主上会静默放行。`requestRejectionOf()` 改为两级探测（`requestRejection` → `isTrustedApiRequest`），两者都没有时保持放行并 warn 一次（fail-closed 会否掉 21 个 RPC 守卫用例，且违背仓库「不 fail closed」的取舍）。
+- **宿主适配（0.2.2-rc.5 / 0.2.3-alpha.2 源码核对）**：Node 半侧无破坏性变化（`createUserMessage` / `defineTool` / `ctx.tools.register` / `agent/pre-step` payload / `decision.messages` 落盘顺序 / `readColdSessionLog` 均不变；`dsh-session-query` 只是目录改成嵌套，按单层路径搜会误判成「包消失」）。`defaultLoadColdLogModule` 保留能力探测 + `COLD_LOG_READER_UNAVAILABLE` 诊断（真导入失败时才触发）。记录写在 `docs/host-adaptation.md` §6.1。
+- **守卫**：`tests/inject.test.mjs` / `injection-chain` / `injection-rollback` / `memory-chain` / `media` / `cue` 改为断言"紧跟人类消息之后"，并覆盖 inbound 批次键去重与中途补充分档；`binding-diagnostics` 的 `RUNTIME_STATE` file:line 契约随 `lib/state.js` 行号同步。
+- **审核修正（1.3.15）**：① `midTurnRecall` 等 9 个键此前不在 `DEFAULT_SETTINGS`，`updateSettings` 对未知键静默丢弃——文档承诺的「可关」不可达；现已注册默认值 + `updateSettings` 范围校验 + RPC `setSettings` 白名单，并补 `tests/injection-chain.test.mjs` 两条分档/开关守卫。② 落盘凭据补认成功后回写进程内提案表（同消息再观察走 admitted→true，不再误报 `proposal-missing`）；凭据按自身 `messageId` 作废；读取按 30 分钟 TTL 过滤并取最新同 digest 匹配，写入时顺手清扫过期项（`tests/pending-injection.test.mjs` 两条新守卫）。③ 两条「注入评估」info 记录加同会话同签名 60 秒合并，话痨会话不再逐步刷日志。④ step-1 的 `minUserChars` 读取从 `||` 统一为 `??`（0 不再被当成 6）。⑤ 改名 `pre-human ordering` 测试为 `post-human`。审核确认：宽松接纳不产生越权记账——真实口径变化一律推进 `scopeGeneration`，`markInjectedRefs`（state.js）按 generation/epoch 硬闸整笔拒收。
+
 ## [1.3.14] - 2026-11-22
 
 > 归档不再误伤在用的库：scope 不在 DSH 工作区注册表只说明"这不是工作区"，不说明"没人用"。修掉"库被自动归档、绑定会话却继续读写 9 小时"的自相矛盾状态，并堵住它带来的误删风险。

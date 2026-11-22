@@ -259,6 +259,32 @@ headless 会禁用 `deepseek-account`；没有配假模型时会以 `MISSING_CRE
 
 ---
 
+## 6.1 0.2.2-rc.5 / 0.2.3-alpha.2 源码核对（2026-11-23）
+
+目标：launcher 新下载的 DSH `0.2.2-rc.5` 实例，以及源码 checkout `D:\Code\deepseek-harness`（tag `dsh-v0.2.3-alpha.2`）。只核对了 memu 实际用到的宿主面，不整包 diff。
+
+**结论：Node 半侧没有破坏性变化；一处能力缺失（冷读）。**
+
+| memu 依赖 | 新源码位置 | 结论 |
+|---|---|---|
+| `createUserMessage`（`@deepseek-ai/dsh-llm`）| `packages/llm/*`，多处使用 | 仍在，签名不变 |
+| `defineTool`（`@deepseek-ai/dsh-tools`）| `packages/core/tools/src/schema.ts:555` | 仍在 |
+| `ctx.tools.register(tool)` | `packages/core/tools/src/index.ts`（`tools.register()`）| 仍在 |
+| `agent/pre-step` waterfall payload | `packages/core/agent/src/runtime-types.ts:351` | `{agent, messages, turn, step, signal, modelSelection}` 与 decision 形状不变 |
+| `decision.messages` 落盘顺序 | `packages/core/agent-loop/src/agent.ts:453-464` | 按数组原顺序逐条 `session.append('user/message', …, {surfaceOp:'append'})`；「插在人类消息之后」依赖此语义 |
+| `ctx.on('session/event')` | 同文件 | 签名 `(session, event)` 不变 |
+| `sessionPersistence` 服务 | `persistence.open(id, 'write', {signal})`（agent-loop:797）| 仍在，但**读侧公开 API 未定位** |
+| `readColdSessionLog` / `assertSessionHeadersCompatible`（`@deepseek-ai/dsh-session-query`）| **存在**：`packages/session-query/session-query/src/cold-read.ts`（rc.5 与 HEAD 都有）。注意包目录从 `packages/session-query/*` 变成**嵌套** `packages/session-query/session-query/*`，按单层路径搜会漏判成「包消失」——我第一轮就这么误判过 | 未变 |
+| `connection.requestRejection(req)`（RPC 入口守卫）| **rc.5 存在**（`packages/client/connection/src/rpc-host.ts`）；**HEAD 0.2.3-alpha.2 已移除**，只剩模块级 `isTrustedApiRequest(request, trustedHosts, bindHost, protocol)`（`api-request-trust.ts:121`）| rc.5 不受影响；只有升到 0.2.3-alpha.2 才需要降级 |
+
+**处置（本次已改）**：`lib/consolidation-snapshot.js` 的 `defaultLoadColdLogModule` 改为按能力探测（先 `dsh-session-query`，再 `dsh-session`），导入失败或导出缺失时降级为只读活视图并写一条 `COLD_LOG_READER_UNAVAILABLE`（warn、不弹窗）诊断——满足「fail-open 必须留信号」。**这不是新宿主的常态**：rc.5 与 HEAD 都能正常命中第一个候选。
+
+**RPC 守卫的处置（本次已改）**：`lib/rpc.js` 抽出 `requestRejectionOf()`——先试 `connection.requestRejection`，再试 `connection.isTrustedApiRequest`，两者都没有时保持原语义（放行）但 warn 一次。**试过 fail-closed，被 21 个 RPC 守卫用例否掉**：测试宿主的连接桩本来就不带这两个钩子，仓库的语义是「没有守卫就放行」，逐条库授权（`authorizeLibrary`）仍在每次请求里生效。风险与替代方案（用 `trustedHosts/bindHost/protocol` 自己调模块级 `isTrustedApiRequest`）记在这里，留待主人在新宿主上决定是否收紧。
+
+**待办**：读侧若新宿主只暴露 `sessionPersistence.open(id, 'read')`，需要补一条适配器实现冷读；届时把上面的探针换成该实现即可，降级分支保留。0.2.3 上若要恢复完整守卫，需要拿到该实例的 `trustedHosts/bindHost/protocol` 后再调 `isTrustedApiRequest`。
+
+---
+
 ## 6. 已知陷阱与取舍
 
 ### 6.1 `ctx.schedule` 两代 API

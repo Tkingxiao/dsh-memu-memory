@@ -31,7 +31,8 @@ test('random cue is injected once and armed', async () => {
   const sessionEvent = handlers.get('session/event')
   assert.equal(typeof sessionEvent, 'function')
   const out = await inject.injectForStep({ agent, decision, turn: 2, step: 1, signal: { aborted: false }, ctx })
-  const text = out.messages[0]?.content?.[0]?.text || ''
+  const pluginMessage = out.messages.find(message => message?.source?.kind === 'plugin:dsh-memu-memory')
+  const text = pluginMessage?.content?.[0]?.text || ''
   assert.ok(text.includes('<memory-cue id="'))
   assert.equal(state.getActiveCue('cue-session'), null, 'a proposal must not arm the cue')
   for (const message of out.messages) {

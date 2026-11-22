@@ -518,7 +518,7 @@ section 的 `text(context)` 能拿到 `context.agent`，所以 system prompt **�
 1. **不改 DSH 源码**，只用插件、公开 service、RPC、slot；只用公开扩展点。宿主差异一律用能力探测（新方法/字段存在性、返回值形状、逐级回退），不写版本号比较；旧宿主上的可选能力宁可降级并留一行日志，也不 fail closed。流程见 `docs/host-adaptation.md`。
 2. **不让主 agent 写全局记忆**：全局只由 curator 写，主 agent 只读。
 3. **记忆规则与动态记忆都走 plugin 消息**：当前版本不再注册 system prompt 段；静态 guide 在回合首步以 `<memory-guide rules="…">` 投放（`rulesKey` 处理切域/改稿/压缩丢失），动态记忆走独立 plugin 消息，保护 KV cache 并让注入可折叠。
-4. **不每步注入**：普通回合首步注入；长工具回合只在出现尚未处理的真实人类消息批次时追加一次。工具日志、心跳不算人类消息。
+4. **不每步注入**：普通回合首步注入，记忆块紧跟人类消息之后；长工具回合只在出现尚未处理的真实人类消息批次时追加一次，另有受控的「回合中途补充召回」（默认每回合 ≤2 次、独立预算，见 `docs/memory-semantics.md` §8.4）。工具日志、心跳不算人类消息。
 5. **不自动删除记忆**：永久记忆移出 = 边缘化；删库必须显式确认；删会话默认只解绑。
 6. **Python 不装进系统解释器 / 用户 site-packages**，只装 `engine/<version>/venv`，且 venv 里不留 pip（`--without-pip` 建，再用基础 Python 的 `pip --python` 指进去装）。
 7. **不自动追最新 MemU**：只装声明版本，升级走新 venv + smoke + 切换 + 保留旧版。

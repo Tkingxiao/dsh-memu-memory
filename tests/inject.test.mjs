@@ -159,7 +159,7 @@ test('with the same anchorTokens, title cards expose at least as many ids as ful
     `title cards exposed ${anchor.ids.length} ids, full text ${legacy.ids.length}`)
 })
 
-test('pre-step inserts a plugin message before the user message', async () => {
+test('pre-step inserts a plugin message right after the user message', async () => {
   const cwd = path.join(home, 'project-step')
   const binding = state.ensureSession('inject-step', { cwd, agentPreset: 'coding' })
   const index = state.loadPrivateIndex(binding.libraryId)
@@ -199,13 +199,13 @@ test('pre-step inserts a plugin message before the user message', async () => {
   const agent = { session: { header: { id: 'inject-step', cwd, agentPreset: 'coding', origin: 'user' } } }
   const out = await inject.injectForStep({ agent, decision, turn: 1, step: 1, signal: { aborted: false } })
   assert.equal(out.messages.length, 2)
-  assert.equal(out.messages[0].role, 'user')
-  assert.equal(out.messages[0].source.kind, 'plugin:dsh-memu-memory')
-  assert.equal(out.messages[0].source.plugin, undefined)
-  assert.equal(out.messages[0].source.form, 'recall')
-  assert.equal(out.messages[1].source.kind, 'user')
+  assert.equal(out.messages[0].source.kind, 'user', 'the human message stays first')
+  assert.equal(out.messages[1].role, 'user')
+  assert.equal(out.messages[1].source.kind, 'plugin:dsh-memu-memory')
+  assert.equal(out.messages[1].source.plugin, undefined)
+  assert.equal(out.messages[1].source.form, 'recall')
 
-  const injected = out.messages[0].content[0].text
+  const injected = out.messages[1].content[0].text
   assert.ok(injected.includes('[mem-recall]'), 'per-turn recall must surface the matching entry by id')
   assert.ok(injected.includes('Deploy convention'), 'the title is what reaches the prompt')
   assert.equal(injected.includes('The deploy script lives in tools/deploy.ps1'), false,

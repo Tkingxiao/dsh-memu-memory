@@ -314,18 +314,19 @@ for (const acceptedPart of ['guide', 'recall']) test(`partial ${acceptedPart} ad
   assert.deepEqual(facts(session.id), after, 'discarded partial sibling cannot commit late')
 })
 
-test('proposal reuse preserves pre-human ordering and missing human projection without duplicate IDs', async () => {
+test('proposal reuse preserves post-human ordering and missing human projection without duplicate IDs', async () => {
   const session = makeSession('projection')
   const human = user('projection', '林眠的相机镜头修好了吗')
   const first = await step(session, 1, [human])
   const memory = first.find(message => ANCHOR_RE.test(textOf(message)))
   const second = await step(session, 1, [human])
   assert.equal(second.find(message => ANCHOR_RE.test(textOf(message))).id, memory.id)
-  assert.ok(second.findIndex(message => message.id === memory.id) < second.findIndex(message => message.id === human.id))
+  assert.ok(second.findIndex(message => message.id === memory.id) > second.findIndex(message => message.id === human.id),
+    'memory sits after the human turn')
   const missing = await step(session, 1, [])
   assert.equal(missing.filter(message => message.id === human.id).length, 1, 'retry carries the pending human too')
   assert.equal(missing.filter(message => message.id === memory.id).length, 1)
-  assert.ok(missing.findIndex(message => message.id === memory.id) < missing.findIndex(message => message.id === human.id))
+  assert.ok(missing.findIndex(message => message.id === memory.id) > missing.findIndex(message => message.id === human.id))
   await accept(session, [human])
   const nativeAlready = await step(session, 1, [])
   assert.equal(nativeAlready.some(message => message.id === human.id), false, 'a Native-admitted human is not appended twice')
