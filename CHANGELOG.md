@@ -1,5 +1,37 @@
 # 更新日志 / Changelog
 
+## [1.3.16] - 2026-11-26
+
+> 三件事一起收：按域终于看得见筛得动；中文人名被 n-gram 滑窗切成两个节点的成因在提名侧堵住；
+> 宿主 0.2.3 线升级后**静默失效的 RPC 来源守卫**补回。另新增两份专用文档——跨版本事实台账
+> `docs/host-versions.md`（§13）与推迟项台账 `docs/pending-work.md`（§14），并给台账配了机检。
+
+- **按域查看 / 筛选 / 显示**：
+  - 服务端——`lib/global-graph.js:getGlobalGraph` 以前没有 `domain` 参数也不回 `domains`，所以「全部库/全局」视图里域筛选完全无效；现在按 `lib/graph.js:graphDomain` 的同一归一化口径过滤，并连同跨域边一起丢掉，返回筛选前的 `domains` 并集。`lib/rpc.js` 的 `getGraph(scope:'global')` 透传该参数；`browseWall` 的 item 以前根本没有 `domain` 字段（所以墙无法按域筛），现在带上，并支持 `domain` 过滤参数、回 `domains` 并集；`privateListView`（`browseLibrary`/`listPrivate`）同样补 `domain`。归一口径：私有条目缺域 → `general`（与图一致），全局条目缺域 → `unknown`（与 `listGlobal` 一致）。
+  - 客户端——图页的全局分支以前不传域；节点检查器与记忆墙卡片、详情抽屉都不显示域（`getMemory` 早就把 `entry.domain` 发到手上了，纯属没渲染）。记忆墙新增域下拉（选项来自服务端 `domains`，与图页同口径），筛选交给服务端而不是在 300 条里前端裁。域值一律走既有 `DOMAIN_LABELS`/`domainText()`，未新增中文映射。
+  - 守卫：`tests/global-graph.test.mjs`（全局图按域过滤且并集不缩）、`tests/global-lifecycle.test.mjs`（`browseWall` 的 `domain` 字段/过滤/计数）、`tests/client-render.test.mjs`（墙域筛选发出 `domain` 请求 + 卡片显示域 + 全局图分支转发域）。
+- **中文人名被拆成两个节点**（现场：`…/homes/0.2.2-rc.2` 的 `南宫晚` + `宫晚晴` 实为 `南宫晚晴`，另有 `洛云澜`/`云澜`、`出现`/`首次`/`游戏`/`群里`/`记账` 等同类碎片）：
+  - `lib/auto-link/terminology.js:rankCandidates` 的碎片抑制以前只在「引号/引入语」场景生效（`fragments` 只由这两类表面填），纯散文里的名字三 gram 直接进 tier2，UI 点一下就用 `row.term` 建成 confirmed 实体。现在补一条**同证据强度下的最长表面优先**：一个统计词若被另一个 df 不低于它的候选词完整包含，就不再提名；整段本就是 2 字的名字（`星港`、`阿兰`、`小檀`）不受影响。
+  - `lib/private-links.js:suggestPrivateLinks` 以前把 tokenizer-v2 的 trigram 窗口当实体名（`南宫晚`/`宫晚晴` 都进了 `suggestedEntity.name` 喂给 worker），而 `docs/memory-semantics.md` §8.15 本意是「V2 额外层只喂 BM25」。现在同一组件里窗口片段不再命名实体，长表面按分组数取胜。
+  - `lib/graph.js:suggestEntityMerges` 新增第三种理由 `name-core`：`顾清欢` / `欢欢` / `欢` 这类「一个名字的全称、昵称、单字称呼」以前既不落在 containment（短方需 ≥2 字）也不落在 edit-distance（`顾清欢`↔`欢欢` 距离 3），于是三个孤岛永不连线。现在按「一端收尾、另一端起头」的共享字串提议合并（并要求去掉重叠后长侧还剩 ≥2 字，`空气`/`气候` 这种共用一个字的普通词不提议）。**仍然永不自动合并**，UI 两次点击确认；理由标签走新增的 `mergeReasonNameCore`。
+  - `lib/auto-link/candidates.js` 的 `CANDIDATE_VERSION` 升到 3，让已被污染的 `anchor-candidates.json` 快照重建。
+  - 存量数据 + **升级后自动跑一次**：新增 `lib/entity-repair.js`（规划与执行同源）与 `lib/index.js:runEntityRepairPass`，挂在启动后 5 秒的一次性钩子上，标记写进 `state.cycle.entityRepairVersion`（与 `lastCurateAt` 同族，不新造机制）。理由是**新库不再产生碎片，但老发布版本留下的碎片节点不会因为升级就变干净**。只自动处理**可证明**的那一类：片段首尾重叠重建出的完整名在该库正文里真的出现过，或短名在正文里的每一次出现都在某个更长名字里面。
+  - **为什么不能整类自动合**：dry 报告里出现过 `顾清欢 ← 顾清悦` —— 编辑距离 ≤2 把两个不同称呼撞成一对。相似不是证据，所以 `similar` 档绝不自动写，只在诊断页报数并挂一个「需确认」按钮（`MANUAL_REPAIRS` 的 `merge-entity-fragments`，**不在 `SAFE_REPAIRS`**），启动自愈也不会碰它。`docs/troubleshooting.md` §3.44 原来的口径「此修复不改写现有实体」据此作废并改写。
+  - 安全边界三条：写入前先图备份（`backupDatabases`），**备份失败就一个字节都不写**、记 `ENTITY_REPAIR_DEFERRED` 且标记不写、下次启动重试；`mergeEntities` 末尾的 `pruneOrphanEntities` 是全库清扫，会删掉任何无引用实体，故写入前后各读一次快照，把**计划外**的行原样写回；合并只改实体行与指向，记忆正文一字不动。整轮只跑一次，第二次直接返回 `skipped:'done'`。
+  - 新设置 `autoRepairEntityFragments`（默认开；关掉 = 连可证明的也不动），三处同步注册（`DEFAULT_SETTINGS` / `setSettings` allowlist / `resetSettings`），`tests/settings-plumbing.test.mjs` 钉住它确实可写——1.3.15 的 `midTurnRecall` 教训不再重演。
+  - 命令行等价物 `scripts/entity-dedupe.mjs`（默认 dry-run；`--apply` 先备份；`--include-similar` 才把相似候选一起交给人批量决定）。
+  - 副本实测（复制用户 home 的 `state.json` + `index/` 到临时目录跑，原件未动）：`attested=5`（其中 2 组是重建主节点）、`similar=3` 留在待确认、副带删除 0、失败 0，第二次规划 `attested=0` 即幂等。守卫用例：`tests/graph-cascade.test.mjs`（分档 / 应用与别名并集 / 计划外实体不被删 / 升级只跑一次且尊重开关）、`tests/environment-check.test.mjs`（检查项存在且标 manual、修复动作幂等、绝不进 SAFE 名单）。
+  - 守卫：`tests/auto-link-candidates.test.mjs`（窗口片段不提名、`星港` 仍在 tier2）、`tests/private-links.test.mjs`（四字词名的窗口不再各成 hub）、`tests/entity-merge.test.mjs`（`name-core` 的给出与不给出）。
+- **宿主 0.2.3 线的 RPC 守卫**：`requestRejectionOf()` 原以为两级探测够用，实际在 `0.2.3-alpha.1` 起**两级同时落空**——`requestRejection` 在该版被移除（文档误记为 alpha.2），而 `isTrustedApiRequest` 是模块级函数、不挂在 connection 服务上，探测恒为 false。现在补第三级 `connection.admit(request)`（返回 `{peer}` 或 `{rejection:401|403|503}`，8 个 tag 全部核对过：`admit` 一直存在，`requestRejection` 只在 ≤rc.5 存在），并把两处互相指认的 warn 文案改成实话（`authorizeLibrary` 在任何宿主上都不存在，所以那行 warn 是唯一的越权信号）。试过 fail-closed，仍被 21 条 RPC 守卫用例否掉，保持仓库「降级 + 留信号」的取舍。
+- **文档**：
+  - 新增 `docs/host-versions.md`（§13）——逐构建核对台账（11 行，含 commit、核对方式真机/源码/未测、判定 exact/line/nearest、结构指纹、未覆盖面）、宿主面 × 版本矩阵（10 个面 + 探测点 + 缺失降级）、破坏性变更账本（`startActivation` 扁平化 / `ctx.schedule` 两代 / `requestRejection` 移除 / `decision.messages` 只在 `firstAttempt`），并纠正两条「曾以为是变更」的误判（`dsh-session-query` 目录从 0.2.0 起就是嵌套的；`authorizeLibrary` 从未存在）。`docs/host-adaptation.md` 的 §2 版本列、原 §6.1、§7 版本记录改为指向 §13——同一事实写三处正是它断更的原因。
+  - 新增 `docs/pending-work.md`（§14）——把散在 CHANGELOG/docs 里的「本版未做 / 后续 / 待办 / 尚未验证」逐条核对：**4 条已完成或不必做**（含 `docs/host-adaptation.md` 原 §6.1 的冷读待办），**8 条仍成立**并各附建议方案与前置条件，**5 条明确不做**防止重做。
+  - `scripts/check-doc-drift.mjs` 新增 Gate 4（五条：文档提到的构建必须有台账行 / 行必须带证据等级与 commit 与日期 / 探测点符号必须仍存在 / 代码里不得出现带预发布号的宿主构建名 / `dshReleases` 与台账一致），`tests/doc-drift.test.mjs` 补 12 条用例。`package.json` 新增 `dsh.compatibility.dshReleases`（宿主无消费者，纯人读记录，`engines.dsh` 不动）。
+  - `docs/host-versions.md` §13.6 + `lib/host-surface.js`：`getState()` 增加只读 `hostSurface`，诊断页环境卡顶部显示 `rpcGuard=… schedule=… activation=… coldLog=…`，用于在真机核对台账行——值全部来自既有探测，插件不据此分支、不读宿主版本号。
+- **去隐私化**：仓库里（含本 CHANGELOG、docs、lib 注释、tests fixture）散落着从本机记忆数据里抄来的真实人名、昵称、QQ 号与一条真实对话正文——它们随 npm 包一起发布。本轮统一换成合成样本（保持长度、词元结构、CJK 连续段形状不变，所以 BM25/提及边的断言仍在测同一件事）：`lib/auto-link/decide.js`、`lib/auto-link/normalize.js`、`lib/state.js`、`docs/troubleshooting.md`、`tests/managed-memory.test.mjs`、`tests/hybrid-recall.test.mjs`、`tests/auto-link-*.test.mjs` 等 20 余个文件。**今后写 fixture 一律用合成名字**，真机取证的数据只写形态、不写正文。
+- **验证**：`npm test` 2003 tests / 2001 pass / 0 fail / 2 skipped（两条真实引擎用例按设计跳过）；`node scripts/acceptance-local.mjs` 50/50；`npm run check` 全绿（含 Gate 4）。**本轮顺带修好**：`node scripts/chain-matrix.mjs` 此前整体崩在导入期——脚本合成的 `./memu.js` 桩缺 `closeMemuResident` / `prewarmMemuResident` 两个导出（1.3.15 起 `lib/rpc.js` 新增的导入），补齐后 10/10 全绿。CHANGELOG 里「manual/idle 六格失败」那条待办因此作废，见 `docs/pending-work.md` §14.1。
+- **仍待你决定**：home 实体数据修复的执行授权（P7）、`0.2.2-rc.5` / `0.2.3-alpha.*` 的真机四件套（P6）、性能与成本对照实验（P1）。
+
 ## [1.3.15] - 2026-11-23
 
 > 注入的位置与幂等：记忆块从"插在用户话之前"改成"紧跟用户话之后"，并让"投过"的记账不再只依赖宿主接纳回调——修掉长会话里锚点每步重投（单会话 5 次）与媒体块每步重投（单回合 22 次）。独立审核后修正：mid-turn 设置键未注册导致「可关」不可达、跨进程补认的凭据边角与诊断噪音。
@@ -22,7 +54,7 @@
 > 归档不再误伤在用的库：scope 不在 DSH 工作区注册表只说明"这不是工作区"，不说明"没人用"。修掉"库被自动归档、绑定会话却继续读写 9 小时"的自相矛盾状态，并堵住它带来的误删风险。
 
 - **归档判定补上"在用"这一半**（`lib/cycle.js` `runLibraryHousekeeping`）：`lib/state.js` 新增 `inUseLibraryIds()` / `isLibraryInUse()`，按存活绑定（`sessionGone !== true`）判定；扫描对仍被会话绑定的库不再归档，并在返工结果里给出 `skippedInUse`，同一库只提示一次。外部报告的现场正是这条路径：IM 插件数据目录建库后 176 秒被归档，之后 9 小时 172 条活动、6 次召回全部成功，而 UI 里库已消失。
-- **旧数据的收窄**：1.3.13 及更早的归档没有 `archivedBy`，事后分不清「用户点的归档」和「老扫描误归档」。所以对这类库只复活「还热」的（`lastUsedAt` 在 14 天内）；冷归档保持归档——本机实测 `rp`（14 个绑定）与 `ai中转站`（4 个）正属后者。
+- **旧数据的收窄**：1.3.13 及更早的归档没有 `archivedBy`，事后分不清「用户点的归档」和「老扫描误归档」。所以对这类库只复活「还热」的（`lastUsedAt` 在 14 天内）；冷归档保持归档——本机实测 `rp`（14 个绑定）与 `另一个工作区库`（4 个）正属后者。
 - **误归档自愈**：`archiveLibrary(id, { by })` 记录归档来源（`sweep` / `user`）。扫描遇到「已归档但仍有存活绑定且不是用户归档」的库会就地复活（`revived`），不再要求 scope 回到工作区注册表——那条件对 `.dsh/im`、profile 目录这类路径永不满足。
 - **用户意图优先**：`archivedBy === 'user'` 的归档不会被扫描复活；`ensureSession` 快路径对误归档库（非 user）就地复活，避免"已绑定会话继续读写归档库"的旧形态。
 - **误删风险关掉**：`deleteLibrary(id, { force })` 只拒绝「危险归档 + 仍在用」这一类（扫描误归档 = `archivedWhileInUse`，与自愈共用同一判据）；用户主动归档、以及冷数据的旧归档照旧可删，删不掉的老库不会出现。RPC 仅在 `confirmed` 时透传 `force`；`purgeArchivedAfterDays` 的清理候选排除在用库（此前只看年龄）。

@@ -3,7 +3,9 @@
 给下一次「DSH 又发新版本了」用。目标是把适配变成一份可重复的检查表：**先读宿主、再跑真机、最后只改证据支持的地方**。
 2026-11-05 用 `0.2.2-rc.1` 完整走了一遍，实测记录在 §5。
 
-> 这份文档只讲**宿主版本之间的适配**。改记忆语义、RPC、UI 的常规流程在 `docs/contributing.md`；宿主 API 的当前事实速查在 `docs/host-api.md`。
+> 这份文档只讲**宿主版本之间的适配流程**。逐构建的核对台账、逐宿主面的形状矩阵、破坏性变更账本在
+> `docs/host-versions.md`（§13）；改记忆语义、RPC、UI 的常规流程在 `docs/contributing.md`；
+> 宿主 API 的当前事实速查在 `docs/host-api.md`。同一事实只写一次，冲突时以 §13 为准。
 
 ---
 
@@ -18,6 +20,9 @@
 
 ## 2. memu 的宿主面清单（每次升级逐项过）
 
+> 下表的「0.2.2-rc.1 核对结果」只是**当初那一版**的快照，不随后续宿主更新。**逐版本的当前答案在
+> `docs/host-versions.md` §13.2**；两处冲突以 §13.2 为准。本节回答「有哪些面要过」，§13 回答「每个面在各版本长什么样」。
+
 ### 2.1 Node 半侧
 
 | 面 | memu 里的落点 | 0.2.2-rc.1 核对结果 |
@@ -31,7 +36,7 @@
 | `ctx.get('subagents').startActivation` | `lib/curator.js` | **0.2.2-rc.2 起形状变了**：`SubagentActivationSpec` 扁平化（`parent`/`cwd`/`prompt`/`agentOptions` 平铺顶层，移除 `request` 外层），同批新增树内省方法 `rootOf`/`namesOf`/`resolveName`/`waitForTreeWork`。插件按 §3.4 用标记方法做结构探测选形态，另带零副作用 `TypeError` 单次回退兜底（两代宿主都在任何副作用之前抛 `TypeError`）；覆盖两代契约的用例在 `tests/curator-contract.test.mjs`。结果 `stopReason`/`output` 未变 |
 | `ctx.get('attachments').readImage` | `lib/media.js` | 未变 |
 | `ctx.get('schedule')` | `lib/salient-wake.js` | **变了**：见 §6.1 |
-| `connection.requestRejection` / `authorizeLibrary` / `webServer.register` | `lib/rpc.js` | 未变；路由仍是 `kind:'prefix'` + `handler` |
+| `connection.requestRejection` / `authorizeLibrary` / `webServer.register` | `lib/rpc.js` | rc.1 当时是 `kind:'prefix'` + `handler`，守卫走 `requestRejection`；**`requestRejection` 自 `0.2.3-alpha.1` 起已从宿主移除，`authorizeLibrary` 任何版本都没有** → §13.3 |
 | `ctx.interval` / `ctx.effect` / `ctx.on(..., {prepend})` | `lib/cycle.js`、`lib/index.js`、注入/监听 | cordis 4.1 未破坏这些用法 |
 | `buildForkSeed`（动态 import `@deepseek-ai/dsh-session`） | `lib/private.js` | 仍从包根导出 |
 | `createUserMessage({source:{kind:'plugin:dsh-memu-memory', form:'recall'}})` | `lib/inject.js` | 未变；`plugin:` 前缀仍被宿主接受 |
@@ -86,18 +91,34 @@ git rev-parse dsh-v0.2.2-rc.1^{commit}
 先看规模，再读文件。测试目录的变更不算事实：
 
 ```bash
-git diff --stat dsh-v0.2.1-rc.5 dsh-v0.2.2-rc.1 -- \
+git diff --stat dsh-v0.2.2-rc.5 dsh-v0.2.3-alpha.1 -- \
   'packages/core/tools/src/**' 'packages/core/session/src/**' \
   'packages/core/agent/src/**' 'packages/core/agent-loop/src/**' \
-  'packages/llm/llm/src/**' 'packages/session-query/session-query/src/**' \
+  'packages/llm/llm/src/**' 'packages/session-query/*/src/**' \
   'packages/schedule/schedule/src/**' 'packages/subagent/subagent/src/**' \
   'packages/attachment/attachment/src/**' 'packages/host/webserver/src/**' \
   'packages/client/modules/src/**' 'packages/client/locale/src/**' \
   'packages/client/connection/src/**' 'packages/client/ui-settings/src/**' \
-  'packages/client/ui-sidebar-right/src/**' 'packages/api/session-controller/src/client/**'
+  'packages/client/ui-chat/src/**' 'packages/client/remote-connection/src/**' \
+  'packages/client/ui-sidebar-right/src/**' 'packages/workspace/*/src/**' \
+  'packages/session/*/src/**' 'packages/api/session-controller/src/**'
 ```
 
-读的时候按「导出/契约/服务方法/事件 payload」四类看，不要逐行读实现。**跨 tag 往往只有 `package.json` 版本号变化**：`0.2.2-alpha.3 → 0.2.2-rc.1` 在 memu 用到的全部 `src` 上就是零改动（vendor 代码在 alpha.3 已定型）。
+路径必须兼容**两层包目录**：本仓库既有 `packages/core/tools/src/**`，也有
+`packages/session-query/session-query/src/**` 和 `packages/workspace/workspace/src/**`。
+只写单层会漏整包——§5.5 第 1 条的「包消失」误判就是这么来的（所以下面用 `*` 占中间一层）。
+
+再跑一次全量比对，确认上面这张清单没有漏掉真正改动的包：
+
+```bash
+git diff --stat <旧tag> <新tag> -- 'packages/*/src/**' 'packages/*/*/src/**' \
+  ':(exclude)packages/*/vendor/**' ':(exclude)packages/*/*/vendor/**' | tail -1
+```
+
+两个数字差得远 = 清单漏了包，把漏掉的包补进上面那条命令再来一遍。读的时候按
+「导出/契约/服务方法/事件 payload」四类看，不要逐行读实现；测试目录的变更不算事实。
+**跨 tag 往往只有 `package.json` 版本号变化**：`0.2.2-alpha.3 → 0.2.2-rc.1` 在 memu 用到的全部
+`src` 上就是零改动（vendor 代码在 alpha.3 已定型）。
 
 ### 3.3 四个装载门
 
@@ -259,29 +280,22 @@ headless 会禁用 `deepseek-account`；没有配假模型时会以 `MISSING_CRE
 
 ---
 
-## 6.1 0.2.2-rc.5 / 0.2.3-alpha.2 源码核对（2026-11-23）
+## 5.5 0.2.2-rc.5 / 0.2.3-alpha.1 / 0.2.3-alpha.2 源码核对（2026-11-23 起，逐 tag 复核于 2026-11-26）
 
-目标：launcher 新下载的 DSH `0.2.2-rc.5` 实例，以及源码 checkout `D:\Code\deepseek-harness`（tag `dsh-v0.2.3-alpha.2`）。只核对了 memu 实际用到的宿主面，不整包 diff。
+逐面结论与 commit 已迁到 `docs/host-versions.md` §13.1–§13.3。这里只留两条**流程层面**的教训：
 
-**结论：Node 半侧没有破坏性变化；一处能力缺失（冷读）。**
+1. **包目录形状要先怀疑自己的搜法**：`@deepseek-ai/dsh-session-query` 的源码目录从 0.2.0 起就是
+   嵌套的（`packages/session-query/session-query/src/**`）。第一轮按单层路径搜不到，就把「包消失」
+   记成了事实。§3.2 的 diff 清单因此改成兼容嵌套的写法。
+2. **「没报错」不等于「守卫还在」**：RPC 入口守卫的两级探测（`requestRejection` →
+   `isTrustedApiRequest`）在 `0.2.3-alpha.1` 之后同时落空——后者是模块级函数，不挂在 service 上。
+   现已补第三级 `connection.admit(request)`（返回 `{peer}` 或 `{rejection}`），并在
+   `tests/webui-auth.test.mjs` 钉住「只有 admit 的宿主仍然被守住」。试过 fail-closed，被 21 个
+   RPC 守卫用例否掉：仓库的语义是「没有守卫就放行 + 留一行 warn」。
 
-| memu 依赖 | 新源码位置 | 结论 |
-|---|---|---|
-| `createUserMessage`（`@deepseek-ai/dsh-llm`）| `packages/llm/*`，多处使用 | 仍在，签名不变 |
-| `defineTool`（`@deepseek-ai/dsh-tools`）| `packages/core/tools/src/schema.ts:555` | 仍在 |
-| `ctx.tools.register(tool)` | `packages/core/tools/src/index.ts`（`tools.register()`）| 仍在 |
-| `agent/pre-step` waterfall payload | `packages/core/agent/src/runtime-types.ts:351` | `{agent, messages, turn, step, signal, modelSelection}` 与 decision 形状不变 |
-| `decision.messages` 落盘顺序 | `packages/core/agent-loop/src/agent.ts:453-464` | 按数组原顺序逐条 `session.append('user/message', …, {surfaceOp:'append'})`；「插在人类消息之后」依赖此语义 |
-| `ctx.on('session/event')` | 同文件 | 签名 `(session, event)` 不变 |
-| `sessionPersistence` 服务 | `persistence.open(id, 'write', {signal})`（agent-loop:797）| 仍在，但**读侧公开 API 未定位** |
-| `readColdSessionLog` / `assertSessionHeadersCompatible`（`@deepseek-ai/dsh-session-query`）| **存在**：`packages/session-query/session-query/src/cold-read.ts`（rc.5 与 HEAD 都有）。注意包目录从 `packages/session-query/*` 变成**嵌套** `packages/session-query/session-query/*`，按单层路径搜会漏判成「包消失」——我第一轮就这么误判过 | 未变 |
-| `connection.requestRejection(req)`（RPC 入口守卫）| **rc.5 存在**（`packages/client/connection/src/rpc-host.ts`）；**HEAD 0.2.3-alpha.2 已移除**，只剩模块级 `isTrustedApiRequest(request, trustedHosts, bindHost, protocol)`（`api-request-trust.ts:121`）| rc.5 不受影响；只有升到 0.2.3-alpha.2 才需要降级 |
-
-**处置（本次已改）**：`lib/consolidation-snapshot.js` 的 `defaultLoadColdLogModule` 改为按能力探测（先 `dsh-session-query`，再 `dsh-session`），导入失败或导出缺失时降级为只读活视图并写一条 `COLD_LOG_READER_UNAVAILABLE`（warn、不弹窗）诊断——满足「fail-open 必须留信号」。**这不是新宿主的常态**：rc.5 与 HEAD 都能正常命中第一个候选。
-
-**RPC 守卫的处置（本次已改）**：`lib/rpc.js` 抽出 `requestRejectionOf()`——先试 `connection.requestRejection`，再试 `connection.isTrustedApiRequest`，两者都没有时保持原语义（放行）但 warn 一次。**试过 fail-closed，被 21 个 RPC 守卫用例否掉**：测试宿主的连接桩本来就不带这两个钩子，仓库的语义是「没有守卫就放行」，逐条库授权（`authorizeLibrary`）仍在每次请求里生效。风险与替代方案（用 `trustedHosts/bindHost/protocol` 自己调模块级 `isTrustedApiRequest`）记在这里，留待主人在新宿主上决定是否收紧。
-
-**待办**：读侧若新宿主只暴露 `sessionPersistence.open(id, 'read')`，需要补一条适配器实现冷读；届时把上面的探针换成该实现即可，降级分支保留。0.2.3 上若要恢复完整守卫，需要拿到该实例的 `trustedHosts/bindHost/protocol` 后再调 `isTrustedApiRequest`。
+**原待办已判定不必做**：「新宿主只暴露 `sessionPersistence.open(id,'read')` 时要补读适配器」——
+`readColdSessionLog` 内部本来就用 read 模式打开会话（`cold-read.ts` 的 `persistence.open(id, 'read')`），
+插件侧的候选探测与 `COLD_LOG_READER_UNAVAILABLE` 降级分支保留即可。
 
 ---
 
@@ -326,19 +340,21 @@ headless 会禁用 `deepseek-account`；没有配假模型时会以 `MISSING_CRE
 
 ## 7. 版本记录
 
-| 宿主构建 | 日期 | 结果 | 备注 |
-|---|---|---|---|
-| `0.2.1-rc.3` | 2026-10-27 | 文档基线 | 当时 `docs/host-api.md` §6.6 把 schedule 写成了宿主级；实际 `0.2.1` 是会话级，1.2.6 更正 |
-| `0.2.2-alpha.3` | 2026-11-03 | 源码事实 | vendor / 工具 / schedule 新形状在这一版已定型 |
-| `0.2.2-rc.1` | 2026-11-05 | **真机通过** | 13 工具、guide 1 次、设置页/侧栏/RPC/新会话弹窗；0 console error；schedule 新 API 形状核对 |
+**已迁出**：逐构建的核对台账、逐宿主面的形状矩阵、破坏性变更账本统一写在
+`docs/host-versions.md` §13.1–§13.3，本文件不再保存副本（原表断在 `0.2.2-rc.1`，而 §2 的
+「核对结果」列又把 `connection.requestRejection` 说成「未变」——同一事实两处新旧不一，正是迁移的原因）。
+本文只负责**怎么核对**：流程在 §3，真机搭法在 §4，陷阱在 §6。
 
 ---
 
 ## 8. 维护本文件
 
-每适配一个新宿主：
+本文件讲流程，事实进 `docs/host-versions.md`。每适配一个新宿主：
 
-1. 在 §7 加一行，写清「真机通过 / 只读源码 / 没测」。
-2. 若新增了宿主能力探测，补一条单测（例如 `tests/salient-wake.test.mjs` 的 `scheduleFlavor`）。
-3. 若发现新的装载门或客户端契约，补进 §2 / §3。
-4. 若某个旧行为被证明是错的（如 §7 的 schedule 基线），直接改正文并在 CHANGELOG 里说明，不要留两套说法。
+1. 在 `docs/host-versions.md` §13.1 加一行（commit 取自 tag，核对方式据实填），并按 §13.7 的规则
+   决定是否要动 §13.2/§13.3。`npm run check` 的 Gate 4 会拦住漏行、漏证据等级和失效的探测点引用。
+2. 若新增了宿主能力探测，补一条单测（例如 `tests/salient-wake.test.mjs` 的 `scheduleFlavor`），
+   并在 §13.2 注册这个面。
+3. 若发现新的装载门或客户端契约，补进本文 §2 / §3 的清单，事实本身写进 §13.2。
+4. 若某个旧结论被证明是错的，直接改 `docs/host-versions.md` 的正文并在 CHANGELOG 里说明，
+   不要留两套说法——**也不要在这份流程文档里另抄一份结论**。

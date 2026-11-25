@@ -47,31 +47,31 @@ function index(entries) {
 test('mentions are boundary-aware and punctuation-insensitive: CJK substrings, identifiers, NFKC folding', () => {
   assert.equal(normalize.mentionCount('yuike 和 yuikeee', 'yuike'), 1, 'Latin must not match a longer identifier')
   assert.equal(normalize.mentionCount('ＹＵＩＫＥ！来了', 'yuike'), 1, 'full-width and punctuation fold away')
-  assert.equal(normalize.mentionCount('星宫雲来了，星宫雲走了', '星宫雲'), 2)
+  assert.equal(normalize.mentionCount('洛云澜来了，洛云澜走了', '洛云澜'), 2)
   // §8.1: NFKC + 去标点/空白 applies to the name as well as the text.
-  assert.equal(normalize.mentionCount('小·柚来了', '小柚'), 1)
-  assert.equal(normalize.mentionCount('小 柚来了', '小柚'), 1)
-  assert.equal(normalize.mentionCount('小柚来了', '小 柚'), 1)
+  assert.equal(normalize.mentionCount('小·檀来了', '小檀'), 1)
+  assert.equal(normalize.mentionCount('小 檀来了', '小檀'), 1)
+  assert.equal(normalize.mentionCount('小檀来了', '小 檀'), 1)
   // §2: code identifiers keep their punctuation and their word boundaries.
   assert.equal(normalize.mentionCount('Yuike_01 上线', 'Yuike_01'), 1)
   assert.equal(normalize.mentionCount('yuike.dev is down', 'yuike.dev'), 1)
-  assert.equal(normalize.mentionCount('星宫雲-yuike 来了', '星宫雲-yuike'), 1)
+  assert.equal(normalize.mentionCount('洛云澜-alex 来了', '洛云澜-alex'), 1)
   assert.equal(normalize.firstMention('猫娘yuike', 'yuike'), 2)
-  assert.equal(normalize.firstMention('「小·柚」来了', '小柚'), 1, 'offset is the raw text position, not the compact index')
+  assert.equal(normalize.firstMention('「小·檀」来了', '小檀'), 1, 'offset is the raw text position, not the compact index')
   assert.equal(normalize.isMentionSurface('小'), false, 'one CJK character is not a surface')
-  assert.equal(normalize.isMentionSurface('小柚'), true)
+  assert.equal(normalize.isMentionSurface('小檀'), true)
   assert.equal(normalize.isMentionSurface('a'), false, 'one Latin character is not a surface')
 })
 
 test('punctuated and identifier surfaces produce mention edges with raw offsets', () => {
   const lib = library('punct')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person', status: 'confirmed' })
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person', status: 'confirmed' })
   const yuike = graph.createEntity({ libraryId: lib, name: 'yuike_01', kind: 'person', status: 'confirmed' })
-  const mixed = graph.createEntity({ libraryId: lib, name: '星宫雲-yuike', kind: 'person', status: 'confirmed' })
+  const mixed = graph.createEntity({ libraryId: lib, name: '洛云澜-alex', kind: 'person', status: 'confirmed' })
   const snapshot = index({
-    'mem-a': entry('「小·柚」来了', '她带着伞。'),
+    'mem-a': entry('「小·檀」来了', '她带着伞。'),
     'mem-b': entry('yuike_01 上线', 'yuike_01 迟到了。'),
-    'mem-c': entry('星宫雲-yuike 到访', '星宫雲-yuike 和 星宫雲 yuike 都来了。'),
+    'mem-c': entry('洛云澜-alex 到访', '洛云澜-alex 和 洛云澜 yuike 都来了。'),
   })
   const edges = decide.decideAutoLinks({ index: snapshot, entities: [you, yuike, mixed] })
   const mention = edges.filter(edge => edge.rule === 'entity-mention')
@@ -79,8 +79,8 @@ test('punctuated and identifier surfaces produce mention edges with raw offsets'
   for (const edge of edges) assert.ok(policy.EVIDENCE_RULES.includes(edge.rule), 'only the declared rule vocabulary: ' + edge.rule)
   const byEntity = new Map(mention.map(edge => [edge.to, edge]))
   const youEdge = byEntity.get(you.id)
-  assert.equal(youEdge.evidence.surface, '小柚')
-  assert.equal(youEdge.evidence.offset, 1, 'raw offset inside 「小·柚」')
+  assert.equal(youEdge.evidence.surface, '小檀')
+  assert.equal(youEdge.evidence.offset, 1, 'raw offset inside 「小·檀」')
   assert.ok(byEntity.has(yuike.id), 'identifier with underscore is found')
   assert.ok(byEntity.has(mixed.id), 'mixed CJK-Latin name is found')
 })
@@ -89,17 +89,17 @@ test('punctuated and identifier surfaces produce mention edges with raw offsets'
 
 test('only confirmed entities produce mention edges; provisional, archived and secret rows do not', () => {
   const lib = library('mention')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person', aliases: ['柚子'], status: 'confirmed', confirmedBy: 'user' })
-  graph.createEntity({ libraryId: lib, name: '未晞', kind: 'person' })
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person', aliases: ['檀子'], status: 'confirmed', confirmedBy: 'user' })
+  graph.createEntity({ libraryId: lib, name: '沈砚舟', kind: 'person' })
   graph.createEntity({ libraryId: lib, name: '阿兰', kind: 'person', status: 'archived' })
   const snapshot = index({
-    'mem-a': entry('小柚今天来了', '她带了一篮柚子。'),
-    'mem-b': entry('未晞的日记', '未晞写下了今天的安排。'),
+    'mem-a': entry('小檀今天来了', '她带了一篮水果。'),
+    'mem-b': entry('沈砚舟的日记', '沈砚舟写下了今天的安排。'),
     'mem-c': entry('阿兰回信', '阿兰说下周再联系。'),
-    'mem-d': entry('小柚与秘密', '关于小柚的一件不能外传的事。', { visibility: 'secret' }),
-    'mem-e': entry('小柚旧事', '小柚很久以前来过。', { status: 'archived' }),
+    'mem-d': entry('小檀与秘密', '关于小檀的一件不能外传的事。', { visibility: 'secret' }),
+    'mem-e': entry('小檀旧事', '小檀很久以前来过。', { status: 'archived' }),
   })
-  const edges = decide.decideAutoLinks({ index: snapshot, entities: [you, { id: 'ent-provisional', name: '未晞', kind: 'person', status: 'provisional' }, { id: 'ent-archived', name: '阿兰', kind: 'person', status: 'archived' }] })
+  const edges = decide.decideAutoLinks({ index: snapshot, entities: [you, { id: 'ent-provisional', name: '沈砚舟', kind: 'person', status: 'provisional' }, { id: 'ent-archived', name: '阿兰', kind: 'person', status: 'archived' }] })
   const mention = edges.filter(edge => edge.rule === 'entity-mention')
   assert.equal(mention.length, 1, 'one eligible memory mentions the confirmed entity')
   assert.equal(mention[0].from, 'mem-a')
@@ -107,7 +107,7 @@ test('only confirmed entities produce mention edges; provisional, archived and s
   assert.equal(mention[0].kind, 'person')
   assert.equal(mention[0].confidence, 1)
   assert.equal(mention[0].schemaVersion, 2)
-  assert.ok(mention[0].evidence.surface === '小柚' || mention[0].evidence.surface === '柚子')
+  assert.ok(mention[0].evidence.surface === '小檀' || mention[0].evidence.surface === '檀子')
   assert.equal(mention[0].evidence.entityId, you.id)
   assert.equal(mention[0].evidence.field, 'title')
   assert.equal(mention[0].evidence.offset, 0)
@@ -115,8 +115,8 @@ test('only confirmed entities produce mention edges; provisional, archived and s
 
 test('suppression removes a decided edge and decide stays pure', () => {
   const lib = library('suppress')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person', status: 'confirmed' })
-  const snapshot = index({ 'mem-a': entry('小柚来了', '小柚进门坐下。') })
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person', status: 'confirmed' })
+  const snapshot = index({ 'mem-a': entry('小檀来了', '小檀进门坐下。') })
   const first = decide.decideAutoLinks({ index: snapshot, entities: [you] })
   const second = decide.decideAutoLinks({ index: snapshot, entities: [you] })
   assert.deepEqual(second, first, 'same input -> same output')
@@ -152,10 +152,10 @@ test('field evidence builds conflict, supersede and fact-key edges without cliqu
 
 test('apply writes evidence and never overwrites a manual edge', () => {
   const lib = library('apply')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person', status: 'confirmed' })
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person', status: 'confirmed' })
   state.savePrivateIndex(lib, index({
-    'mem-a': entry('小柚来了', '小柚进门坐下。'),
-    'mem-b': entry('小柚与阿柚', '小柚提起阿柚。', {
+    'mem-a': entry('小檀来了', '小檀进门坐下。'),
+    'mem-b': entry('小檀与阿檀', '小檀提起阿檀。', {
       links: [{ to: you.id, kind: 'person', note: '用户手动确认过这条关系。', confidence: 0.9 }],
     }),
   }))
@@ -181,11 +181,11 @@ test('apply writes evidence and never overwrites a manual edge', () => {
 
 test('confirming an entity flips its status and backfills mention edges immediately', () => {
   const lib = library('confirm')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person' })
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person' })
   assert.equal(you.status, 'provisional', 'creation alone does not confirm')
   state.savePrivateIndex(lib, index({
-    'mem-a': entry('小柚来了', '小柚进门坐下。'),
-    'mem-b': entry('小柚的伞', '小柚把伞落在门口。'),
+    'mem-a': entry('小檀来了', '小檀进门坐下。'),
+    'mem-b': entry('小檀的伞', '小檀把伞落在门口。'),
   }))
   const confirmed = graph.confirmEntities({ libraryId: lib, entityIds: [you.id], by: 'user' })
   assert.deepEqual(confirmed.confirmed, [you.id])
@@ -203,29 +203,29 @@ test('confirming an entity flips its status and backfills mention edges immediat
 
 test('renaming a confirmed entity retires stale mention edges and attaches the new surface', () => {
   const lib = library('rename')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person' })
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person' })
   state.savePrivateIndex(lib, index({
-    'mem-a': entry('小柚来了', '小柚进门坐下。'),
-    'mem-b': entry('柚子来了', '柚子带着伞。'),
+    'mem-a': entry('小檀来了', '小檀进门坐下。'),
+    'mem-b': entry('檀子来了', '檀子带着伞。'),
   }))
   graph.confirmEntities({ libraryId: lib, entityIds: [you.id], by: 'user' })
   assert.ok((state.loadPrivateIndex(lib).entries['mem-a'].links || []).some(link => link.to === you.id))
-  graph.renameEntity({ libraryId: lib, entityId: you.id, name: '柚子', aliases: [] })
+  graph.renameEntity({ libraryId: lib, entityId: you.id, name: '檀子', aliases: [] })
   const rows = state.loadPrivateIndex(lib)
   assert.equal((rows.entries['mem-a'].links || []).some(link => link.to === you.id), false, 'old name no longer matches')
-  assert.ok((rows.entries['mem-b'].links || []).some(link => link.to === you.id && link.evidence?.surface === '柚子'))
+  assert.ok((rows.entries['mem-b'].links || []).some(link => link.to === you.id && link.evidence?.surface === '檀子'))
 })
 
 test('merging a confirmed source into a provisional target confirms it and remaps evidence', () => {
   const lib = library('merge')
-  const source = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person' })
-  state.savePrivateIndex(lib, index({ 'mem-a': entry('小柚来了', '小柚进门坐下。') }))
+  const source = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person' })
+  state.savePrivateIndex(lib, index({ 'mem-a': entry('小檀来了', '小檀进门坐下。') }))
   graph.confirmEntities({ libraryId: lib, entityIds: [source.id], by: 'user' })
-  const target = graph.createEntity({ libraryId: lib, name: '柚子', kind: 'person' })
+  const target = graph.createEntity({ libraryId: lib, name: '檀子', kind: 'person' })
   graph.mergeEntities({ libraryId: lib, targetId: target.id, sourceIds: [source.id] })
   const store = graph.graphExport(lib)
   assert.equal(store.entities[target.id].status, 'confirmed', 'a confirmed source confirms the surviving row')
-  assert.deepEqual(store.entities[target.id].aliases, ['小柚'])
+  assert.deepEqual(store.entities[target.id].aliases, ['小檀'])
   const link = (state.loadPrivateIndex(lib).entries['mem-a'].links || []).find(item => item.to === target.id)
   assert.ok(link, 'the mention edge points at the merged row')
   assert.equal(link.evidence.entityId, target.id)
@@ -233,8 +233,8 @@ test('merging a confirmed source into a provisional target confirms it and remap
 
 test('deleting an entity records suppression for the auto edges it collects', () => {
   const lib = library('delete')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person' })
-  state.savePrivateIndex(lib, index({ 'mem-a': entry('小柚来了', '小柚进门坐下。') }))
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person' })
+  state.savePrivateIndex(lib, index({ 'mem-a': entry('小檀来了', '小檀进门坐下。') }))
   graph.confirmEntities({ libraryId: lib, entityIds: [you.id], by: 'user' })
   graph.deleteEntity({ libraryId: lib, entityId: you.id, force: true })
   const store = suppression.readSuppression(lib)
@@ -244,8 +244,8 @@ test('deleting an entity records suppression for the auto edges it collects', ()
 
 test('removing an auto edge by hand suppresses it against the next recompute', () => {
   const lib = library('unlink')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person' })
-  state.savePrivateIndex(lib, index({ 'mem-a': entry('小柚来了', '小柚进门坐下。') }))
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person' })
+  state.savePrivateIndex(lib, index({ 'mem-a': entry('小檀来了', '小檀进门坐下。') }))
   graph.confirmEntities({ libraryId: lib, entityIds: [you.id], by: 'user' })
   const removed = graph.unlinkEntry({ libraryId: lib, fromId: 'mem-a', toId: you.id, kind: 'person' })
   assert.equal(removed.removed, 1)
@@ -258,9 +258,9 @@ test('removing an auto edge by hand suppresses it against the next recompute', (
 
 test('deleting a legacy auto edge also blocks the later entity-mention edge (P6)', () => {
   const lib = library('legacy-suppress')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person' })
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person' })
   state.savePrivateIndex(lib, index({
-    'mem-a': entry('小柚来了', '小柚进门坐下。', {
+    'mem-a': entry('小檀来了', '小檀进门坐下。', {
       links: [{ to: you.id, kind: 'person', note: '旧算法自动建立的实体枢纽。', confidence: 0.65, source: 'auto' }],
     }),
   }))
@@ -297,8 +297,8 @@ test('purgeAutoLinks removes only auto edges, keeps a manual edge byte-for-byte 
 
 test('off mode closes explicit mention maintenance too, and apply rejects unknown rules', () => {
   const lib = library('off-mode')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person' })
-  state.savePrivateIndex(lib, index({ 'mem-a': entry('小柚来了', '小柚进门坐下。') }))
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person' })
+  state.savePrivateIndex(lib, index({ 'mem-a': entry('小檀来了', '小檀进门坐下。') }))
   state.updateSettings({ autoLinkMode: 'off' })
   try {
     const result = graph.confirmEntities({ libraryId: lib, entityIds: [you.id], by: 'user' })
@@ -306,7 +306,7 @@ test('off mode closes explicit mention maintenance too, and apply rejects unknow
     assert.equal(result.entities, 0, 'off writes no edge')
     assert.equal((state.loadPrivateIndex(lib).entries['mem-a'].links || []).length, 0)
     // A hand-supplied edge outside the evidence vocabulary is refused by the writer.
-    state.savePrivateIndex(lib, index({ 'mem-a': entry('小柚来了', '小柚进门坐下。') }))
+    state.savePrivateIndex(lib, index({ 'mem-a': entry('小檀来了', '小檀进门坐下。') }))
     const applied = apply.applyAutoEdges({
       libraryId: lib,
       entities: [you],
@@ -321,8 +321,8 @@ test('off mode closes explicit mention maintenance too, and apply rejects unknow
 
 test('clearLinkSuppression removes markers and the deterministic rebuild restores the edge', async () => {
   const lib = library('clear-suppress')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person' })
-  state.savePrivateIndex(lib, index({ 'mem-a': entry('小柚来了', '小柚进门坐下。') }))
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person' })
+  state.savePrivateIndex(lib, index({ 'mem-a': entry('小檀来了', '小檀进门坐下。') }))
   state.updateSettings({ autoLinkMode: 'deterministic' })
   try {
     graph.confirmEntities({ libraryId: lib, entityIds: [you.id], by: 'user' })
@@ -340,8 +340,8 @@ test('clearLinkSuppression removes markers and the deterministic rebuild restore
 
 test('switching to deterministic backfills entities confirmed while off', async () => {
   const lib = library('mode-switch')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person' })
-  state.savePrivateIndex(lib, index({ 'mem-a': entry('小柚来了', '小柚进门坐下。') }))
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person' })
+  state.savePrivateIndex(lib, index({ 'mem-a': entry('小檀来了', '小檀进门坐下。') }))
   state.updateSettings({ autoLinkMode: 'off' })
   try {
     const off = graph.confirmEntities({ libraryId: lib, entityIds: [you.id], by: 'user' })
@@ -357,8 +357,8 @@ test('switching to deterministic backfills entities confirmed while off', async 
 
 test('re-confirming an already-confirmed entity backfills missing mentions', () => {
   const lib = library('reconfirm')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person', status: 'confirmed' })
-  state.savePrivateIndex(lib, index({ 'mem-a': entry('小柚来了', '小柚进门坐下。') }))
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person', status: 'confirmed' })
+  state.savePrivateIndex(lib, index({ 'mem-a': entry('小檀来了', '小檀进门坐下。') }))
   const result = graph.confirmEntities({ libraryId: lib, entityIds: [you.id], by: 'user' })
   assert.deepEqual(result.confirmed, [], 'it was already confirmed')
   assert.equal(result.entities, 1, 'the refresh still runs and attaches the edge')
@@ -369,8 +369,8 @@ test('three automatic passes in suggest mode add no edges', async () => {
   state.updateSettings({ autoLinkMode: 'suggest' })
   try {
     const lib = library('suggest-three')
-    graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person', status: 'confirmed' })
-    state.savePrivateIndex(lib, index({ 'mem-a': entry('小柚来了', '小柚进门坐下。') }))
+    graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person', status: 'confirmed' })
+    state.savePrivateIndex(lib, index({ 'mem-a': entry('小檀来了', '小檀进门坐下。') }))
     for (let pass = 0; pass < 3; pass += 1) {
       const result = await privateLinks.refreshPrivateAutoLinks({ libraryId: lib, ids: ['mem-a'] })
       assert.equal(result.skipped, 'suggest')
@@ -398,7 +398,7 @@ test('confirming eight entities backfills all mentions in one batch (8 x 9 = 72)
 
 test('a broken entity store makes the automatic refresh fail open (warn, no throw)', async () => {
   const lib = library('broken-entities')
-  state.savePrivateIndex(lib, index({ 'mem-a': entry('小柚来了', '小柚进门坐下。') }))
+  state.savePrivateIndex(lib, index({ 'mem-a': entry('小檀来了', '小檀进门坐下。') }))
   const file = path.join(home, 'index', `${lib}.entities.json`)
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, '{not json', 'utf8')
@@ -496,11 +496,11 @@ test('review accept refreshes the supersede edge immediately and stays silent in
 
 test('recallRelations ignores entity-mention edges even at confidence 1.0 but keeps field evidence', () => {
   const lib = library('recall')
-  const you = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person', status: 'confirmed' })
+  const you = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person', status: 'confirmed' })
   state.savePrivateIndex(lib, index({
-    'mem-a': entry('小柚来了', '小柚进门坐下。', {
+    'mem-a': entry('小檀来了', '小檀进门坐下。', {
       links: [
-        { to: you.id, kind: 'person', note: '提及已确认实体「小柚」（标题）。', confidence: 1, source: 'auto', evidence: { rule: 'entity-mention', entityId: you.id, surface: '小柚', field: 'title', offset: 0 } },
+        { to: you.id, kind: 'person', note: '提及已确认实体「小檀」（标题）。', confidence: 1, source: 'auto', evidence: { rule: 'entity-mention', entityId: you.id, surface: '小檀', field: 'title', offset: 0 } },
         { to: 'mem-b', kind: 'conflict', note: '字段证据：conflicts_with 指向这条记忆。', confidence: 1, source: 'auto', evidence: { rule: 'conflict', field: 'conflicts_with' } },
       ],
     }),

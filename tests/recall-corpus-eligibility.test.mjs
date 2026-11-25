@@ -26,16 +26,16 @@ for (const backend of ['agent', 'api', 'api-fallback']) {
       state.updateSettings({ memoryBackend: backend === 'agent' ? 'agent' : 'api', vectorSource: 'api', crossLibraryRecall: false })
       const entries = {}
       const entry = (title, extra = {}) => ({ title, content: title, layer: 'long_term', status: 'active', createdAt: new Date().toISOString(), ...extra })
-      entries['mem-target'] = entry('zxquartz')
+      entries['mem-target'] = entry('zqneedle')
       for (let i = 0; i < 7; i++) entries['mem-filler-' + i] = entry('unrelated' + i)
       state.savePrivateIndex(libraryId, { entries })
       const exec = { agent: { session: { header: { id: sessionId } } } }
       // Empty semantic results exercise the production mixed recall lexical leg.
-      const recall = (query = 'zxquartz', purpose = 'automatic') => privateRecall({ exec, query, purpose, topK: 5, relevanceThreshold: 0, retrieveImpl: async () => { if (backend === 'api-fallback') throw new Error('simulated vector outage'); return { files: [] } } })
+      const recall = (query = 'zqneedle', purpose = 'automatic') => privateRecall({ exec, query, purpose, topK: 5, relevanceThreshold: 0, retrieveImpl: async () => { if (backend === 'api-fallback') throw new Error('simulated vector outage'); return { files: [] } } })
       const before = await recall()
       assert.equal(before.recallRoute, backend === 'api-fallback' ? 'local-fallback' : backend === 'api' ? 'managed-vector-rrf' : 'local')
       assert.deepEqual(before.files.map(f => f.name), ['mem-target'])
-      for (let i = 0; i < 12; i++) entries['mem-hidden-' + i] = entry('zxquartz', hidden)
+      for (let i = 0; i < 12; i++) entries['mem-hidden-' + i] = entry('zqneedle', hidden)
       state.savePrivateIndex(libraryId, { entries })
       const after = await recall()
       assert.equal(after.recallRoute, backend === 'api-fallback' ? 'local-fallback' : backend === 'api' ? 'managed-vector-rrf' : 'local')

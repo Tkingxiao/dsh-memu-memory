@@ -164,7 +164,7 @@ test('equal fused scores fall back to the best rank and then the canonical id', 
 // 在场时，其余行的 share 按 max(1/(1+topLex/50), sqrt(lexical/topLex)) 折减，强命中保住头部。
 test('a dominant lexical hit keeps its seat; the rank-flattened near-tie cannot be exploited by biases', () => {
   const index = indexOf({
-    'mem-food': entry({ title: '主人是云南人，爱吃松茸菌子和过桥米线', createdAt: '2026-11-17T00:00:00.000Z', updatedAt: '2026-11-17T00:00:00.000Z', strength: 0.8 }),
+    'mem-food': entry({ title: '主人是江南人，爱吃桂花糖糕和豆沙米糕', createdAt: '2026-11-17T00:00:00.000Z', updatedAt: '2026-11-17T00:00:00.000Z', strength: 0.8 }),
     'mem-meta': entry({ title: '运营值守安排', createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z', strength: 1 }),
   })
   const fused = memory.fuseRecallCandidates({

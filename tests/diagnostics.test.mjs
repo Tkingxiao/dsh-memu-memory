@@ -255,3 +255,24 @@ test('rows on disk survive a restart, so the page is not empty after a reload', 
   assert.equal(parsed.total >= 1, true, 'a fresh process must read the persisted rows')
   assert.equal(parsed.code, 'PERSISTED_ROW')
 })
+
+// docs/host-versions.md §13.6：台账指纹的运行时对应物。它不判断、不比版本号，
+// 只是把已经发生过的结构探测结果聚合成一行——所以断言盯着"记下了什么"。
+test('host surface records probe verdicts and refuses unregistered keys', async () => {
+  const surface = await import('../lib/host-surface.js')
+  const before = surface.hostSurface()
+  assert.deepEqual(Object.keys(before).sort(), [...surface.HOST_SURFACES].sort())
+
+  surface.noteHostSurface('rpcGuard', 'admit')
+  assert.equal(surface.hostSurface().rpcGuard, 'admit')
+  surface.noteHostSurface('rpcGuard', '')
+  assert.equal(surface.hostSurface().rpcGuard, 'admit', 'an empty verdict never erases a known one')
+  surface.noteHostSurface('semver', '0.2.3-alpha.1')
+  assert.equal('semver' in surface.hostSurface(), false, 'a stale call site cannot invent a ledger key')
+
+  const line = surface.hostSurfaceLine()
+  assert.match(line, /rpcGuard=admit/)
+  assert.equal(line.split(' ').length, surface.HOST_SURFACES.length)
+  for (const part of line.split(' ')) assert.match(part, /^[a-zA-Z]+=\S+$/, 'every surface prints key=value: ' + line)
+  surface.noteHostSurface('rpcGuard', before.rpcGuard)
+})

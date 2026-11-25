@@ -521,7 +521,7 @@ test('a session arriving at an archived library revives it through the fast path
 })
 
 test('a legacy archive with no recorded source is not revived just because an old binding exists', () => {
-  // 本机实测：rp（14 个绑定）、ai中转站（4 个）都是「归档 + 还有旧绑定」，但 lastUsed 三周前。
+  // 本机实测：rp（14 个绑定）、另一个工作区库（4 个）都是「归档 + 还有旧绑定」，但 lastUsed 三周前。
   // 旧数据分不清是用户归档还是老扫描误归档，所以只复活「还热」的；冷的不动。
   const lib = state.createLibrary({ name: 'legacy-cold', cwd: path.join(home, 'legacy-cold') })
   const st = state.loadState()
@@ -553,7 +553,7 @@ test('a warm legacy archive (no source recorded, used minutes ago) is revived', 
 })
 
 test('a cold legacy archive with an old binding can still be deleted', () => {
-  // 本机 rp / ai中转站 形态：很久以前归档、仍留着旧绑定、lastUsed 三周前。
+  // 本机 rp / 另一个工作区库 形态：很久以前归档、仍留着旧绑定、lastUsed 三周前。
   // 它不是扫描误归档（那类会被自愈），也不该因为“有旧绑定”变成永远删不掉。
   const lib = state.createLibrary({ name: 'legacy-deletable', cwd: path.join(home, 'legacy-deletable') })
   const st = state.loadState()

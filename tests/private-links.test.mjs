@@ -250,6 +250,18 @@ test('perEntry, total, maxCandidates and maxEntities caps hold', () => {
   assert.ok(capped.candidates[0].score >= capped.candidates[1].score, 'highest score is preferred')
 })
 
+test('a sliding window of a repeated four-character name is not the entity name', () => {
+  const index = snapshot({
+    'mem-w1': entry('南宫晚晴，午后', '她坐在窗边讲这件事，讲了很久。'),
+    'mem-w2': entry('南宫晚晴，傍晚', '南宫晚晴先到了门口，带来了那把伞。'),
+  })
+  const result = suggestPrivateLinks({ index, ids: ['mem-w1'] })
+  const names = [...result.entityHubs.map(hub => hub.name), ...result.candidates.map(item => item.suggestedEntity?.name)]
+  assert.deepEqual(result.entityHubs.map(hub => hub.name), ['南宫晚晴'],
+    'one hub for the whole surface, never one per window: ' + names.join(','))
+  for (const name of names) assert.ok(!['南宫晚', '宫晚晴'].includes(name), 'a window fragment is not a person: ' + name)
+})
+
 // ---- 纯函数：不确定实体类型 / thing / kind 冲突 ----
 
 test('CJK name-like token without a person cue is an uncertain candidate, not a hub', () => {

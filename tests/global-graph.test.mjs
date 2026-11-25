@@ -88,3 +88,19 @@ test('an unknown global focus is rejected instead of returning an empty graph', 
   seed()
   assert.throws(() => getGlobalGraph({ focusId: 'nonexistent' }), /unknown or inaccessible global graph focus/)
 })
+
+test('a domain narrows the global graph but still reports every domain it holds', () => {
+  state.saveGlobalIndex({
+    entries: {
+      d1: { title: '发布窗口', domain: '  Ｃｏｄｉｎｇ ', status: 'active', links: [{ id: 'd_l1', to: 'd2', kind: 'related' }] },
+      d2: { title: '回滚规则', domain: 'CODING', status: 'active', links: [{ id: 'd_l1', to: 'd1', kind: 'related' }] },
+      d3: { title: '没有域标记', status: 'active', links: [{ id: 'd_l2', to: 'd1', kind: 'related' }] },
+    },
+  })
+  assert.deepEqual(getGlobalGraph({}).domains, ['coding', 'unknown'])
+  const filtered = getGlobalGraph({ domain: ' Coding ' })
+  assert.deepEqual(filtered.nodes.map((node) => node.id).sort(), ['d1', 'd2'])
+  assert.deepEqual(filtered.nodes.map((node) => node.domain).sort(), ['coding', 'coding'], 'nodes carry the normalized stamp')
+  assert.deepEqual(filtered.domains, ['coding', 'unknown'], 'the option list is never narrowed by the filter itself')
+  assert.equal(filtered.edges.length, 1, 'the edge reaching the other domain drops out')
+})

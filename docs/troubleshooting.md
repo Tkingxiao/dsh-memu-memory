@@ -760,7 +760,20 @@ grep tests 里的硬编码清单。守卫：全量 `npm test` 1676/1674 pass / 0
 
 **原因与修复**：旧候选提取把完整引号或名字引导后的文本再次拆成 n-gram，内部片段也继承表面证据。新候选只给完整称呼背书，并过滤没有独立边界的子片段。模型通过 `memu_private_link` 创建未知实体时，来源记忆本身必须包含完整引号、名字引导加右边界、或两侧分隔的名称，link note 不算来源证据；先校验来源、边类型、理由、置信度和数量限制，再创建 provisional 实体，普通参数错误不再遗留孤立节点。既有实体和别名仍可复用，手动创建与已确认实体的提及匹配保持原规则。
 
-**守卫与旧数据**：`tests/tools.test.mjs` 覆盖四种碎片、虚构理由、Latin 子串、完整姓名/昵称/别名与失败不留节点；`tests/auto-link-candidates.test.mjs` 覆盖完整表面、内部片段和派生缓存。不能仅按字符串把历史节点自动删除或归并——「主人一」也可能是真实昵称；先核对原始记忆，再在关系图中按证据改名、合并或删除。此修复不改写现有记忆或实体。
+**守卫与旧数据**：`tests/tools.test.mjs` 覆盖四种碎片、虚构理由、Latin 子串、完整姓名/昵称/别名与失败不留节点；`tests/auto-link-candidates.test.mjs` 覆盖完整表面、内部片段和派生缓存，以及「窗口片段不提名、但整段就是两字的名字（`星港`）必须留下」。
+
+**1.3.16 起，存量碎片按可证明性分两档处理**（此前本节写的是"不改写现有实体"，那条口径作废）：
+
+- `attested`（可证明）——两种情形之一：同组片段能**首尾重叠**拼成一个更长的名字，且那个名字**在该库正文里真的出现过**；或短名在全库正文里的**每一次**出现都在某个更长名字里面。这类在升级后的第一次启动自动合并（写入前先做图备份），合并只走 `lib/graph.js mergeEntities` 那条既有级联：别名并集、`links[].to` 改指、`evidence.entityId` 改指、继承 confirmed、记忆正文一字不动。落点 `lib/entity-repair.js` + `lib/index.js:runEntityRepairPass`。
+- `similar`（只是相似）——编辑距离 ≤2 或名字核重合。**一律不动**：`顾清欢` 与 `顾清悦` 就是被编辑距离撞到一起的两个不同称呼。这类只在诊断页报数，按钮标"需确认"（`MANUAL_REPAIRS` 里的 `merge-entity-fragments`，绝不进 `SAFE_REPAIRS`），或在关系图里逐个核对。
+
+三条必须记住的边界：
+
+1. 「主人一」「人一」这类**不能仅按字符串判定**——先要正文证据。所以判定用的是覆盖性（每一次出现都在长名里面），不是包含关系本身。
+2. `mergeEntities` 末尾的 `pruneOrphanEntities` 是**全库清扫**，会删掉任何没被引用的实体，包括本次修复没碰的。`entity-repair.js` 因此先读快照、合并后把计划外的行原样写回；守卫用例 `tests/graph-cascade.test.mjs`「the merge cascade never deletes an entity the repair did not plan to touch」。
+3. 备份失败就**一个字节都不写**，`state.cycle.entityRepairVersion` 保持未写，下次启动再试（诊断记 `ENTITY_REPAIR_DEFERRED`）。整轮只跑一次，第二次返回 `skipped:'done'`；关掉 `autoRepairEntityFragments` 则连可证明的也不动。跨库与全局↔私有的归并仍然不做（`docs/memory-semantics.md` §8.16）。
+
+命令行等价物：`node scripts/entity-dedupe.mjs`（默认 dry-run，`--apply` 先备份；`--include-similar` 才把相似候选一起交给人批量决定）。
 
 ### 3.45 诊断页：插件内部到底哪儿坏了（1.3.13 起）
 
@@ -793,7 +806,7 @@ grep tests 里的硬编码清单。守卫：全量 `npm test` 1676/1674 pass / 0
 **现在（1.3.14 起）**：
 - 归档前先看「有没有存活绑定」：`state.inUseLibraryIds()` 按 `sessionGone !== true` 的会话绑定判定；在用的库不归档，结果里给 `skippedInUse`，同一个库只提示一次。
 - 归档来源写入 `archivedBy`（`sweep` / `user`）。扫描遇到「已归档 + 仍有存活绑定 + 非用户归档」会**就地复活**；`ensureSession` 快路径同样复活误归档库。用户主动归档的不动。
-- 旧数据（1.3.13 及更早，没有 `archivedBy`）分不清是谁归档的，所以只复活**还热**的库：`lastUsedAt` 在 14 天内才算误归档；更早的保持归档（本机 `rp` / `ai中转站` 就属于这种「归档 + 旧绑定」的冷数据，升级后不会被突然翻出来）。
+- 旧数据（1.3.13 及更早，没有 `archivedBy`）分不清是谁归档的，所以只复活**还热**的库：`lastUsedAt` 在 14 天内才算误归档；更早的保持归档（本机 `rp` / `另一个工作区库` 就属于这种「归档 + 旧绑定」的冷数据，升级后不会被突然翻出来）。
 - `deleteLibrary(id)` 只拒绝「危险归档 + 仍在用」这一类（判据 `archivedWhileInUse` 与自愈共用）；用户主动归档、冷数据的旧归档照旧可删。RPC 只在 `confirmed` 时透传 `force`；`purgeArchivedAfterDays` 的候选排除在用库。
 
 **怎么确认**：`state.json` 里看 `archived` / `archivedBy` / `lastUsedAt` 三者是否自相矛盾；宿主日志搜 `archived library` 与 `kept library`。修好后旧数据在下一轮 sweep（启动后 8 秒或每 5 分钟）或下一条消息时自动复活。

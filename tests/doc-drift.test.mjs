@@ -200,9 +200,129 @@ test('suite without any *.test.mjs fails loader/stub completeness', () => {
   assert.match(detailText(result), /tests\/: no \*\.test\.mjs file/)
 })
 
-test('runChecks returns the three gates in order', () => {
+test('runChecks returns the four gates in order', () => {
   const root = makeFixture()
-  assert.deepEqual(gate.runChecks(root).map((entry) => entry.label), ['rpc-method-count', 'test-tracking', 'loader-stubs'])
+  assert.deepEqual(gate.runChecks(root).map((entry) => entry.label),
+    ['rpc-method-count', 'test-tracking', 'loader-stubs', 'host-versions'])
+})
+
+// ---- Gate 4: the cross-version host ledger ----
+
+const LEDGER_SURFACES = [
+  '| `rpcGuard` | RPC 入口守卫 | 存在性 | `lib/rpc.js:requestRejectionOf` | warn | requestRejection |',
+  '| `schedule` | 定时器 | edit | `lib/salient-wake.js:scheduleFlavor` | skip | global |',
+  '| `activation` | startActivation | rootOf | `lib/curator.js:activationUsesFlatSpec` | 换形 | nested |',
+  '| `coldLog` | 会话冷读 | 模块候选 | `lib/consolidation-snapshot.js:COLD_LOG_MODULES` | 活视图 | session-query |',
+].join('\n')
+
+function ledgerRow(build, overrides = {}) {
+  const row = { commit: '66491b05e3', verdict: '源码', grade: 'exact', date: '2026-11-26', ...overrides }
+  return `| \`${build}\` | \`${row.commit}\` | ${row.verdict} | ${row.grade} | ${row.date} |`
+    + ' `rpcGuard=requestRejection;schedule=global;activation=nested;coldLog=session-query` | 桌面壳 |'
+}
+
+function makeHostFixture(options = {}) {
+  const root = tempDir()
+  write(root, 'lib/rpc.js', 'export function requestRejectionOf(connection, req) { return undefined }\n')
+  write(root, 'lib/salient-wake.js', 'export function scheduleFlavor(schedule) { return schedule ? \'global\' : null }\n')
+  write(root, 'lib/curator.js', 'export function activationUsesFlatSpec(subagents) { return Boolean(subagents) }\n')
+  write(root, 'lib/consolidation-snapshot.js', 'const COLD_LOG_MODULES = []\nexport const reconcile = 1\n')
+  if (options.package !== null) {
+    write(root, 'package.json', JSON.stringify(options.package
+      ?? { dsh: { compatibility: { dshReleases: ['0.2.2-rc.1'] } } }))
+  }
+  const rows = options.rows ?? [ledgerRow('0.2.2-rc.1')]
+  const surfaces = options.surfaces ?? LEDGER_SURFACES
+  write(root, 'docs/host-versions.md', '# 台账\n\n## 13.1 核对台账\n\n'
+    + '| 宿主构建 | commit | 核对方式 | 判定 | 日期 | 结构指纹 | 未覆盖面 |\n|---|---|---|---|---|---|---|\n'
+    + rows.join('\n') + '\n\n## 13.2 宿主面事实矩阵\n\n| 面ID | 宿主表面 | 探测判据 | 落点 | 降级 | 形状 |\n|---|---|---|---|---|---|\n'
+    + surfaces + '\n')
+  for (const [rel, body] of Object.entries(options.docs || {})) write(root, rel, body)
+  return root
+}
+
+const hostCheck = (root) => gate.checkHostVersions(root)
+
+test('host-versions: a complete ledger passes', () => {
+  const result = hostCheck(makeHostFixture())
+  assert.equal(result.status, 'ok', JSON.stringify(result.details))
+})
+
+test('host-versions: a build named in another doc without a ledger row fails', () => {
+  const root = makeHostFixture({ docs: { 'docs/host-adaptation.md': '升到 `0.2.3-alpha.9` 后守卫变了。\n' } })
+  const result = hostCheck(root)
+  assert.equal(result.status, 'fail')
+  assert.ok(result.details.some((line) => line.includes('0.2.3-alpha.9') && line.includes('no row')), result.details.join('\n'))
+})
+
+test('host-versions: fenced code does not count as a build claim', () => {
+  const root = makeHostFixture({ docs: { 'docs/host-adaptation.md': '```bash\ngit tag dsh-v0.2.9-rc.7\n```\n' } })
+  assert.equal(hostCheck(root).status, 'ok')
+})
+
+test('host-versions: a renamed probe symbol fails until the ledger is updated', () => {
+  const root = makeHostFixture({ surfaces: LEDGER_SURFACES.replace('scheduleFlavor', 'flavourOfSchedule') })
+  const result = hostCheck(root)
+  assert.equal(result.status, 'fail')
+  assert.ok(result.details.some((line) => line.includes('schedule') && line.includes('not found')), result.details.join('\n'))
+})
+
+test('host-versions: a row must state how it was verified', () => {
+  const root = makeHostFixture({ rows: [ledgerRow('0.2.2-rc.1', { verdict: '大概可以' })] })
+  const result = hostCheck(root)
+  assert.equal(result.status, 'fail')
+  assert.ok(result.details.some((line) => line.includes('核对方式')), result.details.join('\n'))
+})
+
+test('host-versions: commit and date columns are checked', () => {
+  const root = makeHostFixture({ rows: [ledgerRow('0.2.2-rc.1', { commit: 'HEAD', date: '11-26' })] })
+  const result = hostCheck(root)
+  assert.equal(result.status, 'fail')
+  assert.ok(result.details.some((line) => line.includes('short sha')))
+  assert.ok(result.details.some((line) => line.includes('ISO')))
+})
+
+test('host-versions: a fingerprint key must be a registered surface', () => {
+  const root = makeHostFixture()
+  const docFile = path.join(root, 'docs', 'host-versions.md')
+  fs.writeFileSync(docFile, fs.readFileSync(docFile, 'utf8')
+    .replace('coldLog=session-query', 'cron=session-query'))
+  const result = hostCheck(root)
+  assert.equal(result.status, 'fail')
+  assert.ok(result.details.some((line) => line.includes('cron') && line.includes('not a surface')), result.details.join('\n'))
+})
+
+test('host-versions: a host version in running code fails, in a comment it does not', () => {
+  const root = makeHostFixture()
+  write(root, 'lib/versiongate.js', '// 0.2.3-alpha.1 起守卫换了形状\nexport const probed = true\n')
+  assert.equal(hostCheck(root).status, 'ok')
+  write(root, 'lib/versiongate.js', 'export const isAlpha = () => host === \'0.2.3-alpha.1\'\n')
+  const result = hostCheck(root)
+  assert.equal(result.status, 'fail')
+  assert.ok(result.details.some((line) => line.includes('versiongate.js') && line.includes('running code')), result.details.join('\n'))
+})
+
+test('host-versions: dshReleases must agree with the verified rows', () => {
+  const root = makeHostFixture({ rows: [ledgerRow('0.2.2-rc.1'), ledgerRow('0.2.2-rc.2')] })
+  const result = hostCheck(root)
+  assert.equal(result.status, 'fail')
+  assert.ok(result.details.some((line) => line.includes('dshReleases')), result.details.join('\n'))
+  const agreed = makeHostFixture({
+    rows: [ledgerRow('0.2.2-rc.1'), ledgerRow('0.2.2-rc.2')],
+    package: { dsh: { compatibility: { dshReleases: ['0.2.2-rc.1', '0.2.2-rc.2'] } } },
+  })
+  assert.equal(hostCheck(agreed).status, 'ok')
+})
+
+test('host-versions: an install directory without docs/ is skipped, not failed', () => {
+  const root = tempDir()
+  write(root, 'lib/rpc.js', 'export const shipped = true\n')
+  const result = hostCheck(root)
+  assert.equal(result.status, 'skipped', JSON.stringify(result))
+})
+
+test('host-versions: the shipped ledger itself passes the gate', () => {
+  assert.equal(hostCheck(REPO).status, 'ok', JSON.stringify(hostCheck(REPO).details))
 })
 
 test('CLI exits 1 and prints FAIL/skip when a gate fails', () => {

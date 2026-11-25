@@ -31,8 +31,8 @@ function entry(title, content, extra = {}) {
 
 function fixture() {
   return {
-    'mem-1': entry('「小柚」今天来了', '她带着伞。'),
-    'mem-2': entry('小柚的伞', '小柚把伞放在门口。'),
+    'mem-1': entry('「小檀」今天来了', '她带着伞。'),
+    'mem-2': entry('小檀的伞', '小檀把伞放在门口。'),
     'mem-3': entry('她叫阿兰', '阿兰是隔壁的邻居。'),
     'mem-4': entry('yuike_01 上线', 'yuike_01 又迟到了。'),
     'mem-5': entry('星港夜班', '今日星港开始检修，傍晚星港的风很大。'),
@@ -46,8 +46,8 @@ function fixture() {
 test('term statistics carry df/titleDf/boundary/cohesion for real names and drop glue bigrams', () => {
   const rows = Object.entries(fixture()).map(([id, item]) => ({ id, title: item.title, text: `${item.title}\n${item.content}` }))
   const stats = terminology.buildTermStats(rows)
-  const you = stats.get('小柚')
-  assert.ok(you, '小柚 is a repeated bigram')
+  const you = stats.get('小檀')
+  assert.ok(you, '小檀 is a repeated bigram')
   assert.equal(you.df, 2)
   assert.equal(you.titleDf, 2)
   assert.ok(you.avLeft >= 2 && you.avRight >= 2, 'both boundaries vary: ' + you.avLeft + '/' + you.avRight)
@@ -58,7 +58,7 @@ test('term statistics carry df/titleDf/boundary/cohesion for real names and drop
   assert.ok(star && star.df >= 2 && star.tf >= 4)
   assert.equal(terminology.looksGeneric('这个'), true, 'function characters disqualify a surface')
   assert.equal(terminology.looksGeneric('一条'), true, 'measure-word templates disqualify a surface')
-  assert.equal(terminology.looksGeneric('小柚'), false)
+  assert.equal(terminology.looksGeneric('小檀'), false)
 })
 
 test('ranking puts evidenced terms in tier 1 and pure statistics in tier 2', () => {
@@ -67,13 +67,26 @@ test('ranking puts evidenced terms in tier 1 and pure statistics in tier 2', () 
   const ranked = terminology.rankCandidates(entries, stats)
   const tier1 = ranked.tier1.map(row => row.term)
   const tier2 = ranked.tier2.map(row => row.term)
-  assert.ok(tier1.includes('小柚'), 'quoted name is tier 1: ' + tier1.join(','))
+  assert.ok(tier1.includes('小檀'), 'quoted name is tier 1: ' + tier1.join(','))
   assert.ok(tier1.includes('阿兰'), 'name-intro is tier 1: ' + tier1.join(','))
   assert.ok(tier1.includes('yuike_01'), 'mixed identifier is tier 1: ' + tier1.join(','))
   assert.ok(tier2.includes('星港'), 'statistical-only name stays tier 2: ' + tier2.join(','))
   assert.equal([...tier1, ...tier2].includes('这个'), false, 'glue bigram never becomes a candidate')
   assert.equal([...tier1, ...tier2].includes('2026'), false)
-  assert.ok(ranked.tier1.find(row => row.term === '小柚').quoted)
+  assert.ok(ranked.tier1.find(row => row.term === '小檀').quoted)
+})
+
+test('overlapping window fragments of a longer name never become candidates', () => {
+  const entries = [
+    { id: 'm1', title: '南宫晚晴的午后', text: '南宫晚晴的午后\n南宫晚晴坐在窗边讲这件事。' },
+    { id: 'm2', title: '和南宫晚晴一起', text: '和南宫晚晴一起\n南宫晚晴先到了门口。' },
+  ]
+  const stats = terminology.buildTermStats(entries)
+  const ranked = terminology.rankCandidates(entries, stats)
+  const terms = [...ranked.tier1, ...ranked.tier2].map(row => row.term)
+  assert.ok(terms.includes('南宫晚晴'), 'the whole surface stays nominated: ' + terms.join(','))
+  assert.equal(terms.includes('南宫晚'), false, 'a window of a longer name is not a person')
+  assert.equal(terms.includes('宫晚晴'), false, 'the other window is not a second person either')
 })
 
 test('the queue snapshot persists, maps existing entities and stays stable across reads', () => {
@@ -212,10 +225,10 @@ test('custom candidate policy invalidates both cache layers for that library', a
   const lib = library('policy-cache')
   state.savePrivateIndex(lib, { version: 1, entries: fixture() })
   const normal = candidates.generateAnchorCandidates({ libraryId: lib, now: 1 })
-  assert.equal(normal.tiers.tier1.find(row => row.term === '小柚')?.df, 2)
+  assert.equal(normal.tiers.tier1.find(row => row.term === '小檀')?.df, 2)
   const strictPolicy = { ...AUTOLINK_POLICY_V3, minDf: 3 }
   const strict = candidates.generateAnchorCandidates({ libraryId: lib, now: 2, policy: strictPolicy })
-  assert.equal(strict.tiers.tier1.some(row => row.term === '小柚'), false)
+  assert.equal(strict.tiers.tier1.some(row => row.term === '小檀'), false)
   candidates.resetAnchorCandidatesCache()
   assert.deepEqual(candidates.generateAnchorCandidates({ libraryId: lib, now: 3, policy: { ...strictPolicy } }), strict)
   candidates.resetAnchorCandidatesCache()

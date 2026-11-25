@@ -49,6 +49,7 @@
 
 ### 7.6 关系图谱工作台（`lib/webui/graph-view.js` + `GraphStudioPanel`）
 
+- **按域过滤走服务端，不走画布。** 图谱工作台的域输入框（`gsDomain`）把值原样交给 `getGraph`/`getGlobalGraph` 的 `domain` 参数，归一化口径与 `lib/graph.js:graphDomain` 一致（NFKC + trim + lowercase，缺失时私有读 `general`、全局读 `unknown`）；返回的 `domains` 是**筛选前**的并集，所以下拉永远还能换回别的域。引擎 `graph-view.js` 对域一无所知，也不该知道——分色/分块布局需要重打 bundle 且没有验证收益。记忆墙的域筛选同理（`browseWall` 的 `domain` 参数 + item 上的 `domain` 字段），不要在前端筛完再报计数。
 - **物理不许读相机。** 力导向里的斥力、弹簧原长、硬分离阈值一律用**世界坐标 + 节点半径**；把缩放塞进物理（曾经的 `24 / clamp(viewScale, .06, 5)`）在最小缩放等于要求 400 世界像素间距，节点每帧互推、永不收敛，用户看到的就是「缩到最小后打架 / 闪现」。缩放只影响**绘制**与**命中半径**。`tests/graph-view.test.mjs` 钉死两件事：`setScale` 之类把相机交给物理的入口不许回来，`relayout()` 后位移必须逐窗衰减且不留重合。
 - **改引擎必须重打包。** 浏览器加载的是 `lib/webui/graph-view.bundle.js`，不是源码；`npm run build:graph` 忘了跑，源码修复在真实页面上根本不存在，而单测照绿（它 import 的是源码）。`npm run check` 现在比对两者字节，漂移即红。
 - **冷下来就要零帧。** 渲染循环只在 `layout.active`（alpha 高于地板）或交互期申请下一帧；呼吸微动也只在模拟活着时画。每帧无条件 `requestAnimationFrame` 会让 GPU 占用一路爬升且不回落。

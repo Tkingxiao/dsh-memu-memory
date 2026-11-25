@@ -237,7 +237,7 @@ test('complete quoted and introduced names remain usable and existing aliases ar
   try {
     for (const [i, name, content] of [
       [0, '阿兰', '她叫阿兰，今天来送信。'],
-      [1, '小柚', '「小柚」今天来送信。'],
+      [1, '小檀', '「小檀」今天来送信。'],
       [2, '主人一', '这个角色自称「主人一」，这是完整昵称。'],
       [3, 'Alice', 'Alice delivered the letter.'],
       [4, 'Old Zhou', 'Old Zhou delivered the letter.'],

@@ -88,6 +88,10 @@ const engineSource = [
   'export const retrieve = (...a) => b.retrieve(...a);',
   'export const forget = (...a) => b.forget(...a);',
   'export const listFiles = (...a) => b.listFiles(...a);',
+  // lib/rpc.js imports the resident-engine hooks from the same module: without
+  // these two exports the whole matrix dies at import time (1.3.15 regression).
+  'export const closeMemuResident = () => 0;',
+  'export const prewarmMemuResident = async () => false;',
 ].join(' ')
 const engineUrl = 'data:text/javascript,' + encodeURIComponent(engineSource)
 const hooks = registerHooks({

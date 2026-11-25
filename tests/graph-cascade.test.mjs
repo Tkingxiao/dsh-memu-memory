@@ -250,3 +250,114 @@ test('the linked flag tracks a refused delete through force, and cleanup drops t
   row = graph.listEntities({ libraryId }).items.find(entity => entity.id === kept.id)
   assert.equal(row, undefined, 'after the force delete the entity is gone from the listing too')
 })
+
+// ---------------------------------------------------------------- 实体碎片修复
+// 老版本把中文名的滑窗片段建成了独立节点。这里的不变量有两条：可证明的才自动合，
+// 相似的绝不动；而且合并级联的全库清扫不能顺手删掉计划外的节点（硬规则 5）。
+const repair = await import('../lib/entity-repair.js')
+const repairLibrary = (name, entries, entities) => {
+  const id = state.createLibrary({ name, cwd: path.join(home, name) }).id
+  for (const entity of entities) graph.createEntity({ libraryId: id, name: entity, kind: 'person', status: 'confirmed' })
+  state.savePrivateIndex(id, { entries })
+  return id
+}
+const scene = (title, content) => ({ title, content, status: 'active', visibility: 'shared', layer: 'long_term' })
+
+test('the fragment plan separates provable windows from merely similar names', () => {
+  const attestedRebuild = repairLibrary('repair-rebuild',
+    { 'mem-1': scene('南宫晚晴的午后', '南宫晚晴坐在窗边讲这件事。') },
+    ['南宫晚', '宫晚晴'])
+  const plan = repair.planLibraryRepair(attestedRebuild, { graph, loadPrivateIndex: state.loadPrivateIndex })
+  assert.equal(plan.groups.length, 1, 'the two windows rebuild into one provable group')
+  assert.equal(plan.groups[0].creates, true, 'no full-name node exists yet, so the reconstructed one is created')
+  assert.equal(plan.groups[0].target.name, '南宫晚晴')
+  assert.deepEqual(plan.ambiguous, [], 'nothing here rests on similarity alone')
+
+  const independent = repairLibrary('repair-independent',
+    { 'mem-1': scene('化学课', '今天讲化学，顺带写了化学式。') },
+    ['化学式', '化学'])
+  const second = repair.planLibraryRepair(independent, { graph, loadPrivateIndex: state.loadPrivateIndex })
+  assert.deepEqual(second.groups, [], 'a name that appears on its own is never treated as a window')
+  assert.equal(second.ambiguous.length, 1)
+  assert.equal(second.ambiguous[0].evidence, 'similar')
+
+  const lookalike = repairLibrary('repair-lookalike',
+    { 'mem-1': scene('两个称呼', '顾清欢也叫顾清悦，其实指的是不同的两只。') },
+    ['顾清欢', '顾清悦'])
+  const third = repair.planLibraryRepair(lookalike, { graph, loadPrivateIndex: state.loadPrivateIndex })
+  assert.deepEqual(third.groups, [], 'edit distance is not evidence: nothing is auto-merged')
+  assert.equal(third.ambiguous.length, 1, 'but the pair is still reported for a human decision')
+})
+
+test('applying the plan folds fragments into the reconstructed name and leaves memory bodies alone', () => {
+  const id = repairLibrary('repair-apply',
+    { 'mem-1': scene('南宫晚晴的午后', '南宫晚晴坐在窗边，南宫晚先到。') },
+    ['南宫晚', '宫晚晴'])
+  const before = Object.entries(state.loadPrivateIndex(id).entries)
+    .map(([key, entry]) => [key, entry.title, entry.content])
+  const plan = repair.planLibraryRepair(id, { graph, loadPrivateIndex: state.loadPrivateIndex })
+  const result = repair.applyRepairGroups(id, plan.groups, { graph })
+  assert.equal(result.merged, 1)
+  assert.equal(result.created, 1)
+  assert.deepEqual(result.failures, [])
+  assert.deepEqual(Object.entries(state.loadPrivateIndex(id).entries)
+    .map(([key, entry]) => [key, entry.title, entry.content]), before,
+  'the repair never rewrites a memory title or body; it only re-points entity links')
+
+  const after = graph.listEntities({ libraryId: id }).items
+  assert.equal(after.length, 1, 'one surviving node: ' + after.map(entity => entity.name).join(','))
+  assert.equal(after[0].name, '南宫晚晴')
+  assert.deepEqual(after[0].aliases.sort(), ['南宫晚', '宫晚晴'])
+
+  // 幂等：合过之后再规划，没有可证明的组，也没有相似组。
+  const again = repair.planLibraryRepair(id, { graph, loadPrivateIndex: state.loadPrivateIndex })
+  assert.deepEqual(again.groups, [])
+  assert.deepEqual(again.ambiguous, [])
+})
+
+test('the merge cascade never deletes an entity the repair did not plan to touch', () => {  const id = repairLibrary('repair-collateral',
+    { 'mem-1': scene('南宫晚晴与旁观者', '南宫晚晴坐在窗边，旁观者路过。') },
+    ['南宫晚', '宫晚晴', '旁观者'])
+  state.updatePrivateIndex(id, index => {
+    index.entries['mem-1'].links = [{ to: 'ent-unknown', kind: 'person', note: 'placeholder', confidence: 0.6 }]
+  })
+  const plan = repair.planLibraryRepair(id, { graph, loadPrivateIndex: state.loadPrivateIndex })
+  const result = repair.applyRepairGroups(id, plan.groups, { graph })
+  assert.equal(result.merged, 1)
+  assert.ok(result.restored >= 1, 'the unreferenced bystander was swept by pruneOrphanEntities and written back')
+  const names = graph.listEntities({ libraryId: id, }).items.map(entity => entity.name)
+  assert.ok(names.includes('南宫晚晴'), 'the repaired hub survives')
+  assert.ok(names.includes('旁观者'), 'an entity outside the plan is still there: ' + names.join(','))
+})
+
+test('the upgrade pass merges provable fragments once, leaves similar names for a human, and says so', async () => {
+  const { runEntityRepairPass } = await import('../lib/index.js')
+  const provable = repairLibrary('upgrade-provable',
+    { 'mem-1': scene('南宫晚晴的午后', '南宫晚晴坐在窗边讲这件事。') },
+    ['南宫晚', '宫晚晴'])
+  const similar = repairLibrary('upgrade-similar',
+    { 'mem-1': scene('两个称呼', '顾清欢也叫顾清悦，其实指的是不同的两只。') },
+    ['顾清欢', '顾清悦'])
+  const events = []
+  const first = await runEntityRepairPass({ diagnose: (row) => events.push(row) })
+  assert.equal(first.deferred, false, 'the backup is available here, so the pass is allowed to write')
+  assert.ok(first.merged >= 1, 'the provable pair is folded without asking: ' + JSON.stringify(first))
+  assert.ok(first.similar >= 1, 'similar pairs are counted, never merged: ' + JSON.stringify(first))
+  assert.ok(graph.listEntities({ libraryId: provable }).items.some((entity) => entity.name === '南宫晚晴'))
+  assert.equal(graph.listEntities({ libraryId: similar }).items.length, 2, 'similar names are left exactly as they were')
+  assert.ok(events.some((row) => row.code === 'ENTITY_FRAGMENT_REPAIRED'), 'what got folded is recorded, not silent')
+  assert.ok(events.some((row) => row.code === 'ENTITY_FRAGMENT_SUSPECTED' && row.manual === true),
+    'the leftover is recorded as needing confirmation')
+  assert.ok(state.getCycleState().entityRepairVersion >= 1, 'the pass marks itself done so it never repeats')
+
+  const second = await runEntityRepairPass({ diagnose: (row) => events.push(row) })
+  assert.deepEqual(second, { skipped: 'done' }, 'one pass per install, no repeated writes on every start')
+
+  // 开关必须是可写且真起作用的：把标记抹掉、关掉开关，重跑就不能动任何数据。
+  const before = graph.listEntities({ libraryId: provable }).items.map((entity) => entity.name).join(',')
+  state.setCycleState({ entityRepairVersion: 0 })
+  state.updateSettings({ autoRepairEntityFragments: false })
+  const third = await runEntityRepairPass({ diagnose: () => {} })
+  assert.deepEqual(third, { skipped: 'setting' }, 'off means even the provable class waits for a human')
+  assert.equal(graph.listEntities({ libraryId: provable }).items.map((entity) => entity.name).join(','), before)
+})

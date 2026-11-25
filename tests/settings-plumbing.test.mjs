@@ -27,6 +27,8 @@ const SAMPLE = {
   salientWake: 'schedule',
   salientWakeHour: '20:30',
   salientWakeTimeZone: 'Asia/Shanghai',
+  // 升级自愈的 kill switch：默认 true，这里必须能写成 false 才算「可关」不是空话。
+  autoRepairEntityFragments: false,
 }
 
 test('each new setting is writable through setSettings', async () => {

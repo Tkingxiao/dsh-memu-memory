@@ -288,11 +288,205 @@ export function checkLoaderStubs(root) {
   return outcome(label, 'ok', REQUIRED_FILES.length + ' required loader/stub file(s) present; ' + testCount + ' *.test.mjs file(s)', [])
 }
 
+// Gate 4 — the cross-version host ledger (docs/host-versions.md §13).
+//
+// Why this exists: per-build host facts used to live in three places at once
+// (host-adaptation §2 column, §5 record, §7 table). §7 stopped at 0.2.2-rc.1 and §2
+// still claimed `connection.requestRejection` was "未变" after the host removed it in
+// 0.2.3-alpha.1. The ledger is now the single owner, and this gate is what keeps it
+// from rotting the same way: a build named anywhere in the docs must have a ledger row,
+// every row must state how it was verified, and every probe site it points at must still
+// exist in lib/.
+const HOST_DOC = 'docs/host-versions.md'
+const HOST_BUILD_RE = /\b0\.2\.\d+-(?:rc|alpha|beta)\.\d+\b/g
+const LEDGER_ROW_RE = /^\|\s*`(0\.2\.\d+(?:-(?:rc|alpha|beta)\.\d+)?)`\s*\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|/
+const SURFACE_ROW_RE = /^\|\s*`([a-z][A-Za-z0-9]*)`\s*\|(.*)$/
+const PROBE_SITE_RE = /(lib\/[\w./-]+\.js):([A-Za-z_$][\w$]*)/g
+const LEDGER_VERDICTS = new Set(['真机', '源码', '未测'])
+const LEDGER_GRADES = new Set(['exact', 'line', 'nearest'])
+
+// Fenced code blocks are examples, not claims about the docs.
+const stripFences = (text) => String(text || '').replace(/```[\s\S]*?```/g, '')
+
+// Comment-free view of a JS file. Line-based on purpose: a character scanner has to
+// know regex literals well enough not to mistake `/x/ // note` for a string, and a
+// wrong guess makes this gate permanently red — which is worse than its blind spot
+// (a version literal tucked into a trailing comment). Documentation lines are the
+// place host versions legitimately get named, so those are what this exempts.
+function stripJsComments(source) {
+  return String(source || '').split(/\r?\n/)
+    .map((line) => (/^[ \t]*(\/\/|\/?\*|\/\*)/.test(line) ? '' : line))
+    .join('\n')
+}
+
+function libSources(root) {
+  const out = []
+  const walk = (dir, rel) => {
+    let entries = []
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      const abs = path.join(dir, entry.name)
+      const nextRel = rel ? rel + '/' + entry.name : entry.name
+      if (entry.isDirectory()) walk(abs, nextRel)
+      else if (entry.isFile() && entry.name.endsWith('.js')) out.push({ rel: 'lib/' + nextRel, abs })
+    }
+  }
+  walk(path.join(root, 'lib'), '')
+  return out
+}
+
+// Markdown table cells are usually written inline-code styled; unwrap them before
+// comparing against the grammar the gate enforces.
+const ledgerCell = (value) => String(value || '').replace(/`/g, '').trim()
+
+function checkHostVersionRows(lines) {
+  const rows = []
+  for (const line of lines) {
+    const match = LEDGER_ROW_RE.exec(line)
+    if (!match) continue
+    rows.push({
+      build: match[1],
+      commit: ledgerCell(match[2]),
+      verdict: ledgerCell(match[3]),
+      grade: ledgerCell(match[4]),
+      date: ledgerCell(match[5]),
+      fingerprint: ledgerCell(match[6]),
+    })
+  }
+  return rows
+}
+
+export function checkHostVersions(root = DEFAULT_ROOT) {
+  const label = 'host-versions'
+  let text = ''
+  try {
+    text = fs.readFileSync(path.join(root, HOST_DOC), 'utf8')
+  } catch (error) {
+    if (!fs.existsSync(path.join(root, 'docs'))) {
+      return outcome(label, 'skipped', 'no docs/ directory - skipped, not applicable (npm package install)', [])
+    }
+    return outcome(label, 'fail', HOST_DOC + ' is missing or unreadable', [
+      firstLine(error.message),
+      'the per-build ledger owns every host-version fact (docs/host-adaptation.md §7 points here)',
+    ])
+  }
+
+  const problems = []
+  const lines = text.split(/\r?\n/)
+
+  // 4b — ledger rows carry commit / verdict / grade / date.
+  const rows = checkHostVersionRows(lines)
+  if (rows.length === 0) {
+    problems.push('§13.1 has no ledger rows (expected one `| `0.2.x-rc.y` | commit | 核对方式 | 判定 | 日期 | 指纹 | … |` row per build)')
+  }
+  for (const row of rows) {
+    if (!/^[0-9a-f]{7,12}$/.test(row.commit)) {
+      problems.push(`§13.1 ${row.build}: commit "${row.commit}" is not a short sha (use git rev-parse --short <tag>^{commit})`)
+    }
+    if (!LEDGER_VERDICTS.has(row.verdict)) problems.push(`§13.1 ${row.build}: 核对方式 "${row.verdict}" must be one of 真机 / 源码 / 未测`)
+    if (!LEDGER_GRADES.has(row.grade)) problems.push(`§13.1 ${row.build}: 判定 "${row.grade}" must be one of exact / line / nearest`)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date)) problems.push(`§13.1 ${row.build}: date "${row.date}" must be ISO YYYY-MM-DD`)
+  }
+
+  // 4c + 4e — registered surfaces and their probe sites.
+  const surfaces = new Map()
+  for (const line of lines) {
+    const match = SURFACE_ROW_RE.exec(line)
+    if (!match) continue
+    const sites = [...String(match[2]).matchAll(PROBE_SITE_RE)].map((site) => ({ file: site[1], symbol: site[2] }))
+    if (sites.length === 0) {
+      problems.push(`§13.2 ${match[1]}: no probe site written as lib/<file>.js:<symbol>`)
+      continue
+    }
+    surfaces.set(match[1], sites)
+  }
+  if (surfaces.size === 0) problems.push('§13.2 has no surface rows (expected `| \\`面ID\\` | … |`)')
+  for (const [slug, sites] of surfaces) {
+    for (const site of sites) {
+      let source = ''
+      try {
+        source = fs.readFileSync(path.join(root, site.file), 'utf8')
+      } catch {
+        problems.push(`§13.2 ${slug}: ${site.file} does not exist (renamed? update the ledger in the same commit)`)
+        continue
+      }
+      if (!new RegExp(`\\b${site.symbol.replace(/\$/g, '\\$')}\\b`).test(source)) {
+        problems.push(`§13.2 ${slug}: symbol ${site.symbol} not found in ${site.file} (renamed? update the ledger in the same commit)`)
+      }
+    }
+  }
+  for (const row of rows) {
+    const pairs = String(row.fingerprint || '').split(';').map((part) => part.trim()).filter(Boolean)
+    if (pairs.length < 3) problems.push(`§13.1 ${row.build}: fingerprint "${row.fingerprint}" must list at least 3 key=value pairs`)
+    for (const pair of pairs) {
+      const key = pair.split('=')[0].trim()
+      if (!pair.includes('=') || !surfaces.has(key)) problems.push(`§13.1 ${row.build}: fingerprint key "${key}" is not a surface registered in §13.2`)
+    }
+  }
+
+  // 4a — every host build named anywhere in the docs needs a ledger row.
+  const documented = new Map()
+  for (const rel of docFiles(root)) {
+    if (rel === HOST_DOC) continue
+    let body = ''
+    try {
+      body = stripFences(fs.readFileSync(path.join(root, rel), 'utf8'))
+    } catch {
+      continue
+    }
+    for (const match of body.matchAll(HOST_BUILD_RE)) {
+      if (!documented.has(match[0])) documented.set(match[0], rel)
+    }
+  }
+  const ledger = new Set(rows.map((row) => row.build))
+  for (const [build, rel] of documented) {
+    if (!ledger.has(build)) problems.push(`${rel} mentions ${build} but §13.1 has no row for it (newest row: ${[...ledger].sort().pop() || 'none'})`)
+  }
+
+  // 4d — no host version literals in running code (AGENTS.md 硬规则 1).
+  for (const { rel, abs } of libSources(root)) {
+    let source = ''
+    try {
+      source = fs.readFileSync(abs, 'utf8')
+    } catch {
+      continue
+    }
+    // DSH builds always carry a prerelease tag (`0.2.3-alpha.1`); a bare `0.2.0` in
+    // this repo is some other artifact (the tokenizers crate), and flagging it would
+    // make the gate permanently red.
+    const code = stripJsComments(source)
+    const hit = /\b0\.2\.\d+-(?:rc|alpha|beta)\.\d+\b/.exec(code)
+    if (hit) problems.push(`${rel}: host version "${hit[0]}" sits in running code — probe the shape instead (AGENTS.md 硬规则 1)`)
+  }
+
+  // 4f — package.json dshReleases must agree with the verified rows.
+  let manifest = null
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+  } catch {
+    manifest = null
+  }
+  const declared = manifest?.dsh?.compatibility?.dshReleases
+  if (Array.isArray(declared)) {
+    const expected = rows.filter((row) => row.grade === 'exact' || row.grade === 'line').map((row) => row.build).sort()
+    const got = [...declared].map((value) => String(value)).sort()
+    if (expected.join('|') !== got.join('|')) {
+      problems.push('package.json dsh.compatibility.dshReleases disagrees with §13.1: declared ' + (got.join(', ') || '(none)')
+        + ' vs ledger ' + (expected.join(', ') || '(none)'))
+    }
+  }
+
+  if (problems.length > 0) return outcome(label, 'fail', 'host ledger drift: ' + problems.length + ' problem(s)', problems)
+  return outcome(label, 'ok', rows.length + ' verified build(s), ' + surfaces.size
+    + ' registered host surface(s), no undocumented build reference', [])
+}
+
 export function runChecks(root = DEFAULT_ROOT) {
   const checks = [
     ['rpc-method-count', checkRpcMethodCount],
     ['test-tracking', checkTestTracking],
     ['loader-stubs', checkLoaderStubs],
+    ['host-versions', checkHostVersions],
   ]
   return checks.map(([label, run]) => {
     try {

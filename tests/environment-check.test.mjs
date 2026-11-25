@@ -132,6 +132,34 @@ test('every repair action has a label, so the page never shows a bare slug', () 
   }
 })
 
+// ---------------------------------------------------------------- 实体碎片
+test('the fragment finding reports, offers a confirmed-only repair, and is idempotent', async () => {
+  const state = await import('../lib/state.js')
+  const graph = await import('../lib/graph.js')
+  const libraryId = state.createLibrary({ name: 'envcheck-fragments', cwd: path.join(home, 'fragments') }).id
+  for (const name of ['南宫晚', '宫晚晴']) graph.createEntity({ libraryId, name, kind: 'person', status: 'confirmed' })
+  state.savePrivateIndex(libraryId, { entries: {
+    'mem-1': { title: '南宫晚晴的午后', content: '南宫晚晴坐在窗边讲这件事。', status: 'active', visibility: 'shared', layer: 'long_term' },
+  } })
+
+  const report = env.runEnvironmentCheck()
+  const entry = report.items.find((row) => row.id === 'entity-fragments')
+  assert.ok(entry, 'the check reports the fragment finding instead of staying silent')
+  assert.equal(entry.repair, 'merge-entity-fragments')
+  assert.equal(entry.manual, true, 'merging entity identity is never an unattended auto-repair')
+  assert.equal(entry.auto, false)
+  assert.ok(!env.SAFE_REPAIRS.includes('merge-entity-fragments'), 'and it is absent from the safe list')
+
+  const outcome = await env.repairEnvironment({ actions: ['merge-entity-fragments'], confirmed: true })
+  assert.equal(outcome.results[0].ok, true, JSON.stringify(outcome.results[0]))
+  assert.match(outcome.results[0].detail, /合并 1 组/)
+  assert.ok(graph.listEntities({ libraryId }).items.some((entity) => entity.name === '南宫晚晴'))
+
+  const again = env.runEnvironmentCheck().items.find((row) => row.id === 'entity-fragments')
+  assert.equal(again.ok, true, 'after the repair the finding clears instead of nagging')
+  assert.equal(graph.listEntities({ libraryId }).items.length, 1)
+})
+
 // ---------------------------------------------------------------- 运行时目录发现
 
 test('the managed runtime root is discovered where the service actually installs it', async () => {

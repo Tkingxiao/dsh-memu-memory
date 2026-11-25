@@ -903,3 +903,61 @@ test('standalone rpc wrapper surfaces the server error message instead of the st
   const client = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   assert.match(client, /envelope\.error\?\.message \|\| \('Invalid RPC response: ' \+ response\.status\)/)
 })
+
+// 0.2.3-alpha.1 起宿主把 connection.requestRejection 换成 connection.admit。
+// 只探测前者（或只探测挂在模块而非服务上的 isTrustedApiRequest）的守卫在新宿主上会静默放行。
+test('a host that only exposes connection.admit stays guarded', async () => {
+  const routes = []
+  const admit = { calls: 0, decision: undefined }
+  registerRpc({
+    inject: (_deps, build) => build({
+      effect: (fn) => { const dispose = fn(); return typeof dispose === 'function' ? dispose : () => {} },
+      webServer: { register: (spec) => { routes.push(spec); return () => {} } },
+      connection: { admit: () => { admit.calls += 1; return admit.decision } },
+      logger: {},
+    }),
+  })
+  const route = routes.find(spec => spec.path === '/dsh-memu-memory')
+  assert.ok(route, 'the admit-only host registered its RPC route')
+  const fire = async (decision) => {
+    admit.decision = decision
+    admit.calls = 0
+    resetProbe()
+    const chunks = []
+    let resolveDone
+    const done = new Promise((resolve) => { resolveDone = resolve })
+    const timer = setTimeout(() => resolveDone(new Error('response did not end')), 3000)
+    timer.unref?.()
+    const res = {
+      status: 0,
+      writeHead(code) { this.status = code; return this },
+      write() { return true },
+      end(chunk) { if (chunk) chunks.push(Buffer.from(chunk)); resolveDone() },
+      get text() { return Buffer.concat(chunks).toString('utf8') },
+    }
+    const req = {
+      method: 'POST', url: '/dsh-memu-memory', headers: {},
+      async *[Symbol.asyncIterator]() { chunks.push(Buffer.from('body read')) },
+    }
+    probe.active = true
+    try {
+      await route.handler(req, res)
+      await done
+    } finally { probe.active = false }
+    return { status: res.status, text: res.text, admitCalls: admit.calls, reads: [...probe.reads], writes: [...probe.writes] }
+  }
+
+  const refused = await fire({ rejection: 403 })
+  assert.equal(refused.status, 403, 'admit rejection becomes the HTTP status')
+  assert.equal(refused.admitCalls, 1, 'admit runs exactly once')
+  assert.equal(refused.text.includes('body read'), false, 'the body is not read before admission')
+  assert.deepEqual(refused.reads, [])
+  assert.deepEqual(refused.writes, [])
+
+  const admitted = await fire({ peer: {} })
+  assert.ok(admitted.status !== 403 && admitted.status !== 401, 'an admitted peer passes the guard')
+  assert.equal(admitted.admitCalls, 1)
+  // §13.6：这台宿主实际走了哪一级探测，要能在指纹里读到（台账核对用的就是这一行）。
+  const surface = await import('../lib/host-surface.js')
+  assert.equal(surface.hostSurface().rpcGuard, 'admit', 'the probe records which guard shape this host exposes')
+})

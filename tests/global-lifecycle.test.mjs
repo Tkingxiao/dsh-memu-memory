@@ -39,22 +39,22 @@ const seed = (entries) => {
 const globalEntry = (id) => state.loadGlobalIndex().entries[id]
 
 test('global archive drops the entry from recall; restore brings it back', async () => {
-  seed({ 'mem-g-visible': entry('zxquartzglobal 部署窗口'), 'mem-g-other': entry('unrelated filler') })
-  const before = await memory.globalRecall({ exec, query: 'zxquartzglobal', purpose: 'automatic', topK: 5, relevanceThreshold: 0 })
+  seed({ 'mem-g-visible': entry('zqneedleglobal 部署窗口'), 'mem-g-other': entry('unrelated filler') })
+  const before = await memory.globalRecall({ exec, query: 'zqneedleglobal', purpose: 'automatic', topK: 5, relevanceThreshold: 0 })
   assert.deepEqual(before.files.map(f => f.name), ['mem-g-visible'])
   assert.equal(memory.isMemoryEligible(globalEntry('mem-g-visible'), { automatic: true }), true)
 
   const archived = await rpc.dispatch({}, 'archiveMemory', { scope: 'global', id: 'mem-g-visible' })
   assert.equal(archived.entry.status, 'archived')
   assert.equal(memory.isMemoryEligible(globalEntry('mem-g-visible'), { automatic: true }), false)
-  const after = await memory.globalRecall({ exec, query: 'zxquartzglobal', purpose: 'automatic', topK: 5, relevanceThreshold: 0 })
+  const after = await memory.globalRecall({ exec, query: 'zqneedleglobal', purpose: 'automatic', topK: 5, relevanceThreshold: 0 })
   assert.deepEqual(after.files.map(f => f.name), [], 'archived global memory must not recall')
 
   // 幂等归档不报错；恢复走 updateMemory 的唯一全局补丁形状。
   await rpc.dispatch({}, 'archiveMemory', { scope: 'global', id: 'mem-g-visible' })
   const restored = await rpc.dispatch({}, 'updateMemory', { scope: 'global', id: 'mem-g-visible', patch: { status: 'active' } })
   assert.equal(restored.entry.status, 'active')
-  const back = await memory.globalRecall({ exec, query: 'zxquartzglobal', purpose: 'automatic', topK: 5, relevanceThreshold: 0 })
+  const back = await memory.globalRecall({ exec, query: 'zqneedleglobal', purpose: 'automatic', topK: 5, relevanceThreshold: 0 })
   assert.deepEqual(back.files.map(f => f.name), ['mem-g-visible'])
 })
 
@@ -127,4 +127,24 @@ test('management views still show archived global rows; private archive path is 
   const archived = await rpc.dispatch({}, 'archiveMemory', { libraryId: lib.id, id: 'mem-p-row' })
   assert.equal(archived.entry.status, 'archived')
   assert.equal(state.loadPrivateIndex(lib.id).entries['mem-p-row'].status, 'archived')
+})
+
+test('the wall stamps every row with its domain and filters without shrinking the choices', async () => {
+  const lib = state.createLibrary({ name: 'global-lifecycle-domains', cwd: path.join(home, 'domain-wall') })
+  seed({ 'mem-g-rp': entry('顾清欢的约定', { domain: 'RP' }) })
+  state.updatePrivateIndex(lib.id, (index) => {
+    index.entries['mem-p-coding'] = entry('部署窗口', { domain: '  Ｃｏｄｉｎｇ ' })
+    index.entries['mem-p-legacy'] = { ...entry('没有域标记的旧条目'), domain: undefined }
+  })
+  const all = await rpc.dispatch({}, 'browseWall', { libraryId: lib.id, limit: 300 })
+  const byId = new Map(all.items.map(item => [item.id, item]))
+  assert.equal(byId.get('mem-p-coding').domain, 'coding', 'stamps normalize exactly like the graph filter does')
+  assert.equal(byId.get('mem-p-legacy').domain, 'general', 'an unstamped private row reads as general')
+  assert.equal(byId.get('mem-g-rp').domain, 'rp', 'global rows carry their own stamp')
+  assert.deepEqual(all.domains, ['coding', 'general', 'rp'])
+
+  const coding = await rpc.dispatch({}, 'browseWall', { libraryId: lib.id, limit: 300, domain: 'CODING' })
+  assert.deepEqual(coding.items.map(item => item.id), ['mem-p-coding'])
+  assert.equal(coding.total, 1, 'the count follows what the reader can actually see')
+  assert.deepEqual(coding.domains, all.domains, 'the option list is never narrowed by the filter itself')
 })

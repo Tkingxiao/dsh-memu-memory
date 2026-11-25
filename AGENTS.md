@@ -19,7 +19,7 @@
 5. **不自动删除记忆**：永久记忆移出 = 边缘化；删库必须显式确认；删会话默认只解绑。
 6. **Python 不装进系统解释器 / 用户 site-packages**，只装 `engine/<version>/venv`，且 venv 里不留 pip（`--without-pip` 建，再用基础 Python 的 `pip --python` 指进去装）。
 7. **不自动追最新 MemU**：只装声明版本，升级走新 venv + smoke + 切换 + 保留旧版。
-8. **不碰共享 `/api`**：RPC 只走 `/dsh-memu-memory` 前缀（`webServer.register` + `connection.requestRejection`）。
+8. **不碰共享 `/api`**：RPC 只走 `/dsh-memu-memory` 前缀（`webServer.register` + 宿主入口守卫 `requestRejection`/`admit`，0.2.3-alpha.1 起只剩后者 → `docs/host-versions.md` §13.3）。
 9. **日志与提示词里不放 API key。**
 10. **注入失败 fail-open，但必须留可观测信号。** 吞掉异常是允许的，但**不许把真实故障一起吞**：fail-open 必配 `logger.warn` + binding 上的 `lastRecallError`（侧边栏可见），单测断言**召回到的 id**，不能只断言「消息插进去了」。**不能靠「没报错就是好了」。** 成因与守卫 → `docs/troubleshooting.md` §3.1。
 11. **跑批与复测的输出一律重定向文件**（`> logs/x.log 2>&1`），禁用 `| tail` 管道——管道只留尾巴，故障段不可回查。清理宿主数据必须先确认宿主进程完全退出（活宿主的内存态会回写覆盖清理结果）。
@@ -34,7 +34,8 @@ fork cwd 残留死路径兜底 dataDir；保持宿主原权限，不自动覆盖
 |---|---|
 | 现象不对、有报错 | `docs/troubleshooting.md`（先看症状速查表） |
 | 改现有行为 / 加新东西 / 提交前自检 | `docs/contributing.md` |
-| **DSH 发新版本、要适配新宿主** | `docs/host-adaptation.md`（检查表 / 真机搭法 / 已知陷阱 / 版本记录） |
+| **DSH 发新版本、要适配新宿主** | `docs/host-adaptation.md`（检查表 / 真机搭法 / 已知陷阱） |
+| **哪个宿主构建核对到哪一步 / 某个宿主面在各版本长什么样** | `docs/host-versions.md` §13（台账 / 事实矩阵 / 变更账本） |
 | 忘了宿主 API 长什么样 | `docs/host-api.md`；三种 exec 形状在 `docs/troubleshooting.md` 附录 D |
 | 动 UI | `docs/client-conventions.md` |
 | 改记忆语义 / 提示词正文 | `docs/memory-semantics.md` |
@@ -84,6 +85,8 @@ npm run check                        # node --check + i18n + package.json + 文�
 | `docs/contributing.md` | §4 改动流程（四步 / 验证三件套 / 连带清单 / 文档同步）+ §5 六个扩展点 + §10 提交前清单 |
 | `docs/host-api.md` | §6.1 / 6.2 / 6.4–6.8：embedding、workspaceRegistry、历史会话与标题、fork/followup、定时器、RPC+slot+折叠、预设工具面真机证据边界 |
 | `docs/host-adaptation.md` | 宿主版本适配手册：事实来源、memu 的宿主面清单、新版本检查流程、隔离真机搭法、0.2.2-rc.1 实测记录与陷阱 |
+| `docs/host-versions.md` | §13 跨版本事实台账：逐构建核对表（commit/证据等级/判定/结构指纹）、宿主面 × 版本矩阵、破坏性变更账本、装载与门禁、运行时指纹口径 |
+| `docs/pending-work.md` | §14 推迟项台账：哪些「本版未做」已经完成、哪些仍成立（附建议方案与前置条件）、哪些明确不做 |
 | `docs/client-conventions.md` | §7：两个壳一份实现、颜色 token、控件纪律、数据与刷新、文案与结构、图谱工作台（§7.6）、合成负载（§7.7） |
 | `docs/memory-semantics.md` | §8：三层、写入规则、全局记忆、注入（含预设会话首步 `<memory-guide>` 一次性投放）、提示词管理 |
 | `docs/env-and-commands.md` | §9：Windows 跑命令的 env、CRLF 补丁法、本地 link、引擎安装与回滚、本地向量受管运行时的安装/状态命令（§9.5）、MemU CLI 事实 |

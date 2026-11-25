@@ -847,13 +847,13 @@ test('a dominant lexical hit cannot be buried by primacy/peak-end biases', async
   // meta：最早创建（primacy ×1.2）+ 高唤醒（peakEnd ×1.25）+ strength 1——偏置加成最大；
   // 正文含查询里的常见词元（有/没有），让它也进词法腿，制造名次归一的近平手。
   entries['mem-meta'] = entry('运营值守安排，没有什么特别的说明。', { createdAt: old, updatedAt: old, strength: 1, arousal: 0.9 })
-  entries['mem-food'] = entry('主人是云南人，爱吃松茸菌子，在广州吃不到几家做菌子和过桥米线的馆子。', { strength: 0.8, arousal: 0.35 })
+  entries['mem-food'] = entry('主人是江南人，爱吃桂花糖糕，在杭州吃不到几家做糖糕和豆沙米糕的铺子。', { strength: 0.8, arousal: 0.35 })
   const f = fixture(entries)
   activate([f.libraryId])
   // 语义腿把 meta 排在 food 前面（模拟引擎 embedding 被查询样板带偏的形态）：
   // 词法腿 food 满分，RRF 名次归一后两者 retrieval 近平手。
   retrieveHook = () => ({ files: [{ name: 'mem-meta' }, { name: 'mem-food' }], segments: [], resources: [] })
-  const result = await memory.privateRecall({ exec: f.exec, query: '松茸的，我云南娃子喜欢吃菌子，还有过桥米线', topK: 5, relevanceThreshold: 0.4 })
+  const result = await memory.privateRecall({ exec: f.exec, query: '桂花的，我江南小囡喜欢吃糖糕，还有豆沙米糕', topK: 5, relevanceThreshold: 0.4 })
   assert.equal(result.files[0]?.name, 'mem-food', 'the dominant lexical hit must rank first, got ' + result.files[0]?.name)
   assert.ok((result.files[0]?.fusion?.lexicalDominant ?? 0) >= 24, 'the dominance must be recorded in fusion metadata')
   assert.ok(!result.files.some((file) => file.name === 'mem-meta'), 'weak competitors fall below the relative threshold')
@@ -955,11 +955,11 @@ for (const [language, template, query] of [
 }
 
 const rankingWords = 'certificate expired renewal proxy restart connection handshake trust chain hostname issuer validity protocol cipher client server clock intermediate root authority verification transport security gateway service outage investigation diagnosis mitigation deployment recovery monitoring incident encryption authentication socket timeout negotiation alert endpoint configuration rotation revocation openssl pem browser response failure latency availability maintenance rollback'.split(' ')
-const foodQuery = '松茸的，我云南娃子喜欢吃菌子，还有过桥米线'
-const foodAnswer = '主人是云南人，爱吃松茸菌子，在广州吃不到几家做菌子和过桥米线的馆子。'
+const foodQuery = '桂花的，我江南小囡喜欢吃糖糕，还有豆沙米糕'
+const foodAnswer = '主人是江南人，爱吃桂花糖糕，在杭州吃不到几家做糖糕和豆沙米糕的铺子。'
 
 test('real BM25 a weak 的 hit is no worse than zero evidence and preserves topical answer order', async () => {
-  const topicQuery = '松茸 云南 菌子 过桥米线 广州 馆子'
+  const topicQuery = '桂花 江南 糖糕 豆沙米糕 杭州 铺子'
   const entries = {
     'mem-food': rankingEntry(foodAnswer, { peak: true, createdAt: new Date(Date.now() - 4 * 86_400_000).toISOString() }),
     'mem-semantic': rankingEntry('钢琴练习巴赫赋格。', { strength: 0.8 }),
@@ -1119,12 +1119,12 @@ test('real BM25 two tied genuinely strong topical hits both survive without corp
 })
 
 test('real BM25 QQ private-chat envelope and preference trailer preserve food as the top answer', async () => {
-  const query = '[私聊:1299772830]22:11 Kingxiao(1299772830)[主人] #-100705771 [@咱]：松茸的，我云南娃子喜欢吃菌子，还有过桥米线\n[管理员的长期偏好·优先遵守]请结合上下文准确理解我的问题，不要机械重复，给出自然简洁且有条理的回复。\n【本会话是QQ私聊：1299772830。请用自然简洁的语气回答。】'
+  const query = '[私聊:900000001]22:11 Linxiu(900000001)[主人] #-100000001 [@咱]：桂花的，我江南小囡喜欢吃糖糕，还有豆沙米糕\n[管理员的长期偏好·优先遵守]请结合上下文准确理解我的问题，不要机械重复，给出自然简洁且有条理的回复。\n【本会话是QQ私聊：900000001。请用自然简洁的语气回答。】'
   const now = Date.now()
   const recentCreatedAt = new Date(now - 2 * 86_400_000).toISOString()
   const f = fixture({
     'mem-food': rankingEntry(foodAnswer, { strength: 0.8, createdAt: recentCreatedAt }),
-    'mem-template': rankingEntry('[管理员的长期偏好·优先遵守]请结合上下文准确理解我的问题，不要机械重复，给出自然简洁且有条理的回复。【本会话是QQ私聊：1299772830。请用自然简洁的语气回答。】', { peak: true, createdAt: new Date(now - 4 * 86_400_000).toISOString() }),
+    'mem-template': rankingEntry('[管理员的长期偏好·优先遵守]请结合上下文准确理解我的问题，不要机械重复，给出自然简洁且有条理的回复。【本会话是QQ私聊：900000001。请用自然简洁的语气回答。】', { peak: true, createdAt: new Date(now - 4 * 86_400_000).toISOString() }),
     'mem-piano': rankingEntry(pianoNotes[0], { createdAt: recentCreatedAt }),
   })
   activate([f.libraryId])

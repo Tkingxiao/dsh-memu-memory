@@ -228,6 +228,23 @@ test('suggestEntityMerges: unrelated names yield an empty list', () => {
   assert.deepEqual(graph.suggestEntityMerges({ libraryId }).items, [])
 })
 
+test('suggestEntityMerges: a full name, its nickname and a single-character call pair up as name-core', () => {
+  const libraryId = newLibrary('suggest-name-core')
+  const full = graph.createEntity({ libraryId, name: '顾清欢', kind: 'person' })
+  const pig = graph.createEntity({ libraryId, name: '欢欢', kind: 'person' })
+  const single = graph.createEntity({ libraryId, name: '欢', kind: 'person' })
+  const air = graph.createEntity({ libraryId, name: '空气', kind: 'thing' })
+  const climate = graph.createEntity({ libraryId, name: '气候', kind: 'thing' })
+  const { items } = graph.suggestEntityMerges({ libraryId })
+  const paired = (a, b) => items.find(item => [item.sourceId, item.targetId].includes(a.id)
+    && [item.sourceId, item.targetId].includes(b.id))
+  assert.ok(paired(full, pig), '全称与昵称共享一个名字核时给出候选')
+  assert.equal(paired(full, pig).reason, 'name-core')
+  assert.ok(paired(full, single), '单字称呼并入全称')
+  assert.ok(!paired(air, climate), '只是共用一个字的普通词不提议合并')
+  assert.ok(items.every(item => item.reason === 'containment' || item.reason === 'edit-distance' || item.reason === 'name-core'))
+})
+
 test('suggestEntityMerges caps the list at 20 and never writes', () => {
   const libraryId = newLibrary('suggest-cap')
   for (let index = 0; index < 25; index += 1) {

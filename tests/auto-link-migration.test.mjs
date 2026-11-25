@@ -76,14 +76,14 @@ test('dry run reports legacy edges and writes no entity status or edge', async (
 test('apply backs up, removes legacy auto edges, grades rows and rebuilds confirmed mentions', async () => {
   const binding = state.ensureSession('migration-apply', { cwd: path.join(home, 'ws-apply'), agentPreset: 'rp' })
   const lib = binding.libraryId
-  const confirmed = graph.createEntity({ libraryId: lib, name: '小柚', kind: 'person', status: 'confirmed' })
-  const provisional = graph.createEntity({ libraryId: lib, name: '未晞', kind: 'person' })
+  const confirmed = graph.createEntity({ libraryId: lib, name: '小檀', kind: 'person', status: 'confirmed' })
+  const provisional = graph.createEntity({ libraryId: lib, name: '沈砚舟', kind: 'person' })
   state.savePrivateIndex(lib, { version: 1, entries: {
-    'mem-a': entry('小柚来了，未晞也在', '小柚进门，未晞在窗边。', [
+    'mem-a': entry('小檀来了，沈砚舟也在', '小檀进门，沈砚舟在窗边。', [
       { to: 'mem-b', kind: 'relation', note: '旧的词面自动关联，没有任何证据字段。', confidence: 0.66, source: 'auto' },
       { to: 'mem-b', kind: 'event', note: '用户手动建立的一条边，不能被迁移删掉。', confidence: 0.8 },
     ]),
-    'mem-b': entry('另一条记录', '只有小柚出现。'),
+    'mem-b': entry('另一条记录', '只有小檀出现。'),
   } })
   const report = await runRebuildAutoLinks({ apply: true, json: true, log: () => {} })
   assert.ok(report.backup, 'apply takes a backup first')

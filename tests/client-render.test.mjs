@@ -327,8 +327,44 @@ test('graph studio pages all libraries and filters custom domains without mergin
   } finally { view.close() }
 })
 
-test('graph studio surfaces failed libraries and retains successful results', async () => {
+test('the whole-workspace graph sends its domain filter to the global endpoint', async () => {
+  const calls = []
   const call = async (endpoint, payload) => {
+    calls.push({ endpoint, payload })
+    if (endpoint !== 'getGraph') return { items: [] }
+    const wanted = 'project:travel'
+    const hit = !payload.domain || payload.domain === wanted
+    return {
+      scope: 'global',
+      nodes: hit ? [{ id: 'mem-g-1', title: 'global memory', kind: 'global', domain: 'project:travel' }] : [],
+      edges: [],
+      domains: ['general', 'project:travel'],
+    }
+  }
+  // 没有私有库时面板落在全局图：这条路径走的是 getGlobalGraph，不是逐库合并。
+  const view = await graphStudioHarness(call, [])
+  try {
+    let tree = await view.render(true)
+    view.pick(tree, node => node.type === 'input' && node.props['aria-label'] === 'gsDomain')[0]
+      .props.onChange({ target: { value: 'project:travel' } })
+    tree = await view.render(true)
+    const asked = calls.filter(row => row.endpoint === 'getGraph')
+    const last = asked[asked.length - 1]
+    assert.equal(last.payload.scope, 'global', 'the panel stayed on the global graph')
+    assert.equal(last.payload.domain, 'project:travel', 'the global branch forwards the domain filter')
+    const datalist = view.pick(tree, node => node.type === 'datalist' && node.props?.id === 'dshm-graph-domains')[0]
+    const options = []
+    const visit = (value) => {
+      if (Array.isArray(value)) { value.forEach(visit); return }
+      if (value && value.type === 'option') options.push(String(value.props?.value ?? ''))
+    }
+    if (datalist) visit([].concat(datalist.props?.children ?? []))
+    assert.deepEqual(options, ['rp', 'coding', 'general', 'mixed', 'project:travel'].sort(),
+      'the datalist keeps every domain the server reported, not only the filtered one')
+  } finally { view.close() }
+})
+
+test('graph studio surfaces failed libraries and retains successful results', async () => {  const call = async (endpoint, payload) => {
     if (endpoint !== 'getGraph') return { items: [] }
     if (payload.libraryId === 'lib-denied') throw new Error('forbidden')
     return { nodes: [{ id: 'mem-ok', title: 'visible', kind: 'memory' }], edges: [], nextOffset: null }
@@ -1612,5 +1648,80 @@ test('the memory wall global block bulk-archives and the drawer deletes global e
     delete RPC_ANSWERS.listGlobal
     delete RPC_ANSWERS.archiveMemory
     delete RPC_ANSWERS.deleteMemory
+  }
+})
+
+test('the memory wall filters by domain and names every card domain', async () => {
+  const rpcCalls = []
+  const ctx = fakeCtx({ rpcCalls })
+  const originalGetState = RPC_ANSWERS.getState
+  const originalSettingsState = RPC_ANSWERS.getSettingsState
+  const loaded = {
+    ...EMPTY_STATE,
+    libraries: [{ id: 'lib-1', name: 'demo', scopeKey: '/proj/demo', privateCount: 2 }],
+  }
+  RPC_ANSWERS.getState = loaded
+  RPC_ANSWERS.getSettingsState = loaded
+  RPC_ANSWERS.browseWall = {
+    total: 2,
+    domains: ['coding', 'rp'],
+    items: [
+      { id: 'mem-rp', libraryId: 'lib-1', libraryName: 'demo', title: '约定的日子', preview: 'p', layer: 'long_term', status: 'active', source: 'user_said', decay: 0.5, tags: [], domain: 'rp' },
+      { id: 'mem-code', libraryId: 'lib-1', libraryName: 'demo', title: '部署窗口', preview: 'p', layer: 'long_term', status: 'active', source: 'inferred', decay: 0.4, tags: [], domain: 'coding' },
+    ],
+  }
+  const settle = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  // harness 的 hook 游标是全局的：同一棵树只能展开一次，二次 walk 会把子组件的
+  // useState 重新初始化。所以每轮 render 只走一遍，把要的东西一次收齐。
+  const collect = (tree) => {
+    const found = { select: null, domainTags: [], cards: 0 }
+    walkNodes(tree, (node) => {
+      if (node.type === 'select' && node.props?.['aria-label'] === 'wallFilterDomain' && !found.select) found.select = node
+      if (node.type === 'span' && node.props?.title === 'wallDomainHint') found.domainTags.push(String(node.props?.children ?? ''))
+      if (node.type === 'button' && String(node.props?.className || '').includes('dshm-wall-item')) found.cards += 1
+    })
+    const values = []
+    const visit = (value) => {
+      if (Array.isArray(value)) { value.forEach(visit); return }
+      if (value && value.type === 'option') values.push(String(value.props?.value ?? ''))
+    }
+    if (found.select) visit([].concat(found.select.props?.children ?? []))
+    found.values = values
+    return found
+  }
+  try {
+    globalThis.__dshMemuExports.apply(ctx)
+    const settings = registrations.filter((r) => r.slot === 'settings.section').pop()
+    const props = { ctx, t: (key) => key }
+    const first = await renderPage(settings.component, props, undefined, { remount: true })
+    collectPageHook()
+    for (const effect of first.effects) effect.fn()
+    await settle()
+    let view = collect((await renderPage(settings.component, props, 9)).tree)
+    for (const effect of effects) effect.fn()
+    await settle()
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+
+    assert.ok(view.select, 'the wall renders a domain filter')
+    assert.equal(view.cards, 2, 'both wall cards rendered')
+    assert.deepEqual(view.values, ['', 'coding', 'rp'], 'the filter offers every domain the server reported')
+    assert.deepEqual(view.domainTags.sort(), ['dmCoding', 'dmRp'], 'each card names the domain it came from')
+
+    view.select.props.onChange({ target: { value: 'rp' } })
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+    for (const effect of effects) effect.fn()
+    await settle()
+    const asked = rpcCalls.filter((call) => call.endpoint === 'browseWall')
+    assert.equal(asked[asked.length - 1].payload.domain, 'rp', 'picking a domain asks the server instead of trimming the page in the browser')
+    view = collect((await renderPage(settings.component, props, 9)).tree)
+    assert.deepEqual(view.domainTags, [], 'once filtered, cards stop repeating the same domain')
+    assert.equal(view.select.props.value, 'rp', 'the filter keeps what the reader picked')
+  } finally {
+    RPC_ANSWERS.getState = originalGetState
+    RPC_ANSWERS.getSettingsState = originalSettingsState
+    delete RPC_ANSWERS.browseWall
   }
 })
