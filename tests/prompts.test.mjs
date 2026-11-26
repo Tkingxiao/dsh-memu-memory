@@ -283,3 +283,33 @@ test('local consolidation adds actual tools while the shared domain body stays b
     assert.equal(text.includes('你没有记忆工具'), false)
   }
 })
+
+test('every memory guide ships the tool timing map, in all four domains', () => {
+  const vars = { mustRememberCap: 12, unpinBudget: 2, shortTermTtlHours: 72, anchorTokens: 800, turnTokens: 800 }
+  for (const domain of ['general', 'coding', 'rp', 'mixed']) {
+    const text = prompts.loadPromptForDomain('system-guide', vars, domain).text
+    for (const tool of ['memu_private_recall', 'memu_global_recall', 'memu_private_remember',
+      'memu_private_update', 'memu_private_list', 'memu_status', 'memu_private_archive', 'memu_private_unpin']) {
+      assert.ok(text.includes(tool), `${domain}: the first-step guide must say when to use ${tool}`)
+    }
+    assert.match(text, /link|lexicon/, `${domain}: consolidation-only tools are fenced off`)
+    assert.match(text, /remember_batch/, `${domain}: several facts in one call are pointed at the batch tool`)
+  }
+})
+
+test('the consolidation brief switches to the engineering value order for coding', async () => {
+  const { buildWorkerBrief } = await import('../lib/consolidation-worker.js')
+  const snapshot = { fromSeq: 1, throughSeq: 2, eventCount: 2, hash: 'coding-brief' }
+  const coding = buildWorkerBrief({ snapshot, probe: null, contract: '', domain: 'coding' })
+  assert.match(coding, /根因与修复理由/)
+  assert.match(coding, /不受「普通事实最多 3 条」限制/)
+  assert.match(coding, /每窗最多新增 8 条/)
+  assert.match(coding, /150–350 字/)
+  assert.match(coding, /路径 \+ 符号/)
+  assert.doesNotMatch(coding, /只保留人物、地点、时间、事情、原话/)
+  for (const domain of ['rp', 'general', 'mixed']) {
+    const brief = buildWorkerBrief({ snapshot, probe: null, contract: '', domain })
+    assert.match(brief, /约定\/承诺 = 新人物首次出现/, `${domain}: the people-first order stays for non-coding domains`)
+    assert.match(brief, /content 写 50–150 字/, `${domain}: non-coding content length is unchanged`)
+  }
+})

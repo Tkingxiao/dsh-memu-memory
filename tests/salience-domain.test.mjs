@@ -137,3 +137,37 @@ test('candidateSeedEvents honours domain without changing defaults', () => {
   const coding = candidateSeedEvents(events, { domain: 'coding' })
   assert.deepEqual(coding.map((event) => event.seq), [0, 1, 2, 3, 4, 5, 6, 7, 8], 'coding keeps the English turn and its neighbours')
 })
+
+test('coding seed selection keeps tool turns and weak signals; general keeps neither', () => {
+  const group = (base, text, withTool) => {
+    const events = [
+      { type: 'turn/start', seq: base, data: { turn: base } },
+      { type: 'user/message', seq: base + 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } },
+    ]
+    if (withTool) events.push({ type: 'tool/call', seq: base + 2, data: { callId: 'c' + base, name: 'edit', arguments: '{}' } })
+    events.push({ type: 'turn/end', seq: base + 3, data: { turn: base, reason: { kind: 'completed' } } })
+    return events
+  }
+  const events = [
+    ...group(0, '改一下那个函数', true),
+    ...group(10, '闲聊而已', false),
+    ...group(20, '我答应月底之前把伞还给你', false),
+    ...group(30, '第 0 段普通的记录', false),
+    ...group(40, '第 1 段普通的记录', false),
+    ...group(50, '第 2 段普通的记录', false),
+    ...group(60, '重构一下这段', false),
+    ...group(70, '第 3 段普通的记录', false),
+    ...group(80, '第 4 段普通的记录', false),
+    ...group(90, '第 5 段普通的记录', false),
+    ...group(100, '第 6 段普通的记录', false),
+  ]
+  const seqs = (list) => new Set(list.map((event) => event.seq))
+  const coding = seqs(candidateSeedEvents(events, { domain: 'coding' }))
+  const general = seqs(candidateSeedEvents(events, { domain: 'general' }))
+  assert.ok(coding.has(1), 'coding keeps a turn whose only evidence is a tool call')
+  assert.ok(coding.has(61), 'coding keeps a single weak signal (one point)')
+  assert.ok(coding.has(11), 'the neighbour of a kept turn stays')
+  assert.equal(general.has(1), false, 'general still drops the tool-only turn')
+  assert.equal(general.has(61), false, 'general still needs two points')
+  assert.ok(general.has(21), 'a strong signal keeps the turn for general too')
+})

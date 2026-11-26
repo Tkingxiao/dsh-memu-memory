@@ -52,6 +52,8 @@ WebUI 开着 GPU 占用高 / 时钟钉高档 → §3.28
 mac 一键安装引擎报 dlopen 签名错 / 事后引擎目录是空的 → §3.31
 插件内部报错要取证与一键修复 / 启动弹窗 → §3.45
 库从列表消失但仍在写入 / 召回正常 → §3.46
+同名新会话整段没有规则消息 / 锚点迟到很久 → §3.47
+欠账一直提醒却不结案 / 过期草稿越积越多 → §3.48
 ```
 
 ## 3. 出过的问题：症状 → 落点 → 守卫
@@ -812,3 +814,27 @@ grep tests 里的硬编码清单。守卫：全量 `npm test` 1676/1674 pass / 0
 **怎么确认**：`state.json` 里看 `archived` / `archivedBy` / `lastUsedAt` 三者是否自相矛盾；宿主日志搜 `archived library` 与 `kept library`。修好后旧数据在下一轮 sweep（启动后 8 秒或每 5 分钟）或下一条消息时自动复活。
 
 **守卫**：`tests/cycle.test.mjs` —— 在用库跨三轮 sweep 不归档且仍在列表、无人用的库照常归档并记 `archivedBy='sweep'`、误归档在用库被复活、用户归档不被复活、purge 不把在用库列入候选、删除在用库被拒（解绑后放行）、快路径复活。
+
+### 3.47 同名新会话整段没有规则消息 / 锚点迟到很久（通道复用会话 id）
+
+**症状**：IM 通道（dsh-channel 等）的私聊/群聊里，回合首步有 `[open loop]` 与逐轮召回，却始终没有 `<memory-guide>`，`===== memory anchor =====` 也很久以后才偶然出现一次。`state.json` 里该会话的 `guideRulesKey` 有值、`guideMessageAt` 比宿主会话对象的 `createdAt` 还早，`lastInjectedTurn` 远大于当前转录的回合数。真机（2026-11-26，`qq-dm-1299772830`）：新会话对象 16:22 建立，第 1 回合就有记忆块，规则消息直到第 25 回合 20:50 才出现。
+
+**落点**：通道用确定性会话 id（`bridge.ts` 的 `qq-dm-<uid>`）跨重启复用，宿主重建同名新会话后转录是空的，而 memu 的 binding 按 id 持久，`guideRulesKey` / `anchorPushed` 还是上一代的。`guideAdmission` / `ensureUnifiedGuide` 的稳态判据只看 binding（`steady && guides.length === 0 → skip`），而 `agent/pre-step` 只给本步批次、看不见历史，于是新转录的首回合被当成「规则早就在」而永久跳过；只有压缩置 `guideLost`、规则/领域变了或回合失败回滚删 key 才会补投。同链缺陷：`ensureUnifiedGuide` 原先在 `injectForStep` 的 try 内，召回抛错（如 `inbound queue is full`）会把规则消息一起吞掉，那一回合记忆块与规则双双缺席。
+
+**现在（1.4.1 起）**：`lib/inject.js:syncSessionIncarnation` 每次 pre-step 用宿主会话身份（`session.createdAt`，宿主不暴露时退回「回合号回到 1 + 首条消息 id」）比对 binding 上的 `sessionStamp`；换代就清掉 `guideRulesKey` / `guideMessageAt` / `anchorPushed` / `lastInjectedUserMessageId` 并置 `reinjectPending`，活动日志记一行「同名新会话：一次性投放已重置」。兜底戳只在同一代内稳定，宿主对同一首步重入不会重复重置。guide 的投放移出召回 try，召回故障只写 `lastRecallError` 与 warn，不再带走规则消息。同一入口的 `syncDomainDelivery` 处理**切域**：`injectedDomain` 与当前 `domainOf(binding)` 不一致时清 `guideRulesKey` / `guideMessageAt` / `anchorPushed` / `anniversariesShown` / `openLoopRemindedAt` / `textureKey` 并置 `reinjectPending`——纪念日与未了之事都按领域过滤，切到新领域后必须重投；guide 即使两个领域落到同一份基础稿也照样重投。
+
+**怎么确认**：`state.json` 里看 `sessionStamp` 与当前转录是否同代（有 `createdAt` 时以它为准）、`injectedDomain` 与 `domainOf(binding)` 是否一致；活动日志搜「同名新会话」与「记忆领域切换」。规则/锚点恢复后，`guideMessageAt` 会被下一次接纳刷新。
+
+**守卫**：`tests/inject-guide.test.mjs` —— 同名新会话重投规则与锚点、无 `createdAt` 时回合号复位只重置一次且重入不重复、召回抛错仍投 guide、切域重投规则/锚点并清掉纪念日与未了之事的记账。
+
+### 3.48 欠账一直提醒却不结案 / 过期草稿越积越多
+
+**症状**：`[commitment]` 卡每天还在提示"已逾期 N 天"，但库里那条 `commitment.status` 一直是 `open`；或者归档视图里的 `expired` 草稿越积越多，召回又永远看不到它们。
+
+**落点**：这是两条"只提醒不结案"的链。承诺逾期只有注入提醒（`dueCommitments` 与 overdue 兜底腿），整理提示词只教"写 `commitment`"，没教"按证据结案"，于是欠账永远 open。短期草稿过期只改 `status=expired` 退出召回（`isMemoryEligible` 的即时拦截 + `expireShortTerm` 清扫），注释里的"保留供升级"没有期限——`expired` 草稿会永久占索引，只能人工删。
+
+**现在（1.4.1 起）**：`[memory-catalog]` 后带**欠账单列**（`overdueOpenCommitments`，最多 8 条），整理页与 worker 任务书要求"先清欠账再查过时"——open 且已过 `due_at` 的承诺按本窗证据写 `done`/`cancelled`/`expired`，没有证据就保留并写明仍欠着；`valid_to` 已过或已被明确取代的旧条目改 `status=archived` 或补正窗口。周期兜底只提示：`runOverdueReviewPass` 对逾期 ≥7 天的 open 承诺写一条 `check` 活动日志（同一条 7 天内不重复，节流表在 `state.cycle.overdueReviewAt`），**不改 status**；过期草稿在 TTL 之后再留 30 天，由 `archiveExpiredDrafts` 改标 `archived`（不删除，正文仍可升回 `long_term`）。口径见 `docs/memory-semantics.md` §8.9。
+
+**怎么确认**：活动日志搜「欠账待结案」「过期草稿归档」；`state.json` 的 `cycle.overdueReviewAt` 是节流表；承诺是否结案只看 `commitment.status`（应被整理改成 `done`/`cancelled`/`expired`，周期任务永远不动它）。想让某条提前结案，直接让 agent 调 `memu_private_update` 或整理一次。
+
+**守卫**：`tests/stale-maintenance.test.mjs` —— 保留期归档（旧的归档、窗口内不动、legacy 回退 `expiresAt`、活草稿不碰）、逾期判定门槛（open/逾期天数/marginalized/done）、周期提示只写一次且不改状态、目录欠账单列包含 id/due/天数/对象。

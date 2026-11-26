@@ -1,5 +1,21 @@
 # 更新日志 / Changelog
 
+## [1.4.1] - 2026-11-26
+
+> 两件事：通道复用会话 id 时规则消息会整段缺席（真机 24 回合没有 `<memory-guide>`）；
+> 按域变体只有"怎么查"没有"什么时候写"，于是私聊里从不下笔。
+
+- **同名新会话重新投放规则与锚点**：dsh-channel 用确定性会话 id（`qq-dm-<uid>`）跨重启复用，宿主重建同名空转录后 binding 仍是上一代的，`guideRulesKey`/`anchorPushed` 让 `guideAdmission`/`ensureUnifiedGuide` 的稳态判据把 guide 与锚点永久跳过——实测 `qq-dm-1299772830` 新会话 16:22 建立、第 1 回合就有记忆块，规则消息直到第 25 回合 20:50 才出现。现在 `lib/inject.js:syncSessionIncarnation` 每次 pre-step 比对宿主会话身份（`session.createdAt`；宿主不暴露时退回「回合号回到 1 + 首条消息 id」兜底，同一代内稳定），换代就清 `guideRulesKey`/`guideMessageAt`/`anchorPushed`/`lastInjectedUserMessageId`、置 `reinjectPending`，活动日志记「同名新会话：一次性投放已重置」。
+- **切换记忆领域重新投放**：`injectedDomain` 记录在 binding 上，与 `domainOf(binding)` 不一致时清 `guideRulesKey`/`guideMessageAt`/`anchorPushed`/`anniversariesShown`/`openLoopRemindedAt`/`textureKey` 并置 `reinjectPending`（`lib/inject.js:syncDomainDelivery`，活动日志「记忆领域切换：一次性投放已重置」）。此前切域只靠 `rulesKey` 换 guide，锚点与按域过滤的纪念日/未了之事仍按"一会话一次"被旧领域的记账压着；两个领域落到同一份基础稿时 guide 也不会重投。
+- **逾期与过时的整理收尾**：此前两类"只提醒不结案"——逾期承诺在注入里天天提示但 `commitment.status` 永远是 `open`（整理提示词只教"写承诺"）；`expired` 短期草稿退出召回后永久占索引，没有保留期。现在：①`[memory-catalog]` 后附**欠账单列**（`lib/memory.js:overdueOpenCommitments`，最多 8 条，含 due、已逾期天数、对谁/做什么），整理页四稿与 worker 任务书都要求"先清欠账再查过时"——按本窗证据写 `done`/`cancelled`/`expired`，没证据就保留并写明仍欠着；`valid_to` 已过或已被明确取代的旧条目改 `status=archived` 或补正窗口，旧正文保留。②`lib/cycle.js:runOverdueReviewPass` 对逾期 ≥7 天的 open 承诺写一条 `check` 活动日志（同一条 7 天不重复，节流表 `state.cycle.overdueReviewAt`），只提示、不改状态——承诺是否兑现不能被清理策略替人裁决。③`lib/memory.js:archiveExpiredDrafts`：`expired` 草稿在保留期（30 天）后改标 `archived`，不删除，正文仍可升回 `long_term`。
+- **编码域种子放宽**：fork 种子以前对 coding 也用 2 分 salience 过滤，"改这个函数"这类只有工具调用的改动会被整回合丢掉；工具结果截 1100 字、调用参数截 500 字，diff 与错误签名常只剩开头，worker 路径的 turn-log 工具行更是只留 160 字。现在 coding：`candidateSeedEvents` 弱词阈值 1、带 `tool/call` 的回合一律保留、回合上限 120（默认 60）；`compactSeedEvents` 工具结果 2200 字 / 调用参数 1000 字；turn-log 工具行 600 字 / 参数 400 字（`turnLogLimits('coding')`，记录器、worker 增量与缺口重建同口径）；turn-log 关闭/重建失败时的兜底压缩与远端整理转录也按域（`condenseLimitsFor('coding')`：结果 1400 / 参数 700，默认 400/300）。整窗仍有 ≤500 事件、单条 12k 文本、turn-log 4000 字/条的总闸。
+- **编程整理频率与"修改重点"**：fork/worker 的任务书以前是 RP 口径——价值排序把工程结论排进「其他明确事实」并受「普通事实最多 3 条」限制，`content` 要求 50–150 字「人物、地点、原话」；与编码整理稿自己的 150–350 字结构要求冲突，编码域于是写得少、也只剩"修复了某问题"这种摘要。现在 `buildWorkerBrief({domain})` 对 `coding` 使用工程排序（根因与修复理由 = 接口/不变量变化 = 环境与版本约束 = 被否决方案 > 验证结论与测试范围 > 需求/验收变化 > 偏好 > 其余），`content` 150–350 字按「结论 / 作用范围与定位（路径 + 符号）/ 条件与原因 / 验证状态」、标题写结论本身；编码整理稿的「最多 3 条、宁可少写一条」改为「每窗最多 8 条、前两类必须写」，与 RP 同口径。`rp/general/mixed` 的原口径不变。守卫：`tests/prompts.test.mjs` 按域断言任务书排序、长度与标题要求。
+- **规则消息补工具分工表**：首步 `<memory-guide>` 以前只在零星句子里提到 recall/remember，`rp`/`mixed` 连写入工具名都没有，模型没有"哪个工具什么时候用"的统一入口。四个领域稿（`general` 基础稿 + `rp`/`coding`/`mixed` 变体）现在都带同一张表：`memu_private_recall` / `memu_global_recall`、`memu_private_remember`(+`_batch`) / `memu_private_update`、`memu_private_list` / `memu_status` 的时机，以及 `memu_private_archive`/`memu_private_unpin` 只在用户明确要求时、`memu_private_link*`/`memu_lexicon_*` 不在对话里主动调。`project:*` 等无变体领域回退基础稿。渲染后 full message：coding 963 / mixed 1015 / rp 1327 / general 1685 token，都在 `injectionTotalTokens` 默认 2000 内；规则正文变化会换 `rulesKey`，存量会话下一步首步自动重投一次。
+- **guide 与召回解耦**：`ensureUnifiedGuide` 以前在 `injectForStep` 的 try 内，召回抛错（真机：`inbound queue is full`）会把规则消息一起吞掉。现在 catch 分支仍尝试投放 rules，故障只落 `lastRecallError` + warn。
+- **按域 guide 补写入条款**：`system-guide.rp.md` / `.coding.md` / `.mixed.md` 各补一段「什么时候写」——值得记的三类、用 `memu_private_remember`/`memu_private_update` 的口径、不每回合写、其余交给闲时整理。此前只有通用稿讲写入（`domainLayered` 是整篇替换），实测 27 回合的 RP 私聊 `memu_*` 工具调用 0 次。coding 稿加完渲染约 907 token，仍在 `injectionTotalTokens` 默认 2000 之内。
+- 守卫：`tests/inject-guide.test.mjs` 新增四条——同名新会话重投规则与锚点、无 `createdAt` 时回合号复位只重置一次且重入不重复、召回抛错仍投 guide、切域重投规则/锚点并清掉纪念日与未了之事的记账；`tests/stale-maintenance.test.mjs` 新增四条——保留期归档、逾期门槛、周期提示只写一次且不改状态、目录欠账单列；`tests/prompts.test.mjs` 新增两条——逐域断言工具分工表（八个工具 + batch 指引 + 整理侧工具边界）、按域断言整理任务书的排序/长度/标题口径；`tests/turn-log.test.mjs`、`tests/salience-domain.test.mjs`、`tests/consolidation-fork.test.mjs`、`tests/curator-probe.test.mjs` 各加一条编码域额度用例（工具行 600/参数 400、工具回合与弱词保留、种子 2200/1000、兜底 1400/700）。全量 2022 tests / 2020 pass / 0 fail / 2 skipped。
+- 文档：`docs/troubleshooting.md` §3.47 与症状速查表、`docs/memory-semantics.md` §8.4、中英 README 的兼容性段。
+
 ## [1.4.0] - 2026-11-26
 
 > 三件事一起收：按域终于看得见筛得动；中文人名被 n-gram 滑窗切成两个节点的成因在提名侧堵住；

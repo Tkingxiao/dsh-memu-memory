@@ -472,3 +472,16 @@ test('a deleted session (sessionGone) loses its log on session/disposed', () => 
   assert.ok(fs.existsSync(turnLog.turnLogPath('rec-alive')))
   dispose()
 })
+
+test('coding tool lines keep 600 chars of arguments and error text instead of 160', () => {
+  const args = '{"cmd":"npm test -- --grep memory","pad":"' + 'a'.repeat(400) + '"}'
+  const tools = [['c1', 'bash', args, 'E'.repeat(800), true]]
+  const plain = turnLog.buildTurnRecords(oneTurn({ user: '跑测试', tools }), { tools: 'summary' })[0].tools[0]
+  const coding = turnLog.buildTurnRecords(oneTurn({ user: '跑测试', tools }), { tools: 'summary', ...turnLog.turnLogLimits('coding') })[0].tools[0]
+  assert.ok(plain.length <= turnLog.TURNLOG_TOOL_LINE_CHARS + 1)
+  assert.ok(coding.length > turnLog.TURNLOG_TOOL_LINE_CHARS, 'the coding cap is wider than the default')
+  assert.ok(coding.length <= turnLog.TURNLOG_TOOL_LINE_CHARS_CODING + 1)
+  assert.ok(coding.includes('npm test'), 'the command survives in coding mode')
+  assert.ok(coding.includes('E'.repeat(20)), 'the error output tail survives in coding mode')
+  assert.equal(turnLog.turnLogLimits('rp').toolLineChars, turnLog.TURNLOG_TOOL_LINE_CHARS)
+})

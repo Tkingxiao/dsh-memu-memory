@@ -74,6 +74,7 @@ function makeTurn(sessionId, options = {}) {
     turn = 1,
     text = 'please continue with the earlier context of this task',
     history = [],
+    sessionCreatedAt = null,
   } = options
   const user = {
     id: sessionId + '-user-' + turn,
@@ -82,7 +83,9 @@ function makeTurn(sessionId, options = {}) {
     content: [{ type: 'text', text }],
   }
   const decision = { kind: 'enter', messages: [...history, user] }
-  const agent = { session: { header: { id: sessionId, cwd, agentPreset, origin } } }
+  const session = { header: { id: sessionId, cwd, agentPreset, origin } }
+  if (sessionCreatedAt !== null) session.createdAt = sessionCreatedAt
+  const agent = { session }
   const payload = { agent, turn, step, signal: { aborted: false } }
   return { user, decision, payload }
 }
@@ -186,6 +189,78 @@ function textOf(messages) {
   return (messages || []).map((message) => String(message?.content?.[0]?.text || '')).join('\n')
 }
 
+test('a recreated session object with the same id re-delivers the guide and the anchor', async () => {
+  const sessionId = 'guide-incarnation'
+  const cwd = path.join(home, 'project-guide-incarnation')
+  const binding = state.ensureSession(sessionId, { cwd, agentPreset: 'coding' })
+  seedPinned(binding, 'mem-guide-incarnation', '重启后的锚点')
+  const mounted = mountGuide()
+
+  const first = makeTurn(sessionId, { cwd, sessionCreatedAt: 1_700_000_000_000 })
+  const firstOut = await mounted.run(first.payload, first.decision)
+  assert.equal(guideMessages(firstOut.messages).length, 1)
+  assert.equal(state.getSessionBinding(sessionId).sessionStamp, 'created:1700000000000')
+
+  const next = makeTurn(sessionId, { cwd, turn: 2, sessionCreatedAt: 1_700_000_000_000 })
+  const nextOut = await mounted.run(next.payload, next.decision)
+  assert.equal(guideMessages(nextOut.messages).length, 0, '同一会话对象不重发')
+
+  // 通道用确定性 id 重建同名会话：binding 还是旧的，转录从头开始。
+  const revived = makeTurn(sessionId, { cwd, turn: 1, sessionCreatedAt: 1_700_000_100_000 })
+  const revivedOut = await mounted.run(revived.payload, revived.decision)
+  const revivedGuides = guideMessages(revivedOut.messages)
+  assert.equal(revivedGuides.length, 1, '新会话对象必须重新拿到规则')
+  assert.ok(textOf(revivedOut.messages).includes('[mem-guide-incarnation]'), '锚点也重新投放')
+  const stamped = state.getSessionBinding(sessionId)
+  assert.equal(stamped.sessionStamp, 'created:1700000100000')
+  assert.equal(stamped.guideRulesKey, guideKey(revivedGuides[0]))
+  assert.equal(stamped.guideLost, false)
+})
+
+test('without a host createdAt, a first turn on a reused id resets one-shots exactly once', async () => {
+  const sessionId = 'guide-turn-reset'
+  const cwd = path.join(home, 'project-guide-turn-reset')
+  state.ensureSession(sessionId, { cwd, agentPreset: 'coding' })
+  const mounted = mountGuide()
+
+  const first = makeTurn(sessionId, { cwd })
+  const firstOut = await mounted.run(first.payload, first.decision)
+  assert.equal(guideMessages(firstOut.messages).length, 1)
+  assert.equal(state.getSessionBinding(sessionId).sessionStamp, `turn1:${first.user.id}`)
+
+  const later = makeTurn(sessionId, { cwd, turn: 4 })
+  const laterOut = await mounted.run(later.payload, later.decision)
+  assert.equal(guideMessages(laterOut.messages).length, 0)
+
+  const revived = makeTurn(sessionId, { cwd, turn: 1, text: 'a brand new conversation' })
+  revived.user.id = 'guide-turn-reset-new-user'
+  revived.decision.messages = [revived.user]
+  const revivedOut = await mounted.run(revived.payload, revived.decision)
+  assert.equal(guideMessages(revivedOut.messages).length, 1, '回合号回到 1 → 重新投放')
+
+  // 宿主对同一首步重入：这一代的戳一致，不再重置、不再追加副本。
+  const reentry = makeTurn(sessionId, { cwd, turn: 1, text: 'a brand new conversation' })
+  reentry.user.id = 'guide-turn-reset-new-user'
+  reentry.decision.messages = [reentry.user]
+  const reentryOut = await mounted.run(reentry.payload, reentry.decision)
+  assert.equal(guideMessages(reentryOut.messages).length, 0)
+})
+
+test('a recall failure cannot swallow the rules message', async () => {
+  const sessionId = 'guide-failopen'
+  const cwd = path.join(home, 'project-guide-failopen')
+  state.ensureSession(sessionId, { cwd, agentPreset: 'coding' })
+  const mounted = mountGuide()
+  const turn = makeTurn(sessionId, { cwd })
+  Object.defineProperty(turn.payload.agent.session.header, 'agentPreset', {
+    get() { throw new Error('inject boom') },
+  })
+  const out = await mounted.run(turn.payload, turn.decision)
+  assert.equal(guideMessages(out.messages).length, 1, 'guide 与召回解耦，召回故障时仍然投放')
+  assert.ok(mounted.logger.warnings.some((message) => message.includes('pre-step injection failed')))
+  assert.match(String(state.getSessionBinding(sessionId).lastRecallError || ''), /inject boom/)
+})
+
 test('a domain change replaces the old guide with exactly one current version', async () => {
   const sessionId = 'guide-domain'
   const cwd = path.join(home, 'project-guide-domain')
@@ -207,6 +282,38 @@ test('a domain change replaces the old guide with exactly one current version', 
   assert.match(String(guides[0].content[0].text), /关于记忆（角色扮演）/)
   assert.equal(state.getSessionBinding(sessionId).guideRulesKey, guideKey(guides[0]))
   assert.equal(out.messages.includes(old), false, 'the old version is projected out of the model view')
+})
+
+test('switching the memory domain re-delivers the guide and the domain-scoped one-shots', async () => {
+  const sessionId = 'guide-domain-switch'
+  const cwd = path.join(home, 'project-guide-domain-switch')
+  const binding = state.ensureSession(sessionId, { cwd, agentPreset: 'coding' })
+  const mounted = mountGuide()
+
+  const first = makeTurn(sessionId, { cwd })
+  const firstOut = await mounted.run(first.payload, first.decision)
+  const oldKey = guideKey(guideMessages(firstOut.messages)[0])
+  assert.equal(state.getSessionBinding(sessionId).injectedDomain, 'coding')
+
+  // 这条记忆是上一轮之后才写下的：切域后锚点重投时必须重新出现。
+  seedPinned(binding, 'mem-domain-switch', '切域之后写下的记忆')
+  state.setSessionBinding(sessionId, {
+    anniversariesShown: { 'mem-anniv': '2026-11-26' },
+    openLoopRemindedAt: { 'mem-loop': new Date().toISOString() },
+  })
+  state.setSessionBinding(sessionId, { domainOverride: 'rp' })
+
+  const next = makeTurn(sessionId, { cwd, turn: 2 })
+  const out = await mounted.run(next.payload, next.decision)
+  const guides = guideMessages(out.messages)
+  assert.equal(guides.length, 1)
+  assert.match(String(guides[0].content[0].text), /关于记忆（角色扮演）/)
+  assert.notEqual(guideKey(guides[0]), oldKey)
+  assert.ok(textOf(out.messages).includes('[mem-domain-switch]'), '锚点随切域重投')
+  const after = state.getSessionBinding(sessionId)
+  assert.equal(after.injectedDomain, 'rp')
+  assert.deepEqual(after.anniversariesShown, {})
+  assert.deepEqual(after.openLoopRemindedAt, {})
 })
 
 test('a prompt override changes the rendered body and the rules key', async () => {

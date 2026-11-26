@@ -17,7 +17,7 @@ const forkModel = await import('../lib/fork-model.js')
 const { dataDir, setWarnSink } = await import('../lib/paths.js')
 const { retireWorker } = await import('../lib/worker-pool.js')
 const { CORE_WRITE_TOOLS, WORKER_TOOL_ALLOW } = await import('../lib/consolidation-worker.js')
-const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY, CONSOLIDATION_WINDOW_EVENTS, isEffortRefused, markEffortRefused, effortRefusalOf, compactSeedEvents, selectConsolidationWindow, selectTailTurnWindow, mustCoverCandidates, mergeMustCover, candidateCovered } = await import('../lib/private.js')
+const { requestPrivateConsolidation, isConsolidating, consolidationWaitBudget, CONSOLIDATION_WAIT_POLICY, CONSOLIDATION_WINDOW_EVENTS, isEffortRefused, markEffortRefused, effortRefusalOf, compactSeedEvents, selectConsolidationWindow, selectTailTurnWindow, mustCoverCandidates, mergeMustCover, candidateCovered, seedLimitsFor } = await import('../lib/private.js')
 // 这些用例验证“路由继承”，不是推理强度；默认 medium 由 config 测试单独覆盖。
 state.updateSettings({ consolidationReasoningEffort: 'inherit' })
 
@@ -1517,4 +1517,23 @@ test('missing buildForkSeed only disables fork; worker really completes without 
   await child.ready
   child.release()
   await child.done
+})
+
+test('coding seeds keep more tool output and arguments than the default caps', () => {
+  const events = [
+    { seq: 0, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '改代码' }] } },
+    { seq: 1, type: 'tool/call', data: { callId: 'c1', name: 'edit', arguments: '{"patch":"' + 'A'.repeat(1500) + '"}' } },
+    { seq: 2, type: 'tool/result', data: { message: { callId: 'c1', content: [{ type: 'text', text: 'R'.repeat(3000) }] } } },
+    { seq: 3, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '完成' }] } } },
+  ]
+  const sizes = (seed) => ({
+    args: String(seed.find((event) => event.type === 'tool/call').data.arguments).length,
+    result: String(seed.find((event) => event.type === 'tool/result').data.message.content[0].text).length,
+  })
+  const plain = sizes(compactSeedEvents(events))
+  const coding = sizes(compactSeedEvents(events, null, seedLimitsFor('coding')))
+  assert.ok(plain.args <= 510, 'the default argument cap is unchanged')
+  assert.ok(coding.args > 1000, 'coding keeps a longer tool-call argument body')
+  assert.ok(plain.result <= 1110, 'the default result cap is unchanged')
+  assert.ok(coding.result > 2100 && coding.result < 2300, 'coding keeps 2200 chars of the tool result')
 })

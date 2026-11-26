@@ -64,7 +64,7 @@ crypto.randomBytes = (size) => {
 }
 
 const {
-  startGlobalCuration, commitCuratorOutput, getCurationJob, condenseEvents,
+  startGlobalCuration, commitCuratorOutput, getCurationJob, condenseEvents, condenseLimitsFor,
 } = await import('../lib/curator.js')
 const { loadGlobalIndex, saveGlobalIndex } = await import('../lib/state.js')
 const { dataDir } = await import('../lib/paths.js')
@@ -469,4 +469,22 @@ test('condense keeps private prose; redaction only covers credential-shaped stri
   assert.match(text, new RegExp(M.recallSecret))
   assert.match(text, /Bearer \[REDACTED_KEY\]/)
   assert.doesNotMatch(text, /abcdefghijklmnopqrstuvwxyz/)
+})
+
+test('condenseLimitsFor widens coding tool caps; the default stays 400/300', () => {
+  const events = [
+    { type: 'tool/call', data: { name: 'edit', arguments: '{"patch":"' + 'A'.repeat(1200) + '"}' } },
+    { type: 'tool/result', data: { message: { content: [{ type: 'text', text: 'R'.repeat(3000) }] } } },
+  ]
+  const plain = condenseEvents(events, 200000)
+  const coding = condenseEvents(events, 200000, condenseLimitsFor('coding'))
+  const plainCall = (plain.match(/Tool call: edit (.*)/) || [])[1] || ''
+  const codingCall = (coding.match(/Tool call: edit (.*)/) || [])[1] || ''
+  const plainResult = (plain.match(/Tool result: (.*)/) || [])[1] || ''
+  const codingResult = (coding.match(/Tool result: (.*)/) || [])[1] || ''
+  assert.ok(plainCall.length <= 310, 'the default argument cap is unchanged')
+  assert.ok(codingCall.length > 700, 'coding keeps more of the call arguments')
+  assert.ok(plainResult.length <= 410, 'the default result cap is unchanged')
+  assert.ok(codingResult.length > 1400 && codingResult.length < 1500, 'coding keeps 1400 chars of the result')
+  assert.equal(condenseLimitsFor('rp').toolResultChars, 400)
 })
