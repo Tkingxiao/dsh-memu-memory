@@ -36,6 +36,7 @@ fork cwd 残留死路径兜底 dataDir；保持宿主原权限，不自动覆盖
 | 改现有行为 / 加新东西 / 提交前自检 | `docs/contributing.md` |
 | **DSH 发新版本、要适配新宿主** | `docs/host-adaptation.md`（检查表 / 真机搭法 / 已知陷阱） |
 | **哪个宿主构建核对到哪一步 / 某个宿主面在各版本长什么样** | `docs/host-versions.md` §13（台账 / 事实矩阵 / 变更账本） |
+| **要把记忆搬到 MCP / 别的宿主** | `docs/mcp-porting.md`（工具面与存储层走 `dsh-memu-memory/port`；注入与 UI 搬不走） |
 | 忘了宿主 API 长什么样 | `docs/host-api.md`；三种 exec 形状在 `docs/troubleshooting.md` 附录 D |
 | 动 UI | `docs/client-conventions.md` |
 | 改记忆语义 / 提示词正文 | `docs/memory-semantics.md` |
@@ -58,6 +59,7 @@ fork cwd 残留死路径兜底 dataDir；保持宿主原权限，不自动覆盖
 失败一轮后锚点/日期没了 → T3.24
 图谱改了没生效 / 缩到最小打架 → T3.27
 WebUI 开着 GPU 占用高 / 时钟钉高档 → T3.28
+引擎装完一直 installing、current=none、召回只走关键词 → T3.49
 ```
 
 ---

@@ -46,3 +46,63 @@ test('the macOS library-validation dlopen error is recognized for the signing re
   assert.equal(engine.isMacOSLibraryValidationError(''), false)
   assert.equal(engine.isMacOSLibraryValidationError(null), false)
 })
+
+// ---- 中断安装的自愈（2026-11-28：rc.5 home 卡在 installing 两天） ----
+
+function writeEngineState(patch) {
+  const dir = path.join(home, 'engine')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(patch), 'utf8')
+  return dir
+}
+
+const DEAD_INSTALL = {
+  status: 'installing',
+  version: '0.11.0b3',
+  step: 'installing-deps:python',
+  error: null,
+  startedAt: '2026-11-26T06:33:02.636Z',
+  updatedAt: '2026-11-26T06:33:05.838Z',
+}
+
+test('a dead install becomes failed and its venv.tmp is cleaned up', () => {
+  const dir = writeEngineState(DEAD_INSTALL)
+  const aborted = path.join(dir, '0.11.0b3', 'venv.tmp-37076-1795674785559')
+  const finished = path.join(dir, '0.11.0b3', 'venv-real')
+  fs.mkdirSync(aborted, { recursive: true })
+  fs.mkdirSync(finished, { recursive: true })
+
+  const status = engine.engineStatus()
+  assert.equal(status.status, 'failed', 'a stale installing state must not stay installing forever')
+  assert.equal(status.installed, false)
+  assert.equal(status.state.step, 'interrupted')
+  assert.match(String(status.state.error), /中断/, 'the reason must be readable in the UI')
+  assert.ok(!fs.existsSync(aborted), 'the aborted venv must be removed')
+  assert.ok(fs.existsSync(finished), 'a finished venv must never be touched')
+})
+
+test('a fresh install is left running', () => {
+  const now = new Date().toISOString()
+  writeEngineState({ ...DEAD_INSTALL, startedAt: now, updatedAt: now })
+  assert.equal(engine.engineStatus().status, 'installing', 'a live install must not be reconciled away')
+})
+
+test('a held lock means an install is still in flight', () => {
+  const dir = writeEngineState(DEAD_INSTALL)
+  fs.writeFileSync(path.join(dir, 'install.lock'), JSON.stringify({ pid: 1, startedAt: DEAD_INSTALL.startedAt }), 'utf8')
+  try {
+    assert.equal(engine.engineStatus().status, 'installing', 'the cross-process lock must veto reconciliation')
+  } finally {
+    fs.rmSync(path.join(dir, 'install.lock'), { force: true })
+  }
+})
+
+test('reconciliation is idempotent and leaves a ready engine alone', () => {
+  const dir = writeEngineState({ status: 'ready', version: '0.11.0b3', step: 'ready', error: null, updatedAt: '2026-11-26T06:33:05.838Z' })
+  fs.writeFileSync(path.join(dir, 'current.json'), JSON.stringify({ version: '0.11.0b3', venv: 'x', python: 'y' }), 'utf8')
+  try {
+    assert.equal(engine.engineStatus().status, 'ready', 'a ready engine must never be demoted')
+  } finally {
+    fs.rmSync(path.join(dir, 'current.json'), { force: true })
+  }
+})

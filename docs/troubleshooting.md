@@ -838,3 +838,17 @@ grep tests 里的硬编码清单。守卫：全量 `npm test` 1676/1674 pass / 0
 **怎么确认**：活动日志搜「欠账待结案」「过期草稿归档」；`state.json` 的 `cycle.overdueReviewAt` 是节流表；承诺是否结案只看 `commitment.status`（应被整理改成 `done`/`cancelled`/`expired`，周期任务永远不动它）。想让某条提前结案，直接让 agent 调 `memu_private_update` 或整理一次。
 
 **守卫**：`tests/stale-maintenance.test.mjs` —— 保留期归档（旧的归档、窗口内不动、legacy 回退 `expiresAt`、活草稿不碰）、逾期判定门槛（open/逾期天数/marginalized/done）、周期提示只写一次且不改状态、目录欠账单列包含 id/due/天数/对象。
+
+### 3.49 引擎安装卡在 installing 几天不动（current=none）
+
+**症状**：面板与 `memu_status` 一直显示 `engine installing`、`current=none`；语义召回彻底降级成关键词（关键词仍能捞到，所以看着「好像还能用」）；重启宿主也不变。2026-11-26 的 rc.5 home 就这样停了两天，`step=installing-deps:python` 之后再没动过。
+
+**落点**：安装进程被杀（宿主重启、断电、任务管理器结束进程）时，`state.json` 永久停在 `installing`——没有 error、没有 `current.json`、`venv.tmp-*` 残骸留在版本目录里。`engineStatus` 的判据是 `current ? 'ready' : state.status || 'idle'`，于是界面只能反复显示 "installing"，没有任何「它其实已经死了」的信号。
+
+**现在（1.4.1 起）**：`engineStatus()` 与 `ensureEngine()` 都先跑 `reconcileInterruptedInstall()`。三条判据同时成立才收尾：`status === 'installing'`、本进程没有持锁且 `install.lock` 不存在、`updatedAt` 超过 30 分钟没变（与 `acquireLock` 的过期锁阈值同一个数）。收尾动作：落成 `failed` + `step=interrupted` + 可读原因（中文，带卡住步骤与分钟数），并删除 `venv.tmp-*` 残骸——**只删 tmp，绝不碰正式 `venv-*`**（那可能正是 `current.json` 指向的可用引擎）。收尾后重装从干净状态开始。
+
+**怎么确认**：`engine/state.json` 的 `status` / `step` / `error`；`logs/install.log` 最后一行是否停在 `Installing collected packages`（那就是 pip 中途被杀的现场）；`engine/<version>/venv.tmp-*` 是否还在。
+
+**应急恢复**：若不想等重装，可复用另一个 home 已装好的 venv——把 `engine/<版本>/venv-*` 整目录复制过来，写 `current.json`（`version` / `venv` / `python` / `commands`），再把 `state.json` 置 `ready`，最后用 `verifyEngine(current.python, { expectedVersion })` 验证。注意两个 home 用的 Python 可能不同（受管运行时 3.12.14 vs 系统 Python），`requirements.lock` 的实测基准是 **3.12.14**。
+
+**守卫**：`tests/engine.test.mjs` 四条用例 —— 死安装被收尾成 `failed` 且 tmp 被清理（同时断言正式 venv 不被误删）、新鲜安装不被误判、持锁时不收尾、`ready` 引擎不被降级。

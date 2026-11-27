@@ -6,6 +6,7 @@ const React = {
   createElement: (type, props, ...children) => typeof type === 'function' ? type({ ...props, children }) : { type, props, children },
   Fragment: Symbol('fragment'),
   useState: value => [typeof value === 'function' ? value() : value, () => {}],
+  memo: (component) => component,
   useMemo: fn => fn(), useCallback: fn => fn, useEffect: () => {}, useRef: value => ({ current: value }),
   useSyncExternalStore: (_subscribe, snapshot) => {
     const first = snapshot()

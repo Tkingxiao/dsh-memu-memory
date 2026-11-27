@@ -25,6 +25,7 @@ const React = {
     if (hooks[index] === undefined) hooks[index] = typeof initial === "function" ? initial() : initial
     return [hooks[index], (next) => { hooks[index] = typeof next === "function" ? next(hooks[index]) : next }]
   },
+  memo: (component) => component,
   useCallback: (fn) => fn,
   useMemo: (fn) => fn(),
   useEffect(fn, deps) { effects.push({ fn, deps }) },

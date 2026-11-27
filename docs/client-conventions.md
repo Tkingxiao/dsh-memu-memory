@@ -35,6 +35,9 @@
 - **保存/设置类改动必须通知**：`notifyMemoryWrite(kind, libraryId)` 先跑同窗口监听（毫秒），再向 `BroadcastChannel("dsh-memu-memory")` 广播 `{ type: "memory-write", kind, libraryId, at }`，让另一份文档（WebUI 新标签 / overlay iframe / 另一个宿主窗口）立刻重取；本地已刷新的写（设置保存、复位、后端切换、文件夹策略）用 `broadcastMemoryWrite` 只通知别人，避免刷两遍。接收端只跑本地监听 / 重渲染，**不广播回去**、**不从消息取数据**——消息只叫醒心跳，事实永远从 RPC 取。
 - **一切轮询走心跳**：面板同步一律 `useMemoryBeat`，不各写 `setInterval`。心跳载荷**只许** `{ revisionOnly: true }`，返回**只许** `{ revision, stamp }`。
 - 侧边栏首屏只允许 **1 个 RPC**（`getSidebarState`）且不读记忆全文；其余分页懒加载，列表项预览就地截断。
+- **记忆墙整库流式加载**：`browseWall` 按 `offset` 分批（每批 300）边拉边上屏，**不要在 300 条处截断**——`total` 是整库条数，`items.length < total` 只是「还没拉完」。浏览页卡片分批挂载（先 60 张，滚到底 +120），卡片草稿下沉在 `BrowserMemoryCard` 内部并 `React.memo`，输入时不得重渲染整个列表（几百张卡时那是逐键卡顿的根因）。
+- 列表排序口径 = **新到旧**（`updatedAt || createdAt` 降序，tie-break id），服务端 `privateListView` 统一排；引擎与索引都不保证顺序，界面不要自己另排一套。
+- **正文按需补全**：列表返回的 `content` 只是截断预览，`truncated: true` 时卡片聚焦正文必须先用 `getMemory` 补拉全文（拉取期间输入框只读）。绝不能让截断版进编辑路径——那等于用户改一个字就丢掉尾部。
 - 筛选是**两个独立维度，各自独占**：池（在用 / 已归档）× 层（全部 / 永久 / 长期 / 短期 / 锚点）。**所有选项恒定列出，没有记忆显示 0**；归档不是叠加开关。两池同一次读取全拿到，切换/归档/恢复只改状态重绘。
 - 反面语义设置项（如 `newSessionPromptDismissed`）在 WebUI 必须 `settingRow(..., { invert: true })`，否则开关显示与宿主页面相反。
 - **跨库聚合视图不带 sessionId**：记忆墙「全部记忆库」（`browseWall` 无 libraryId）与词典页「全部词典」（`lexiconList` 传 `libraryId:'all'`）都是管理面聚合读，会话凭据表达不了多库授权——省略 sessionId 走宿主 capability；宿主 403 时退回单库并禁用聚合选项（`multiBlocked` / `allBlocked`），不让整页空。聚合里的写操作按条目所属库路由（词典 `bookOf`），不能拿保留作用域名（`all`）去写。

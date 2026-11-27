@@ -39,6 +39,7 @@ const React = {
       dirty = true
     }]
   },
+  memo: (component) => component,
   useCallback: (fn) => fn,
   useMemo: (fn) => fn(),
   useEffect(fn, deps) { effects.push({ fn, deps, index: cursor++ }) },

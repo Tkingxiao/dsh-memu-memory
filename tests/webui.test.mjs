@@ -200,6 +200,12 @@ test('single-library browseWall still carries global rows and F1/F2 metadata', a
 
   const wall = await dispatch({}, 'browseWall', { libraryId: library.id })
   assert.ok(wall.items.some((item) => item.id === 'mem-private-merge'), 'the authorized private row is present')
+  // 记忆墙按 offset 逐批读完整库：分页不得改变 total，也不得重排（新到旧）。
+  const wallPage = await dispatch({}, 'browseWall', { libraryId: library.id, limit: 1, offset: 1 })
+  assert.equal(wallPage.offset, 1)
+  assert.equal(wallPage.total, wall.total, 'paging must not change the total')
+  assert.equal(wallPage.items.length, 1)
+  assert.equal(wallPage.items[0].id, wall.items[1].id, 'offset continues the same sorted list')
   const globalRow = wall.items.find((item) => item.id === 'gmem-linked')
   assert.ok(globalRow, 'a single-library wall must keep the shared global scope')
   assert.equal(globalRow.libraryId, null)
@@ -214,7 +220,8 @@ test('single-library browseWall still carries global rows and F1/F2 metadata', a
 
   const source = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   assert.match(source, /wallAllBlocked/, 'the single-library fallback explains itself')
-  assert.match(source, /browseWall', \{ libraryId: firstLibraryId/, 'the wall retries the first library after an all-libraries 403')
+  assert.match(source, /const stream = async \(targetLibraryId\)/, 'the wall reads the library in batches')
+  assert.match(source, /await stream\(firstLibraryId\)/, 'the wall retries the first library after an all-libraries 403')
   assert.match(source, /setMultiBlocked\(true\)/, 'the fallback disables the all-libraries option')
 })
 test('the settings button preserves the host SPA and links to individual pages', () => {

@@ -1,5 +1,25 @@
 # 更新日志 / Changelog
 
+## [1.4.2] - 2026-11-28
+
+> 四件事：记忆墙在 300 条处硬截断（真实库 423 条，读者永远看不到最新那部分）；
+> 列表顺序不可信（引擎与索引都不排，刚写的记忆会跑到中间）；浏览页几百张可编辑卡片
+> 一次性挂载、且正文被截断后仍可编辑（改一个字就把尾部写丢）；引擎安装被杀后状态永久
+> 停在 `installing`（rc.5 home 卡了两天，语义召回静默降级成关键词，没有任何错误信号）。
+> 另新增移植入口 `dsh-memu-memory/port`，让 MCP server / 脚本能复用工具面与读写层。
+
+- **记忆墙整库流式加载**：`browseWall` 增加 `offset` 分页（上限 5000），客户端按每批 300 条边拉边渲染，批间让出一帧；`items.length < total` 不再被当作"到头"。原先客户端固定传 `limit:300`、服务端再 `Math.min(1000, …)`，真实库 423 条于是永久只显示 300 条。实测 423 条分 2 批读完、排序单调、id 无重复。客户端加批数上限 40（12000 条）防"库被持续写入时 total 一直变大"的活锁。
+- **列表新到旧**：`lib/memory.js:privateListRaw` 只有跨库分支排过序，单库（侧栏与浏览库走的就是这条）直接吐引擎/索引原始顺序。现在 `privateListView` 统一按 `updatedAt || createdAt` 降序、tie-break id，engine 与 index 两条返回路径都过一遍。
+- **浏览页大批量**：卡片抽成 `BrowserMemoryCard`（`React.memo`），草稿下沉到卡片内部——此前 400+ 张卡的表单挂在父组件上，**每敲一个字都重渲染整个列表**。列表先挂 60 张、IntersectionObserver 滚到底 +120 自动追加；切池/搜索/换库时重置批数。动作回调走 ref 转发保持引用稳定，否则 memo 每次父渲染都失效。
+- **正文按需补全**：列表投影新增 `truncated` 标记；卡片聚焦正文时用 `getMemory` 补拉全文（拉取期间输入框只读，避免在截断版上先打字），失败退回截断显示并 `console.warn`。此前正文被截到 4000 字却仍可编辑，改一个字保存就会把尾部写丢。
+- **移植入口 `dsh-memu-memory/port`**（`lib/port-surface.js` + `exports["./port"]`）：`collectToolSpecs()` 用只收集不注册的假 ctx 拿到宿主那 14 个工具规格（`name`/`description`/`parameters`/`execute`，跑完还原 `registrationReport`，不影响 `memu_status`）；`toInputSchema()` 把宿主值 schema 方言的属性级 `required: true` 提升为 JSON Schema 的 `required: [...]`；其余为记忆读写与库/索引的 re-export。适配器只依赖这个入口，不必读 `tools.js` 里三十段内联闭包。
+- **召回支持显式库**：`privateRecall` 接受 `libraryId`，把函数体内的取数口径统一成 `scope = binding ?? 最小只读 scope`。有会话时 `scope === binding`（逐字等价，2033 条既有用例零回归）；无会话时跨库聚合、情绪、场景时间退回中性值，跳过并发换库校验，并且**强制校验库存在与文件夹开关**——否则一个拼错的 id 会静默返回空（`loadPrivateIndex` 对未知库给空索引），既违反「召回为空必须留信号」，也绕过用户在设置里关掉的开关。
+- **引擎中断自愈**：新增 `lib/engine.js:reconcileInterruptedInstall()`，挂在 `engineStatus()`（界面一查就自愈）与 `ensureEngine()`（重装前先收尾）。三条判据同时成立才动手：`status==='installing'`、本进程未持锁且 `install.lock` 不存在、`updatedAt` 超 30 分钟没变（与过期锁阈值同数）。动作：落成 `failed`/`step=interrupted` + 可读原因，并清理 `venv.tmp-*`——**只删 tmp，绝不碰正式 `venv-*`**。`installInFlight` 标志放在 `acquireLock`/`releaseLock` 内部，因为三个受锁流程（安装/切版本/删版本）共用同一把锁。
+- **无会话写路径同样受文件夹开关约束**：`resolveLibrary` 在 `binding` 为 null 时退到库所属文件夹策略（新增 `assertLibraryEnabled`）。此前 `assertScopeEnabled(null)` 直接返回，于是用户在设置里关掉的库，换个入口（MCP/脚本）又能写、又能读——同一份数据在宿主里被禁、在别处仍然开着。
+- 守卫：`tests/port-surface.test.mjs` 新增 8 条（14 个规格的形状与幂等、`toInputSchema` 的 required 提升、无会话召回、无会话无库仍拒绝、未知库报错、显式库不跨库、有会话路径不变、只给 libraryId 能写）；`tests/engine.test.mjs` 新增 4 条（死安装收尾并清 tmp、正式 venv 不被误删、新鲜安装不误判、持锁不收尾、ready 不降级）；`tests/browser.test.mjs` 新增 2 条（新到旧排序、截断标记 + `getMemory` 取回全文）；`tests/webui.test.mjs` 新增 offset 分页断言并把 403 回退守卫改匹配 `stream(firstLibraryId)`；7 个测试文件的 React 替身补 `memo`（生产 React 有、替身漏了）。
+- 文档：`docs/client-conventions.md` §7.4 三条新口径（整库流式、新到旧、正文按需补全）、新增 `docs/mcp-porting.md`（能复用/搬不走/适配器骨架/配置坑）、`docs/troubleshooting.md` §3.49（安装卡在 installing）与症状速查表、`AGENTS.md` 索引两行。
+- 全量 2035 tests / 2033 pass / 0 fail / 2 skipped；`acceptance-local` 50/50；`npm run check` all passed。
+
 ## [1.4.1] - 2026-11-26
 
 > 两件事：通道复用会话 id 时规则消息会整段缺席（真机 24 回合没有 `<memory-guide>`）；

@@ -63,6 +63,27 @@ test('browseLibrary degrades to the index while the engine is missing', async ()
   assert.match(item.content, /body of mem-3/)
 })
 
+test('browseLibrary lists newest first', async () => {
+  const lib = createLibrary({ name: 'browser-order', cwd: path.join(home, 'browser-order') })
+  seed(lib.id, 'mem-old', { createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-02T00:00:00.000Z' })
+  seed(lib.id, 'mem-mid', { createdAt: '2026-10-03T00:00:00.000Z', updatedAt: '2026-10-03T00:00:00.000Z' })
+  seed(lib.id, 'mem-new', { createdAt: '2026-10-05T00:00:00.000Z', updatedAt: '2026-10-06T00:00:00.000Z' })
+  const view = await dispatch({}, 'browseLibrary', { libraryId: lib.id })
+  // 侧栏与浏览库共用同一条口径：新到旧（引擎与索引都不保证顺序）。
+  assert.deepEqual(view.files.map((file) => file.id), ['mem-new', 'mem-mid', 'mem-old'])
+})
+
+test('browseLibrary flags a truncated body instead of silently shortening it', async () => {
+  const lib = createLibrary({ name: 'browser-trunc', cwd: path.join(home, 'browser-trunc') })
+  seed(lib.id, 'mem-long', { content: 'x'.repeat(4100) })
+  const view = await dispatch({}, 'browseLibrary', { libraryId: lib.id })
+  const item = view.files.find((file) => file.id === 'mem-long')
+  assert.equal(item.content.length, 4000, 'the list keeps the preview cap')
+  assert.equal(item.truncated, true, 'the client must know it can fetch the rest')
+  const full = await dispatch({}, 'getMemory', { libraryId: lib.id, id: 'mem-long' })
+  assert.equal(full.entry.content.length, 4100, 'getMemory returns the whole body')
+})
+
 test('local agent backend writes and recalls memory without an engine', async () => {
   const cwd = path.join(home, 'browser-local')
   const lib = createLibrary({ name: 'browser-local', cwd })
